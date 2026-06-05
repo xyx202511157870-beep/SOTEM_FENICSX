@@ -162,6 +162,9 @@ class PipelineConfig:
     def receiver_diagnostics_csv(self) -> Path:
         return self.workdir / "receiver_diagnostics.csv"
 
+    def receiver_diagnostics_png(self) -> Path:
+        return self.workdir / "receiver_diagnostics.png"
+
     def output_report(self) -> Path:
         return self.workdir / "verification_report.txt"
 
@@ -4460,6 +4463,9 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
     if not rows:
         if path.exists():
             path.unlink()
+        png_path = config.receiver_diagnostics_png()
+        if png_path.exists():
+            png_path.unlink()
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -4477,6 +4483,62 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
                     "dBzdt": float(row.get("dBzdt", math.nan)),
                 }
             )
+
+
+def _plot_receiver_diagnostics(config: PipelineConfig, receiver_diagnostic_rows) -> None:
+    rows = list(receiver_diagnostic_rows or [])
+    path = config.receiver_diagnostics_png()
+    if not rows:
+        if path.exists():
+            path.unlink()
+        return
+
+    import numpy as np
+
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    components = ["Ex", "Ey", "dBzdt"]
+    if any(math.isfinite(float(row.get("Hz", math.nan))) for row in rows):
+        components.insert(2, "Hz")
+    receiver_types = []
+    for row in rows:
+        receiver_type = str(row.get("receiver_type", ""))
+        if receiver_type and receiver_type not in receiver_types:
+            receiver_types.append(receiver_type)
+
+    fig, axes = plt.subplots(len(components), 1, figsize=(7.2, 2.4 * len(components) + 1.0), sharex=True)
+    axes_arr = np.atleast_1d(axes)
+    markers = ["o", "s", "^", "d", "x"]
+    for ax, component in zip(axes_arr, components):
+        for i, receiver_type in enumerate(receiver_types):
+            subset = [row for row in rows if str(row.get("receiver_type", "")) == receiver_type]
+            subset.sort(key=lambda row: float(row.get("time_obs", math.nan)))
+            times = [float(row.get("time_obs", math.nan)) for row in subset]
+            values = [float(row.get(component, math.nan)) for row in subset]
+            finite_pairs = [(t, value) for t, value in zip(times, values) if math.isfinite(t) and math.isfinite(value)]
+            if not finite_pairs:
+                continue
+            ax.plot(
+                [item[0] for item in finite_pairs],
+                [item[1] for item in finite_pairs],
+                marker=markers[i % len(markers)],
+                label=receiver_type,
+            )
+        finite_times = [float(row.get("time_obs", math.nan)) for row in rows if math.isfinite(float(row.get("time_obs", math.nan)))]
+        if len(set(finite_times)) > 1 and min(finite_times) > 0.0:
+            ax.set_xscale("log")
+        ax.set_ylabel(component)
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(loc="best")
+    axes_arr[-1].set_xlabel("t_obs (s)")
+    fig.suptitle("Receiver diagnostics: point and averaged receivers")
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
 
 
 def _save_forward_partial(config: PipelineConfig, times, rows, components, solver_log, receiver_diagnostic_rows=None) -> None:
@@ -4507,6 +4569,7 @@ def _save_forward_partial(config: PipelineConfig, times, rows, components, solve
         np.savez(handle, **payload)
     tmp_path.replace(path)
     _write_receiver_diagnostics_csv(config, receiver_diagnostic_rows)
+    _plot_receiver_diagnostics(config, receiver_diagnostic_rows)
 
 
 def _completed_return_times(return_times, rows):

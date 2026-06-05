@@ -43,8 +43,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     Average receiver modes evaluate deterministic diagnostic sample points and
     average the per-point collapsed cell candidates.
     `--receiver-diagnostic-types` writes simultaneous point/average diagnostic
-    receiver rows to `receiver_diagnostics.csv` without changing
-    `predictions.csv`.
+    receiver rows to `receiver_diagnostics.csv` and automatically plots
+    `receiver_diagnostics.png` without changing `predictions.csv`.
   - Added P2 validation artifacts:
     - `predictions.csv`
     - `reference_empymod_or_1d.csv`
@@ -391,10 +391,10 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
-- Average receiver sampling and simultaneous point/average diagnostic artifact
-  output are implemented and smoke-tested for the E-form DOLFINx verification
-  pipeline. H-form diagnostic output still writes only the main receiver
-  response.
+- Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
+  artifact output are implemented and smoke-tested for the E-form DOLFINx
+  verification pipeline. H-form diagnostic output still writes only the main
+  receiver response.
 - Faraday-integrated `Hz` recovery is not implemented in this round.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.

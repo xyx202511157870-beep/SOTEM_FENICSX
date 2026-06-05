@@ -91,6 +91,8 @@ def test_save_forward_partial_writes_receiver_diagnostics(tmp_path):
     csv_text = config.receiver_diagnostics_csv().read_text(encoding="utf-8")
     assert "time_obs,receiver_type,radius,Ex,Ey,Hz,dBzdt" in csv_text
     assert "disk_average" in csv_text
+    assert config.receiver_diagnostics_png().is_file()
+    assert config.receiver_diagnostics_png().stat().st_size > 0
 
 
 def test_completed_return_times_follow_completed_rows_only():
