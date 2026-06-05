@@ -436,6 +436,46 @@ Biot-rate dBdt diagnostic smoke:
   (`~38.3%`). This confirms that receiver/curl recovery is a major error
   channel, but this branch still does not meet the `5%` gate.
 
+Receiver mesh-sensitivity smoke:
+
+- Summary CSV:
+  `dolfinx/current_task_runs/y200_rxminus300_receiver_mesh_sensitivity.csv`.
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_recv20_biotrate_smoke`.
+- Change relative to the 80 m local-refinement baseline: receiver mesh size
+  `20 m`, receiver refinement radius `200 m`, source mesh size still `80 m`,
+  `--magnetic-dbdt-mode biot_rate`, one output point.
+- Mesh preflight: `132000` cells in the `.msh` file, estimated memory
+  `3.7939785 GB`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.13874094959702565`
+  - `max_error_Ey = 1601943911.790958`
+  - `max_error_Hz_or_dBzdt = 0.44747549498846956`
+  - `pass_all_components = false`
+- Interpretation: receiver-local refinement improves the first-point `Ex`
+  error from about `27.6%` to about `13.9%`, and `Hz` is essentially
+  matched (`3.6e-5` relative error). However, the Biot-rate `dBzdt` remains
+  far above `5%`.
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_recv10_diskcurl_smoke`.
+- Change: receiver mesh size `10 m`, receiver refinement radius `120 m`,
+  `--receiver-type disk_average`, `--magnetic-dbdt-mode curl`, one output
+  point.
+- Mesh preflight: `155751` cells in the `.msh` file, estimated memory
+  `4.4764695 GB`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.2353157835715751`
+  - `max_error_Ey = 10634476606.208687`
+  - `max_error_Hz_or_dBzdt = 0.19573457682633436`
+  - `pass_all_components = false`
+- Interpretation: this configuration improves disk/curl `dBzdt` to about
+  `19.6%`, but `Ex` worsens relative to the 20 m point case. The improvement
+  is not monotonic with receiver mesh size because the average receiver
+  samples different cell candidates near the shallow interface. The next
+  numerical step should separate point Ex interpolation, disk radius, and cell
+  candidate selection before spending a long run to 1 s.
+
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 
 ## Known Limitations
