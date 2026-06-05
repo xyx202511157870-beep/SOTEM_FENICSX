@@ -147,6 +147,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     legacy `CONFIG.yaml` invocation.
   - Adds `validate-noip-3comp CONFIG.yaml`.
   - Adds `validate-ip-3comp CONFIG.yaml`.
+  - Adds `plot RUN_DIR` to regenerate `comparison_3comp.png` and
+    `error_curves_3comp.png` from validation CSV artifacts.
   - Uses lazy imports so validation CLI does not require heavy simulation dependencies.
 
 - `src/atem3d/empymod_validation.py` and `src/atem3d/empymod_validation_cli.py`
