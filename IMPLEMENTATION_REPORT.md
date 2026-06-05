@@ -249,6 +249,33 @@ Latest observed in WSL `Ubuntu` / `fenicsx` conda environment on 2026-06-06:
 - pipeline reports regularized volume source fallback unless explicitly overridden.
 - WSL was shut down after the check and confirmed `Stopped` with `wsl -l -v`.
 
+Latest WSL source-only smoke for the corrected explicit geometry:
+
+```text
+workdir = dolfinx/current_task_runs/y200_rxminus300_source_only_latest_smoke
+source = (-500, 200, -0.1) -> (500, 200, -0.1)
+receiver = (0, -300, -0.1)
+expected_source_length = 1000 m
+expected_parallel_offset = 500 m
+mode = manual_line
+```
+
+Result:
+
+```text
+source_endpoint_balance_residual = 2.2680708322072504e-14
+waveform_integral_residual = 0.0
+quadrature_points = 1200
+missed_points = 0
+unique_hit_cells = 200
+runtime_total_seconds = 4.05504921
+```
+
+Interpretation: the latest explicit source geometry now passes the source-only
+endpoint-balance and waveform-integral diagnostics on a coarse smoke mesh. This
+does not validate the transient PDE response or the final `5%` no-IP/IP target.
+WSL was shut down after the run and confirmed `Stopped`.
+
 Lightweight P0-P2 tests:
 
 ```bash
