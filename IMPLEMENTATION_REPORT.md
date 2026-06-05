@@ -136,6 +136,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `PointReceiver`
   - `AverageReceiver` for deterministic `disk_average` and `volume_average`
     sampling around a point receiver.
+  - `AverageReceiver` supports recovered magnetic-field vector sampling with
+    the same `H`/`B` component convention as `PointReceiver`.
   - `build_receiver` factory for `point`, `disk_average`, and
     `volume_average` receiver configuration.
 

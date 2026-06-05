@@ -69,3 +69,24 @@ def test_build_receiver_factory_creates_point_and_average_receivers():
     assert isinstance(point, PointReceiver)
     assert isinstance(disk, AverageReceiver)
     assert disk.radius == 2.0
+
+
+def test_average_receiver_samples_recovered_magnetic_field_vectors():
+    receiver = AverageReceiver(
+        location=(0.0, 0.0, 0.0),
+        component="Bz",
+        receiver_type="disk_average",
+        radius=1.0,
+    )
+    h_vectors = np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 3.0],
+            [0.0, 0.0, 4.0],
+            [0.0, 0.0, 5.0],
+        ]
+    )
+
+    assert receiver.uses_magnetic_field_vector is True
+    assert receiver.sample_magnetic_field_vector(h_vectors, mu=2.0) == pytest.approx(6.0)

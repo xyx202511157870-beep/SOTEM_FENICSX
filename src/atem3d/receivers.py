@@ -235,6 +235,27 @@ class AverageReceiver:
             for point in self.sample_points
         ]
 
+    @property
+    def uses_magnetic_field_vector(self) -> bool:
+        return self.component in _FACE_COMPONENTS
+
+    @property
+    def vector_component_index(self) -> int:
+        suffix = self.component[-1].lower()
+        if suffix not in _VECTOR_COMPONENT_INDEX:
+            raise ValueError("receiver component does not map to a vector index")
+        return _VECTOR_COMPONENT_INDEX[suffix]
+
+    def sample_magnetic_field_vector(self, h_vectors: np.ndarray, mu: float = mu_0) -> float:
+        values = np.asarray(h_vectors, dtype=float)
+        if values.shape != (self.sample_count, 3):
+            raise ValueError("h_vectors must have shape (sample_count, 3)")
+        component_values = values[:, self.vector_component_index]
+        value = float(np.mean(component_values))
+        if self.component.startswith("B"):
+            value *= mu
+        return value
+
     def sample(self, mesh, e: np.ndarray, b: np.ndarray, mu: float = mu_0) -> float:
         values = [receiver.sample(mesh, e, b, mu) for receiver in self.point_receivers()]
         return float(np.mean(values))
