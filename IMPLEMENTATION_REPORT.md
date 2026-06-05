@@ -128,6 +128,19 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
 ## Validation Command
 
+WSL/DOLFINx environment check:
+
+```bash
+python dolfinx/sotem_pipeline.py --check-env-only --no-install
+```
+
+Observed in WSL `fenicsx` conda environment:
+
+- DOLFINx `0.8.0`
+- empymod `2.5.4`
+- gmsh `4.15.2`
+- pipeline reports regularized volume source fallback unless explicitly overridden.
+
 Lightweight P0-P2 tests:
 
 ```bash
