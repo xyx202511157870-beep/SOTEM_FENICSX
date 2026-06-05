@@ -60,6 +60,96 @@
     "threshold": 0.05,
     "time_count": 5
   },
+  "receiver_vs_reference": {
+    "baseline_receiver_type": "point",
+    "comparisons": {
+      "disk_average": {
+        "Ex": {
+          "baseline_max_relative_error": 0.27639692569161395,
+          "candidate_max_relative_error": 0.2777551438180187,
+          "improves_over_baseline": false
+        },
+        "Ey": {
+          "baseline_max_relative_error": 5150102111.501422,
+          "candidate_max_relative_error": 5793007282.916506,
+          "improves_over_baseline": false
+        },
+        "dBzdt": {
+          "baseline_max_relative_error": 0.5308318716061439,
+          "candidate_max_relative_error": 0.38311236137806826,
+          "improves_over_baseline": true
+        }
+      }
+    },
+    "enabled": true,
+    "metrics": {
+      "disk_average": {
+        "Ex": {
+          "max_peak_normalized_error": 0.277264022002978,
+          "max_relative_error": 0.2777551438180187,
+          "mean_relative_error": 0.14129027844301786,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Ey": {
+          "max_peak_normalized_error": 5793007282.916506,
+          "max_relative_error": 5793007282.916506,
+          "mean_relative_error": 5146708646.332277,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 1e-05
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.38269683840597435,
+          "max_relative_error": 0.38311236137806826,
+          "mean_relative_error": 0.250611619779395,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 1e-05
+        }
+      },
+      "point": {
+        "Ex": {
+          "max_peak_normalized_error": 0.27590820545424444,
+          "max_relative_error": 0.27639692569161395,
+          "mean_relative_error": 0.1528998000822347,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Ey": {
+          "max_peak_normalized_error": 5150102111.501422,
+          "max_relative_error": 5150102111.501422,
+          "mean_relative_error": 4358076539.875482,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Hz": {
+          "max_peak_normalized_error": 0.03920700355752626,
+          "max_relative_error": 0.03920700355752626,
+          "mean_relative_error": 0.03736237135274976,
+          "passes_threshold": true,
+          "sample_count": 5,
+          "time_at_max_relative_error": 1e-05
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.5302561323212548,
+          "max_relative_error": 0.5308318716061439,
+          "mean_relative_error": 0.3810670577050063,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 1e-05
+        }
+      }
+    },
+    "receiver_types": [
+      "point",
+      "disk_average"
+    ],
+    "threshold": 0.05
+  },
   "recommended_check_order": [
     "time_step_error",
     "mesh_error",

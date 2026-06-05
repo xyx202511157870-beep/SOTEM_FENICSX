@@ -46,7 +46,7 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
             },
         },
         receiver_diagnostic_rows=[
-            {"time_obs": 1.0e-5, "receiver_type": "point", "radius": 0.0, "Ex": 1.0, "Ey": 0.0, "Hz": np.nan, "dBzdt": 2.0},
+            {"time_obs": 1.0e-5, "receiver_type": "point", "radius": 0.0, "Ex": 1.0, "Ey": 0.0, "Hz": np.nan, "dBzdt": 1.0},
             {
                 "time_obs": 1.0e-5,
                 "receiver_type": "disk_average",
@@ -54,7 +54,7 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
                 "Ex": 1.2,
                 "Ey": 0.0,
                 "Hz": np.nan,
-                "dBzdt": 3.0,
+                "dBzdt": 1.8,
             },
         ],
     )
@@ -97,7 +97,9 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert diagnostics["source_projection"]["before_residual"] == 2.0
     assert diagnostics["source_projection"]["after_residual"] == 1.0e-9
     assert diagnostics["receiver_sampling"]["enabled"] is True
-    assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.5
+    assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.8
+    assert diagnostics["receiver_vs_reference"]["enabled"] is True
+    assert diagnostics["receiver_vs_reference"]["comparisons"]["disk_average"]["dBzdt"]["improves_over_baseline"] is True
 
 
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():

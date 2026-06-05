@@ -379,6 +379,9 @@ Simultaneous point/disk receiver diagnostic smoke:
   - `diagnostics.json` includes `magnetic_recovery` from a Faraday-integrated
     `dBzdt` receiver trace. Over the first five points, the integrated `Hz`
     differs from reported Biot `Hz` by at most about `0.45%`.
+  - `diagnostics.json` includes `receiver_vs_reference`: `disk_average`
+    improves `dBzdt` max error from about `53.1%` to `38.3%`, but still
+    fails the `5%` target. It does not improve `Ex` or weak `Ey`.
 - Result over the first five output times
   (`1.0e-5` to `2.44140625e-5 s`):
   - `max_error_Ex = 0.27639692569161395`
@@ -389,6 +392,8 @@ Simultaneous point/disk receiver diagnostic smoke:
   - `Ex`: about `0.19%` to `2.35%`.
   - `Ey`: about `12.48%` to `21.82%`; this remains a near-zero component.
   - `dBzdt`: about `9.15%` to `31.49%`.
+- Against empymod, `disk_average` reduces `dBzdt` max error from `53.1%`
+  to `38.3%`, but the response is still far above the `5%` gate.
 - Interpretation: simultaneous receiver diagnostics now work. The disk-average
   electric response is close to the point response for `Ex`, but `dBzdt`
   changes substantially, supporting the current diagnosis that receiver/curl

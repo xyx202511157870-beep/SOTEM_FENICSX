@@ -2396,6 +2396,91 @@ def _receiver_diagnostic_summary(receiver_diagnostic_rows, *, threshold: float =
     }
 
 
+def _receiver_reference_summary(receiver_diagnostic_rows, times, ref_data, components, *, threshold: float = 0.05) -> dict[str, Any]:
+    import numpy as np
+
+    rows = list(receiver_diagnostic_rows or [])
+    if not rows:
+        return {"enabled": False}
+    component_names = [str(component) for component in components]
+    t = np.asarray(times, dtype=float)
+    ref = np.asarray(ref_data, dtype=float)
+    if ref.ndim != 2 or ref.shape[0] != t.size or ref.shape[1] != len(component_names):
+        return {"enabled": False, "reason": "inconsistent reference/time/component shapes"}
+    time_to_index = {float(time): i for i, time in enumerate(t)}
+    receiver_types: list[str] = []
+    for row in rows:
+        receiver_type = str(row.get("receiver_type", ""))
+        if receiver_type and receiver_type not in receiver_types:
+            receiver_types.append(receiver_type)
+    if not receiver_types:
+        return {"enabled": False}
+    baseline = "point" if "point" in receiver_types else receiver_types[0]
+
+    by_type: dict[str, Any] = {}
+    for receiver_type in receiver_types:
+        receiver_rows = [row for row in rows if str(row.get("receiver_type", "")) == receiver_type]
+        component_errors: dict[str, Any] = {}
+        for col, component in enumerate(component_names):
+            if component == "Hz" and not any(math.isfinite(float(row.get(component, math.nan))) for row in receiver_rows):
+                continue
+            floor = _validation_floor(component, ref[:, col])
+            max_abs_ref = float(np.max(np.abs(ref[:, col]))) if ref.shape[0] else 0.0
+            robust_errors = []
+            peak_errors = []
+            error_times = []
+            for row in receiver_rows:
+                time_obs = float(row.get("time_obs", math.nan))
+                idx = time_to_index.get(time_obs)
+                if idx is None:
+                    continue
+                pred_value = float(row.get(component, math.nan))
+                if not math.isfinite(pred_value):
+                    continue
+                ref_value = float(ref[idx, col])
+                abs_error = abs(pred_value - ref_value)
+                robust_errors.append(abs_error / max(abs(ref_value), floor))
+                peak_errors.append(abs_error / max(max_abs_ref, floor))
+                error_times.append(time_obs)
+            if not robust_errors:
+                continue
+            max_index = max(range(len(robust_errors)), key=lambda i: robust_errors[i])
+            component_errors[component] = {
+                "sample_count": len(robust_errors),
+                "max_relative_error": float(robust_errors[max_index]),
+                "mean_relative_error": float(sum(robust_errors) / len(robust_errors)),
+                "max_peak_normalized_error": float(max(peak_errors)),
+                "time_at_max_relative_error": float(error_times[max_index]),
+                "passes_threshold": bool(max(robust_errors) <= float(threshold) and max(peak_errors) <= float(threshold)),
+            }
+        by_type[receiver_type] = component_errors
+
+    comparisons: dict[str, Any] = {}
+    baseline_errors = by_type.get(baseline, {})
+    for receiver_type, component_errors in by_type.items():
+        if receiver_type == baseline:
+            continue
+        comparisons[receiver_type] = {}
+        for component, metrics in component_errors.items():
+            baseline_metric = baseline_errors.get(component)
+            if baseline_metric is None:
+                continue
+            comparisons[receiver_type][component] = {
+                "baseline_max_relative_error": float(baseline_metric["max_relative_error"]),
+                "candidate_max_relative_error": float(metrics["max_relative_error"]),
+                "improves_over_baseline": bool(metrics["max_relative_error"] < baseline_metric["max_relative_error"]),
+            }
+
+    return {
+        "enabled": True,
+        "threshold": float(threshold),
+        "baseline_receiver_type": baseline,
+        "receiver_types": receiver_types,
+        "metrics": by_type,
+        "comparisons": comparisons,
+    }
+
+
 def _forward_components(config: PipelineConfig) -> list[str]:
     components = ["Ex", "Ey"]
     magnetic_mode = str(config.magnetic_receiver_mode).strip().lower()
@@ -3951,6 +4036,13 @@ def write_validation_artifacts(
         receiver_diagnostic_rows,
         threshold=float(config.error_tolerance),
     )
+    diagnostics["receiver_vs_reference"] = _receiver_reference_summary(
+        receiver_diagnostic_rows,
+        times,
+        ref_data,
+        components,
+        threshold=float(config.error_tolerance),
+    )
     diagnostics["magnetic_recovery"] = _magnetic_recovery_summary(times, pred_data, components)
     (workdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
@@ -4371,6 +4463,24 @@ def write_report(
                     f"at t={metrics['time_at_max_relative_difference']:.6e} s; "
                     f"mean_rel_diff={metrics['mean_relative_difference']:.6e}; "
                     f"max_abs_diff={metrics['max_absolute_difference']:.6e}"
+                )
+    receiver_reference = _receiver_reference_summary(
+        fem_result.get("receiver_diagnostic_rows"),
+        fem_result["times"],
+        ref_result["data"],
+        fem_result["components"],
+        threshold=float(config.error_tolerance),
+    )
+    if receiver_reference.get("enabled"):
+        lines.append("")
+        lines.append("receiver vs reference diagnostics:")
+        for receiver_type, comparison in receiver_reference["comparisons"].items():
+            lines.append(f"  {receiver_type} vs {receiver_reference['baseline_receiver_type']}:")
+            for component, metrics in comparison.items():
+                lines.append(
+                    f"    {component}: candidate_max={metrics['candidate_max_relative_error']:.6e}; "
+                    f"baseline_max={metrics['baseline_max_relative_error']:.6e}; "
+                    f"improves={metrics['improves_over_baseline']}"
                 )
     magnetic_summary = _magnetic_recovery_summary(
         fem_result["times"],
