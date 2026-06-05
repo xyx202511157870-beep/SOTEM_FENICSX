@@ -8,7 +8,7 @@ This report covers the implementation rounds currently committed or staged from 
 - P1: add waveform interfaces, full turn-off time grid, and interval-average `dI/dt`.
 - P2: add no-IP three-component validation artifacts and diagnostics.
 - P3 partial: add a Debye/Prony material conductivity API and pure-Python memory tests.
-- P4 partial: add primary-field provider interfaces with zero and cached providers.
+- P4 partial: add primary-field provider interfaces with zero/cached providers and runner-backed empymod sampling.
 - P5 partial: add a DC secondary initialization core with zero-contrast tests.
 - P6 partial: add no-IP/IP primary-secondary TDEM step kernels with zero-contrast tests.
 - P7 partial: add no-IP/IP three-component validation smoke artifact writer.
@@ -98,6 +98,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `CachedPrimaryProvider`
   - `EmpymodPrimaryProvider` with no import-time dependency on `empymod`.
   - Injected-runner receiver `E` and `dBdt` primary sampling via `EmpymodSurvey`.
+  - Injected-runner FEM point primary `E_p(t)` sampling through `get_Ep_on_V`.
 
 - `src/atem3d/solvers/dc_secondary.py`
   - `DCSecondaryInitialization`
@@ -195,6 +196,19 @@ P4 primary-provider tests:
 ```bash
 python -m pytest -q tests/test_primary_provider.py
 ```
+
+Current P4 status:
+
+- `EmpymodPrimaryProvider.get_receiver_E` and `get_receiver_dBdt` use an
+  injected `reference_runner` and build an `EmpymodSurvey`, so tests do not
+  depend on importing or running empymod.
+- `EmpymodPrimaryProvider.get_Ep_on_V` now uses the same injected runner to
+  sample `Ex/Ey/Ez` at arbitrary FEM point coordinates. This is the first
+  runner-backed FEM-space primary field sampling hook needed by the
+  primary-secondary solver path.
+- `get_Ep_dc_on_V` is still pending; DC primary sampling needs either an
+  analytic/background DC provider or a dedicated injected DC runner before it
+  can be used in the DOLFINx primary-secondary initialization.
 
 P5 DC secondary initialization tests:
 
@@ -1334,7 +1348,7 @@ field consistency, or the total-field formulation.
   still show the old ambiguous `actual radius/depth` wording until
   regenerated with `--postprocess-partial`.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
-- P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.
+- P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, and runner-backed FEM point `E_p(t)` sampling through an injected/reference runner; DC primary sampling and DOLFINx FEM interpolation remain pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
@@ -1385,7 +1399,7 @@ field consistency, or the total-field formulation.
    it with any DOLFINx-native source assembly.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
-5. Continue P4 by implementing real `EmpymodPrimaryProvider` sampling or a 1D reference backend.
+5. Continue P4 by adding DC primary sampling and wiring runner-backed `E_p(t)` samples into a DOLFINx FEM-space interpolation path.
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
 7. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
 8. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.

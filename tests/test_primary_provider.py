@@ -148,6 +148,34 @@ def test_empymod_primary_provider_get_receiver_dBdt_uses_reference_runner():
     np.testing.assert_allclose(values, [[7.0, 8.0, 9.0]])
 
 
+def test_empymod_primary_provider_get_Ep_on_V_uses_reference_runner():
+    seen = {}
+
+    def fake_runner(survey, **kwargs):
+        seen["components"] = survey.components
+        seen["receiver_locations"] = survey.receiver_locations
+        seen["receiver_components"] = survey.receiver_components
+        seen["times"] = survey.times.copy()
+        seen["kwargs"] = kwargs
+        return np.array([[1.0, 2.0, 3.0, 10.0, 20.0, 30.0]])
+
+    provider = EmpymodPrimaryProvider(
+        config=_empymod_provider_config(),
+        reference_runner=fake_runner,
+        empymod_kwargs={"srcpts": 9},
+    )
+    points = np.array([[0.0, 10.0, -0.5], [1.0, 11.0, -0.5]])
+
+    values = provider.get_Ep_on_V(0.25, points)
+
+    np.testing.assert_allclose(values, [[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]])
+    assert seen["components"] == ["Ex", "Ey", "Ez"]
+    assert seen["receiver_locations"] == [(0.0, 10.0, -0.5), (1.0, 11.0, -0.5)]
+    assert seen["receiver_components"][0] == ((0.0, 10.0, -0.5), "Ex")
+    np.testing.assert_allclose(seen["times"], [0.25])
+    assert seen["kwargs"] == {"srcpts": 9}
+
+
 def _empymod_provider_config():
     return {
         "source_start": [-25.0, 0.0, -0.5],

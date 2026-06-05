@@ -19,8 +19,8 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
     empymod_kwargs: dict[str, Any] | None = None
 
     def get_Ep_on_V(self, t: float, V) -> np.ndarray:
-        as_points(V, "points")
-        raise NotImplementedError("EmpymodPrimaryProvider field sampling is not implemented yet")
+        points = as_points(V, "points")
+        return self._receiver_components(t, points, ["Ex", "Ey", "Ez"])
 
     def get_Ep_dc_on_V(self, V) -> np.ndarray:
         as_points(V, "points")
