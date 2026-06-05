@@ -4615,6 +4615,7 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
     failed_components: set[str] = set()
     failed_times: set[float] = set()
     magnetic_quantity = None
+    magnetic_components: list[str] = []
     for col, component in enumerate(components):
         component = str(component)
         ref_col = ref[:, col]
@@ -4647,9 +4648,13 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
                     "pass_5pct": passed,
                 }
             )
+        summary[f"max_error_{component}"] = float(np.max(robust_values))
+        summary[f"rms_error_{component}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
+        summary[f"max_peak_normalized_error_{component}"] = float(np.max(peak_values))
         key = component if component in {"Ex", "Ey"} else "Hz_or_dBzdt"
         if component not in {"Ex", "Ey"}:
             magnetic_quantity = component
+            magnetic_components.append(component)
         summary[f"max_error_{key}"] = float(np.max(robust_values))
         summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{key}"] = float(np.max(peak_values))
@@ -4683,6 +4688,7 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
     summary["weak_component_scaled_abs_error_max"] = dict(weak_gate["maxima"])
     summary["weak_component_reference_max"] = dict(weak_gate["reference_maxima"])
     summary["magnetic_quantity"] = magnetic_quantity or ""
+    summary["magnetic_components"] = magnetic_components
     return rows, summary
 
 

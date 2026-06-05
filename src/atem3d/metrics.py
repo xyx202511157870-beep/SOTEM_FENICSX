@@ -103,6 +103,7 @@ def robust_component_errors(
     failed_components: set[str] = set()
     failed_times: set[float] = set()
     magnetic_component = None
+    magnetic_components: list[str] = []
 
     for col, component in enumerate(component_names):
         component = str(component)
@@ -124,9 +125,13 @@ def robust_component_errors(
             robust_values.append(robust)
             peak_values.append(peak)
             rows.append((float(time), component, float(pred), float(ref), abs_error, ordinary, robust, peak, passed))
+        summary[f"max_error_{component}"] = float(np.max(robust_values))
+        summary[f"rms_error_{component}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
+        summary[f"max_peak_normalized_error_{component}"] = float(np.max(peak_values))
         key = component if component in {"Ex", "Ey"} else "Hz_or_dBzdt"
         if component not in {"Ex", "Ey"}:
             magnetic_component = component
+            magnetic_components.append(component)
         summary[f"max_error_{key}"] = float(np.max(robust_values))
         summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{key}"] = float(np.max(peak_values))
@@ -159,6 +164,7 @@ def robust_component_errors(
     summary["weak_component_reference_max"] = dict(weak_gate["reference_maxima"])
     if magnetic_component is not None:
         summary["magnetic_quantity"] = magnetic_component
+    summary["magnetic_components"] = magnetic_components
     return np.asarray(rows, dtype=dtype), summary
 
 

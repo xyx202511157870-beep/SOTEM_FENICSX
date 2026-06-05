@@ -502,6 +502,33 @@ Receiver geometry is therefore confirmed as one error source, but not the full
 root cause. The next high-value checks are curl/dBdt recovery consistency,
 source transfer/source-channel alignment, and the primary-secondary solver path.
 
+Magnetic-component validation summary update:
+
+- `dolfinx/sotem_pipeline.py` and `atem3d.metrics.robust_component_errors`
+  now keep per-component magnetic summary fields when both `Hz` and `dBzdt`
+  are present:
+  `max_error_Hz`, `rms_error_Hz`, `max_peak_normalized_error_Hz`,
+  `max_error_dBzdt`, `rms_error_dBzdt`, and
+  `max_peak_normalized_error_dBzdt`.
+- The legacy `Hz_or_dBzdt` fields remain for compatibility and still track the
+  active/last magnetic validation quantity.
+- `error_summary.json` now includes `magnetic_components`, e.g.
+  `["Hz", "dBzdt"]`, so later WSL smoke runs can distinguish magnetic-field
+  recovery failure from `-curl(E)` magnetic-rate failure.
+
+Validation command for this update:
+
+```bash
+python -m pytest -q tests/test_dolfinx_validation_artifacts.py tests/test_error_metric_floor.py tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py
+```
+
+Observed result:
+
+```text
+28 passed
+WSL state after checks = Ubuntu Stopped
+```
+
 Lightweight P0-P2 tests:
 
 ```bash

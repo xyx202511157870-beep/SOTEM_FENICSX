@@ -448,6 +448,31 @@ def test_validation_artifacts_include_faraday_magnetic_recovery_summary(tmp_path
     assert diagnostics["magnetic_recovery"]["max_absolute_hz_difference"] > 0.0
 
 
+def test_validation_summary_keeps_hz_and_dbdt_errors_separate(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.asarray([1.0e-5])
+    ref = np.asarray([[1.0, 0.0, 2.0, 4.0]])
+    pred = np.asarray([[1.0, 0.0, 3.0, 4.4]])
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "Hz", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+    )
+
+    summary = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    assert summary["magnetic_quantity"] == "dBzdt"
+    assert summary["magnetic_components"] == ["Hz", "dBzdt"]
+    assert summary["max_error_Hz"] == pytest.approx(0.5)
+    assert summary["max_error_dBzdt"] == pytest.approx(0.1)
+    assert summary["max_error_Hz_or_dBzdt"] == pytest.approx(0.1)
+
+
 def test_validation_artifacts_include_divergence_cleaning_summary(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path)
