@@ -119,6 +119,8 @@ class PipelineConfig:
     divergence_cleaning: str = "none"  # none, conductivity
     divergence_cleaning_strength: float = 1.0
     divergence_cleaning_t_obs_min: float = 0.0
+    divergence_control_weight: float = 0.0
+    divergence_control_t_obs_min: float = 0.0
     polarization: str = "none"  # none, cole-cole
     cole_rho0: float = 100.0
     cole_m: float = 0.2
@@ -532,6 +534,18 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "divergence_cleaning_t_obs_min must be finite and nonnegative; "
             f"got {divergence_cleaning_t_obs_min:.12g}"
         )
+    divergence_control_weight = float(config.divergence_control_weight)
+    if not math.isfinite(divergence_control_weight) or divergence_control_weight < 0.0:
+        raise ValueError(
+            "divergence_control_weight must be finite and nonnegative; "
+            f"got {divergence_control_weight:.12g}"
+        )
+    divergence_control_t_obs_min = float(config.divergence_control_t_obs_min)
+    if not math.isfinite(divergence_control_t_obs_min) or divergence_control_t_obs_min < 0.0:
+        raise ValueError(
+            "divergence_control_t_obs_min must be finite and nonnegative; "
+            f"got {divergence_control_t_obs_min:.12g}"
+        )
     initial_dc_mode = str(config.initial_dc_mode).strip().lower()
     if initial_dc_mode not in {"fem", "analytic_halfspace"}:
         raise ValueError("initial_dc_mode must be 'analytic_halfspace' or 'fem'")
@@ -719,6 +733,8 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "divergence_cleaning": divergence_cleaning,
             "divergence_cleaning_strength": divergence_cleaning_strength,
             "divergence_cleaning_t_obs_min": divergence_cleaning_t_obs_min,
+            "divergence_control_weight": divergence_control_weight,
+            "divergence_control_t_obs_min": divergence_control_t_obs_min,
             "diffusion_refinement": _diffusion_refinement_audit(config),
             "sponge": sponge,
             "time_method": time_method,
@@ -2256,6 +2272,29 @@ def _build_conductivity_divergence_cleaner(spaces: dict[str, Any], operators, co
     }
 
 
+def _build_conductivity_divergence_control_matrix(spaces: dict[str, Any], operators, config: PipelineConfig):
+    """Build M_sigma G G^T M_sigma for an implicit weak divergence-control diagnostic."""
+
+    from dolfinx.fem import petsc as fem_petsc
+
+    S = spaces["S"]
+    V = spaces["V"]
+    G = fem_petsc.discrete_gradient(S, V)
+    G.assemble()
+    MG = operators["M"].matMult(G)
+    MG.assemble()
+    control = MG.matTransposeMult(MG)
+    control.assemble()
+    G.destroy()
+    MG.destroy()
+    log(
+        "[div-control] conductivity divergence-control matrix enabled: "
+        f"weight={float(config.divergence_control_weight):.6g}, "
+        f"t_obs_min={float(config.divergence_control_t_obs_min):.6g} s."
+    )
+    return control
+
+
 def _apply_conductivity_divergence_cleaning(cleaner, E, operators, config: PipelineConfig) -> dict[str, float | int]:
     """Project E onto the M_sigma-orthogonal complement of gradient fields."""
 
@@ -2463,6 +2502,15 @@ def _should_apply_divergence_cleaning(t_internal: float, config: PipelineConfig)
         return False
     t_obs = max(0.0, float(t_internal) - float(config.ramp_off_time))
     return t_obs >= float(config.divergence_cleaning_t_obs_min)
+
+
+def _should_apply_divergence_control(t_internal: float, config: PipelineConfig) -> bool:
+    if float(config.divergence_control_weight) <= 0.0:
+        return False
+    if _source_current(float(t_internal), config) != 0.0:
+        return False
+    t_obs = max(0.0, float(t_internal) - float(config.ramp_off_time))
+    return t_obs >= float(config.divergence_control_t_obs_min)
 
 
 def _source_interval_average_didt(t0: float, t1: float, config: PipelineConfig) -> float:
@@ -3500,6 +3548,11 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         if debye is not None:
             raise ValueError("conductivity divergence cleaning is currently implemented for non-polarizable runs only")
         divergence_cleaner = _build_conductivity_divergence_cleaner(spaces, operators, config)
+    divergence_control = None
+    if float(config.divergence_control_weight) > 0.0:
+        if debye is not None:
+            raise ValueError("conductivity divergence control is currently implemented for non-polarizable runs only")
+        divergence_control = _build_conductivity_divergence_control_matrix(spaces, operators, config)
     V = spaces["V"]
     E_initial = _solve_initial_dc_field(msh, spaces, materials, facet_tags, config)
     source_term_mode = str(config.source_term_mode).strip().lower()
@@ -3628,6 +3681,16 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
                 structure=PETSc.Mat.Structure.SUBSET_NONZERO_PATTERN,
             )
             A.assemble()
+        divergence_control_applied = divergence_control is not None and _should_apply_divergence_control(float(t), config)
+        if divergence_control_applied:
+            from petsc4py import PETSc
+
+            A.axpy(
+                float(config.divergence_control_weight),
+                divergence_control,
+                structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN,
+            )
+            A.assemble()
         _zero_rows_columns(A, operators["bc_global"], diag=1.0)
         if solver_context is None:
             solver_context = configure_ams_solver(A, spaces, config)
@@ -3716,6 +3779,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             "time_theta": float(lhs_stiffness),
             "time_method": "bdf2" if use_bdf2 else "theta",
             "avg_didt": float(avg_didt),
+            "divergence_control_applied": bool(divergence_control_applied),
         }
         if is_output:
             log_item["observation_time"] = float(observation_time_by_step[step])
@@ -4950,6 +5014,8 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "divergence_cleaning": str(config.divergence_cleaning),
         "divergence_cleaning_strength": float(config.divergence_cleaning_strength),
         "divergence_cleaning_t_obs_min": float(config.divergence_cleaning_t_obs_min),
+        "divergence_control_weight": float(config.divergence_control_weight),
+        "divergence_control_t_obs_min": float(config.divergence_control_t_obs_min),
         "polarization": str(config.polarization),
     }
     lines = []
@@ -5366,6 +5432,10 @@ def write_report(
         f"  divergence cleaning: {config.divergence_cleaning}; "
         f"strength={float(config.divergence_cleaning_strength):.6g}; "
         f"t_obs_min={float(config.divergence_cleaning_t_obs_min):.6g} s"
+    )
+    lines.append(
+        f"  divergence control: weight={float(config.divergence_control_weight):.6g}; "
+        f"t_obs_min={float(config.divergence_control_t_obs_min):.6g} s"
     )
     lines.append(
         f"  checkpoint forward: {bool(config.checkpoint_forward)}; resume forward: {bool(config.resume_forward)}; "
@@ -6415,6 +6485,18 @@ def main(argv: list[str] | None = None) -> int:
         default=0.0,
         help="Only apply conductivity divergence cleaning after this post-ramp observation time in seconds.",
     )
+    parser.add_argument(
+        "--divergence-control-weight",
+        type=float,
+        default=0.0,
+        help="Weight for implicit conductivity weak-divergence control; 0 disables this diagnostic term.",
+    )
+    parser.add_argument(
+        "--divergence-control-t-obs-min",
+        type=float,
+        default=0.0,
+        help="Only add implicit divergence-control after this post-ramp observation time in seconds.",
+    )
     parser.add_argument("--polarization", choices=["none", "cole-cole"], default="none")
     parser.add_argument("--cole-layer-top", type=float, default=0.0, help="Top depth of the polarizable Cole-Cole interval in meters.")
     parser.add_argument(
@@ -6522,6 +6604,8 @@ def main(argv: list[str] | None = None) -> int:
         divergence_cleaning=args.divergence_cleaning,
         divergence_cleaning_strength=args.divergence_cleaning_strength,
         divergence_cleaning_t_obs_min=args.divergence_cleaning_t_obs_min,
+        divergence_control_weight=args.divergence_control_weight,
+        divergence_control_t_obs_min=args.divergence_control_t_obs_min,
         polarization=args.polarization,
         cole_layer_top=args.cole_layer_top,
         cole_layer_bottom=args.cole_layer_bottom,

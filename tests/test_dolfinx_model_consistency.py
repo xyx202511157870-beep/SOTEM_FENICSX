@@ -198,6 +198,34 @@ def test_should_apply_divergence_cleaning_respects_observation_time_gate():
     assert sp._should_apply_divergence_cleaning(0.05 + 1.0e-5, config) is True
 
 
+def test_model_consistency_rejects_negative_divergence_control_weight():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="divergence_control_weight"):
+        sp.validate_model_consistency(sp.PipelineConfig(divergence_control_weight=-1.0))
+
+
+def test_model_consistency_reports_divergence_control_settings():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(
+        sp.PipelineConfig(divergence_control_weight=1.0e-8, divergence_control_t_obs_min=0.02)
+    )
+
+    assert diagnostics["divergence_control_weight"] == pytest.approx(1.0e-8)
+    assert diagnostics["divergence_control_t_obs_min"] == pytest.approx(0.02)
+
+
+def test_should_apply_divergence_control_respects_weight_and_observation_time_gate():
+    sp = _load_pipeline_module()
+    off = sp.PipelineConfig(ramp_off_time=1.0e-5, divergence_control_weight=0.0, divergence_control_t_obs_min=0.02)
+    gated = sp.PipelineConfig(ramp_off_time=1.0e-5, divergence_control_weight=1.0e-8, divergence_control_t_obs_min=0.02)
+
+    assert sp._should_apply_divergence_control(0.03, off) is False
+    assert sp._should_apply_divergence_control(0.01999 + 1.0e-5, gated) is False
+    assert sp._should_apply_divergence_control(0.02 + 1.0e-5, gated) is True
+
+
 def test_model_consistency_accepts_positive_source_rhs_sign_for_diagnostics():
     sp = _load_pipeline_module()
 

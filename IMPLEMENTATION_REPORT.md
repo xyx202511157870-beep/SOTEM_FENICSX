@@ -1110,6 +1110,69 @@ aggressive for the inductive transient. The next P2 path should be a
 variational divergence-control term or a primary-secondary formulation, not
 more per-step projection tuning.
 
+## P2 Variational Divergence-Control Smoke
+
+I added an optional implicit weak-divergence control term for the E-form
+total-field solver:
+
+```text
+--divergence-control-weight <float>
+--divergence-control-t-obs-min <seconds>
+```
+
+The default weight is `0`, so existing runs are unchanged. When enabled for a
+non-polarizable run, the solver builds a sparse diagnostic penalty matrix
+
+```text
+M_sigma G G^T M_sigma
+```
+
+and adds `divergence_control_weight * (M_sigma G G^T M_sigma)` to the left-hand
+side after the configured post-ramp observation time. This is intended as a
+variational alternative to post-step projection, not as an accepted final
+formulation yet.
+
+Smoke run:
+
+```text
+dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_divcontrol_smoke
+```
+
+Configuration summary:
+
+```text
+source_mesh_size = 120 m
+receiver_mesh_size = 80 m
+t_obs = 1e-5, 2e-5, 4e-5 s
+divergence_control_weight = 1e-12
+divergence_control_t_obs_min = 1e-5 s
+```
+
+The WSL run completed and shut down successfully. The report records:
+
+```text
+total runtime = 77.648 s
+forward solve = 68.329 s
+empymod reference = 0.986 s
+```
+
+The short-window smoke does not pass the 5% gate:
+
+```text
+max_error_Ex = 0.5210836011038802
+max_peak_normalized_error_Ex = 0.5198399885248545
+max_error_dBzdt = 0.3560966799435061
+max_peak_normalized_error_dBzdt = 0.3549869046652062
+physical_failed_components = Ex, dBzdt
+weak_component_passed = true
+```
+
+Interpretation: the variational matrix path is operational and within the
+32 GB memory budget on a coarse smoke mesh, but the tested weight does not
+solve the early-time error. A meaningful sweep needs normalized scaling of the
+penalty relative to the mass/stiffness terms before spending a full-window
+fine run.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
@@ -1160,6 +1223,10 @@ more per-step projection tuning.
 - `divergence_cleaning_t_obs_min` is a diagnostic gate. The coarse
   `t_obs_min=0.02 s` run still fails the P2 physical gate, so delayed
   post-step cleaning should not be treated as the accepted algorithm.
+- `divergence_control_weight` is implemented only as a diagnostic weak
+  divergence-control term for non-polarizable E-form runs. The initial
+  `1e-12` smoke verifies that the matrix path runs, but it is not tuned and
+  does not meet the P2 5% gate.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
@@ -1170,6 +1237,8 @@ more per-step projection tuning.
    variational consistency treatment or move to the primary-secondary solver
    path. Simple per-step strength scaling and delayed post-step cleaning have
    both been shown to be insufficient.
+   The new divergence-control path should next use dimensionless scaling
+   relative to `M_sigma/dt` and `K` before any full fine-grid sweep.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.
