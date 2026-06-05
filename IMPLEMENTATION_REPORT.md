@@ -1055,6 +1055,11 @@ The default is `0`, which preserves the previous behavior. A positive value
 delays conductivity divergence cleaning until the post-ramp observation time
 exceeds the configured threshold.
 
+The validation artifact writer now also records a `divergence_cleaning`
+summary in `diagnostics.json` when `solver_log` contains cleaning records,
+including the cleaned step count, first cleaning time, maximum pre-clean
+residual, and maximum correction norm.
+
 Two WSL diagnostics were attempted with the corrected latest model geometry:
 
 - Fine run:

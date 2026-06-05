@@ -348,6 +348,56 @@ def test_validation_artifacts_include_faraday_magnetic_recovery_summary(tmp_path
     assert diagnostics["magnetic_recovery"]["max_absolute_hz_difference"] > 0.0
 
 
+def test_validation_artifacts_include_divergence_cleaning_summary(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.asarray([1.0e-5, 2.0e-5])
+    pred = np.asarray([[1.0, 0.0, 2.0], [1.0, 0.0, 2.0]])
+    ref = pred.copy()
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        solver_log=[
+            {
+                "step": 1,
+                "time": 1.1e-5,
+                "observation_time": 1.0e-6,
+                "divergence_clean_before": 10.0,
+                "divergence_clean_after": 1.0e-8,
+                "divergence_clean_correction_norm": 0.5,
+                "divergence_clean_applied_correction_norm": 0.5,
+                "divergence_clean_strength": 1.0,
+            },
+            {
+                "step": 2,
+                "time": 2.1e-5,
+                "observation_time": 1.1e-5,
+                "divergence_clean_before": 4.0,
+                "divergence_clean_after": 2.0e-8,
+                "divergence_clean_correction_norm": 0.25,
+                "divergence_clean_applied_correction_norm": 0.125,
+                "divergence_clean_strength": 0.5,
+            },
+        ],
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    summary = diagnostics["divergence_cleaning"]
+    assert summary["enabled"] is True
+    assert summary["cleaned_step_count"] == 2
+    assert summary["first_clean_observation_time"] == pytest.approx(1.0e-6)
+    assert summary["max_before"] == pytest.approx(10.0)
+    assert summary["max_correction_norm"] == pytest.approx(0.5)
+    assert summary["max_applied_correction_norm"] == pytest.approx(0.5)
+    assert summary["strength_values"] == [0.5, 1.0]
+
+
 def test_magnetic_recovery_summary_checks_hz_rate_against_dbdt():
     sp = _load_pipeline_module()
     mu0 = 1.2566370614359173e-6

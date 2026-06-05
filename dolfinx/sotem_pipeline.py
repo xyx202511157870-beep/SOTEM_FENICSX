@@ -4588,6 +4588,59 @@ def _magnetic_recovery_summary(times, pred_data, components) -> dict[str, Any]:
     }
 
 
+def _divergence_cleaning_summary(solver_log) -> dict[str, Any]:
+    entries = []
+    for item in solver_log or []:
+        if "divergence_clean_before" not in item:
+            continue
+        try:
+            before = float(item.get("divergence_clean_before", math.nan))
+        except (TypeError, ValueError):
+            before = math.nan
+        if not math.isfinite(before):
+            continue
+        entry = {
+            "step": int(item.get("step", -1)),
+            "time": float(item.get("time", math.nan)),
+            "observation_time": float(item.get("observation_time", item.get("time", math.nan))),
+            "before": before,
+            "after": float(item.get("divergence_clean_after", math.nan)),
+            "correction_norm": float(item.get("divergence_clean_correction_norm", math.nan)),
+            "applied_correction_norm": float(item.get("divergence_clean_applied_correction_norm", math.nan)),
+            "strength": float(item.get("divergence_clean_strength", math.nan)),
+        }
+        entries.append(entry)
+    if not entries:
+        return {"enabled": False, "cleaned_step_count": 0}
+
+    def max_entry(key: str) -> dict[str, Any]:
+        finite = [entry for entry in entries if math.isfinite(float(entry[key]))]
+        if not finite:
+            return entries[0]
+        return max(finite, key=lambda entry: float(entry[key]))
+
+    max_before = max_entry("before")
+    max_correction = max_entry("correction_norm")
+    max_applied = max_entry("applied_correction_norm")
+    strengths = sorted({float(entry["strength"]) for entry in entries if math.isfinite(float(entry["strength"]))})
+    return {
+        "enabled": True,
+        "cleaned_step_count": len(entries),
+        "first_clean_step": int(entries[0]["step"]),
+        "first_clean_time": float(entries[0]["time"]),
+        "first_clean_observation_time": float(entries[0]["observation_time"]),
+        "max_before": float(max_before["before"]),
+        "time_at_max_before": float(max_before["time"]),
+        "observation_time_at_max_before": float(max_before["observation_time"]),
+        "max_after": float(max(entry["after"] for entry in entries if math.isfinite(float(entry["after"])))),
+        "max_correction_norm": float(max_correction["correction_norm"]),
+        "time_at_max_correction_norm": float(max_correction["time"]),
+        "observation_time_at_max_correction_norm": float(max_correction["observation_time"]),
+        "max_applied_correction_norm": float(max_applied["applied_correction_norm"]),
+        "strength_values": strengths,
+    }
+
+
 def diagnose_source_consistency(config: PipelineConfig, *, source_projection_residual: float | None = None) -> dict[str, Any]:
     """Return source/waveform consistency diagnostics available without FEM matrices."""
 
@@ -4812,6 +4865,7 @@ def write_validation_artifacts(
     reference_type: str,
     source_info=None,
     receiver_diagnostic_rows=None,
+    solver_log=None,
 ) -> dict[str, Any]:
     """Write P2 validation CSV/JSON/plot artifacts for a three-component run."""
 
@@ -4867,6 +4921,7 @@ def write_validation_artifacts(
         threshold=float(config.error_tolerance),
     )
     diagnostics["magnetic_recovery"] = _magnetic_recovery_summary(times, pred_data, components)
+    diagnostics["divergence_cleaning"] = _divergence_cleaning_summary(solver_log)
     (workdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
     _write_validation_plots(workdir, times, pred_data, ref_data, rows, components)
@@ -6260,6 +6315,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         reference_type="empymod",
         source_info={"mode": f"postprocess_partial/{config.source_mode}"},
         receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
+        solver_log=fem_result.get("solver_log"),
     )
     runtime["postprocess_seconds"] = time.perf_counter() - t_post
     runtime["total_seconds"] = time.perf_counter() - t0
@@ -6627,6 +6683,7 @@ def main(argv: list[str] | None = None) -> int:
             reference_type="empymod",
             source_info=source,
             receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
+            solver_log=fem_result.get("solver_log"),
         )
         runtime["postprocess_seconds"] = time.perf_counter() - t0
         runtime["total_seconds"] = time.perf_counter() - run_t0
