@@ -531,6 +531,33 @@ Receiver mesh-sensitivity smoke:
   treatment than in a single missing or dominant source cell.
 
 - Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_src40_recv20_nearest_biotrate_projectiondiag_smoke`.
+- Change: same source40/receiver20/nearest/biot-rate smoke as above, with
+  source charge-conservation projection correction norms added to
+  `source_projection`.
+- Source projection correction diagnostics:
+  - raw source L2 norm: `14.61846112295302`.
+  - projected source L2 norm: `14.403726221660904`.
+  - correction L2 norm: `2.5000617875663655`.
+  - correction L2/raw: `0.1710208596198214`.
+  - raw source L1 norm: `201.65139957200677`.
+  - projected source L1 norm: `244.89689428028413`.
+  - correction L1 norm: `62.72421942125531`.
+  - correction L1/raw: `0.3110527353362475`.
+  - divergence residual reduction: `0.9999999993141232`.
+- Result at `t_obs=1.0e-5 s` remains:
+  - `max_error_Ex = 0.11406489203543935`
+  - `max_error_Ey = 5952295267.625508`
+  - `max_error_Hz_or_dBzdt = 0.15683277651412947`
+  - `pass_all_components = false`
+- Interpretation: the charge-conservation projection is numerically effective
+  for endpoint balance, but it changes the assembled source vector by a
+  non-negligible amount (`17%` in L2 and `31%` in L1). The next diagnostic
+  should compare a raw-source run against the charge-conserving run at the
+  first output point to determine whether this projection is a main driver of
+  the remaining `Ex` discrepancy or only a necessary consistency correction.
+
+- Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_src60_recv20_diskcurl_smoke`.
 - Change: source mesh size `60 m`, source refinement radius `400 m`,
   receiver mesh size `20 m`, main receiver `disk_average`, one output point.

@@ -1846,6 +1846,8 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
     residual.axpy(-1.0, current_div)
     endpoint_norm = endpoint.norm()
     residual_norm = residual.norm()
+    raw_source_l2_norm = float(source_vec.norm())
+    raw_source_l1_norm = float(source_vec.norm(PETSc.NormType.NORM_1))
     if residual_norm <= max(1.0e-12, 1.0e-10 * endpoint_norm):
         log(
             f"[source] charge-conservation projection skipped; divergence residual={residual_norm:.6e}",
@@ -1860,6 +1862,15 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
             "before_residual": float(residual_norm),
             "after_residual": float(residual_norm),
             "endpoint_norm": float(endpoint_norm),
+            "raw_source_l2_norm": raw_source_l2_norm,
+            "projected_source_l2_norm": raw_source_l2_norm,
+            "correction_l2_norm": 0.0,
+            "correction_l2_over_raw": 0.0,
+            "raw_source_l1_norm": raw_source_l1_norm,
+            "projected_source_l1_norm": raw_source_l1_norm,
+            "correction_l1_norm": 0.0,
+            "correction_l1_over_raw": 0.0,
+            "divergence_residual_reduction": 0.0,
             "ksp_iterations": 0,
             "ksp_reason": 0,
             "ksp_residual": 0.0,
@@ -1893,8 +1904,12 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
     correction = source_vec.duplicate()
     correction.set(0.0)
     G.mult(y_fun.x.petsc_vec, correction)
+    correction_l2_norm = float(correction.norm())
+    correction_l1_norm = float(correction.norm(PETSc.NormType.NORM_1))
     source_vec.axpy(1.0, correction)
     source_vec.assemble()
+    projected_source_l2_norm = float(source_vec.norm())
+    projected_source_l1_norm = float(source_vec.norm(PETSc.NormType.NORM_1))
 
     corrected_div = endpoint.duplicate()
     corrected_div.set(0.0)
@@ -1911,6 +1926,17 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
         "before_residual": float(residual_norm),
         "after_residual": float(corrected_norm),
         "endpoint_norm": float(endpoint_norm),
+        "raw_source_l2_norm": raw_source_l2_norm,
+        "projected_source_l2_norm": projected_source_l2_norm,
+        "correction_l2_norm": correction_l2_norm,
+        "correction_l2_over_raw": float(correction_l2_norm / raw_source_l2_norm) if raw_source_l2_norm > 0.0 else 0.0,
+        "raw_source_l1_norm": raw_source_l1_norm,
+        "projected_source_l1_norm": projected_source_l1_norm,
+        "correction_l1_norm": correction_l1_norm,
+        "correction_l1_over_raw": float(correction_l1_norm / raw_source_l1_norm) if raw_source_l1_norm > 0.0 else 0.0,
+        "divergence_residual_reduction": (
+            float((residual_norm - corrected_norm) / residual_norm) if residual_norm > 0.0 else 0.0
+        ),
         "ksp_iterations": int(ksp.getIterationNumber()),
         "ksp_reason": int(reason),
         "ksp_residual": float(ksp.getResidualNorm()),
@@ -4363,7 +4389,24 @@ def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | No
     if not isinstance(diagnostics, dict):
         return None
     out: dict[str, Any] = {}
-    for key in ("applied", "before_residual", "after_residual", "endpoint_norm", "ksp_iterations", "ksp_reason", "ksp_residual"):
+    for key in (
+        "applied",
+        "before_residual",
+        "after_residual",
+        "endpoint_norm",
+        "raw_source_l2_norm",
+        "projected_source_l2_norm",
+        "correction_l2_norm",
+        "correction_l2_over_raw",
+        "raw_source_l1_norm",
+        "projected_source_l1_norm",
+        "correction_l1_norm",
+        "correction_l1_over_raw",
+        "divergence_residual_reduction",
+        "ksp_iterations",
+        "ksp_reason",
+        "ksp_residual",
+    ):
         if key not in diagnostics:
             continue
         value = diagnostics[key]
@@ -4751,7 +4794,9 @@ def write_report(
             f"applied={source_projection.get('applied')}; "
             f"before={float(source_projection.get('before_residual', math.nan)):.6e}; "
             f"after={float(source_projection.get('after_residual', math.nan)):.6e}; "
-            f"endpoint_norm={float(source_projection.get('endpoint_norm', math.nan)):.6e}"
+            f"endpoint_norm={float(source_projection.get('endpoint_norm', math.nan)):.6e}; "
+            f"correction_l2/raw={float(source_projection.get('correction_l2_over_raw', math.nan)):.6g}; "
+            f"correction_l1/raw={float(source_projection.get('correction_l1_over_raw', math.nan)):.6g}"
         )
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
     if source_local_projection is not None:

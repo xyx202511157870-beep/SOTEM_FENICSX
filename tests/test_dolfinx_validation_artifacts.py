@@ -44,6 +44,15 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
                 "before_residual": 2.0,
                 "after_residual": 1.0e-9,
                 "endpoint_norm": 1.4,
+                "raw_source_l2_norm": 10.0,
+                "projected_source_l2_norm": 11.0,
+                "correction_l2_norm": 1.5,
+                "correction_l2_over_raw": 0.15,
+                "raw_source_l1_norm": 20.0,
+                "projected_source_l1_norm": 21.0,
+                "correction_l1_norm": 2.5,
+                "correction_l1_over_raw": 0.125,
+                "divergence_residual_reduction": 0.9999999995,
             },
         },
         receiver_diagnostic_rows=[
@@ -113,6 +122,9 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert diagnostics["source_consistency"]["source_endpoint_balance_residual"] == 1.0e-9
     assert diagnostics["source_projection"]["before_residual"] == 2.0
     assert diagnostics["source_projection"]["after_residual"] == 1.0e-9
+    assert diagnostics["source_projection"]["correction_l2_over_raw"] == pytest.approx(0.15)
+    assert diagnostics["source_projection"]["correction_l1_over_raw"] == pytest.approx(0.125)
+    assert diagnostics["source_projection"]["divergence_residual_reduction"] == pytest.approx(0.9999999995)
     assert diagnostics["receiver_sampling"]["enabled"] is True
     assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.8
     assert diagnostics["receiver_vs_reference"]["enabled"] is True
