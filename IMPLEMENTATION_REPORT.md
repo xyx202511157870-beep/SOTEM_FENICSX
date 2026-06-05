@@ -786,10 +786,37 @@ Receiver mesh-sensitivity smoke:
   - Point receiver from the same field also passes `Ex` and `dBzdt` at the
     first output: point `Ex` error `0.03799459110341777`, point `dBzdt` error
     `0.04882181606313593`.
+- Five-output mesh-segment no-IP smoke:
+  - Same directory as above, regenerated with `--stop-after-outputs 5`.
+  - Runtime: total `143.321 s`, mesh `14.294 s`.
+  - Time range: `1.0e-5` to `2.44140625e-5 s`.
+  - Source line integration:
+    `mode=mesh_segments`, `segments=200`, total segment length `1000 m`,
+    `26` quadrature points per segment, `5200` total quadrature points.
+  - Source projection:
+    - before residual: `0.15869511184790644`
+    - after residual: `2.1986488276977117e-10`
+    - correction `L2/raw = 0.0053012314244093054`
+  - Five-output errors:
+    - `max_error_Ex = 0.09418477867481403` at
+      `t_obs=2.44140625e-5 s`
+    - `max_error_Hz = 0.00520392194214342`
+    - `max_error_dBzdt = 0.026648609495953234`
+    - weak `Ey` scaled absolute error: `0.014953312810585524`
+    - `physical_pass_all_components = false`
+    - `physical_failed_components = ["Ex"]`
+  - Comparison with the earlier dense-global-q5001 disk-average run over the
+    same five times:
+    - q5001 `Ex` errors were approximately
+      `2.42%, 5.48%, 7.33%, 8.46%, 9.11%`.
+    - mesh-segment `Ex` reaches `9.42%` at the fifth point, so source balance
+      improved but early `Ex` did not improve enough.
+    - mesh-segment `dBzdt` remains below `2.67%` and is comparable to or
+      slightly better than q5001 over the same early window.
   - Interpretation: mesh-segment adaptive source integration is a real P2
-    improvement for source consistency and the first observation point. It has
-    not yet proven full-window `1e-5 s` to `1 s` acceptance; a resumed
-    full-window run is still required.
+    improvement for source consistency and magnetic early-time response, but
+    it does not fix early-time `Ex`. A full `1 s` rerun is not justified until
+    the early `Ex` channel is addressed.
 
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.

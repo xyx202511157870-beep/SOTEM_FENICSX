@@ -1,37 +1,44 @@
 {
   "case_type": "noip",
   "failed_components": [
+    "Ex",
     "Ey"
   ],
   "failed_times": [
-    1e-05
+    1e-05,
+    1.25e-05,
+    1.5625e-05,
+    1.953125e-05,
+    2.44140625e-05
   ],
-  "floor_Ex": 8.957478017615674e-10,
+  "floor_Ex": 8.970911655277204e-10,
   "floor_Ey": 1e-14,
-  "floor_Hz": 2.197618591964809e-09,
-  "floor_dBzdt": 4.486077984479888e-12,
+  "floor_Hz": 2.1976168597438716e-09,
+  "floor_dBzdt": 4.492992697638011e-12,
   "magnetic_quantity": "dBzdt",
-  "max_error_Ex": 0.02878542212309011,
+  "max_error_Ex": 0.09418477867481403,
   "max_error_Ey": 1341448481.774876,
-  "max_error_Hz_or_dBzdt": 0.025925605699880186,
-  "max_peak_normalized_error_Ex": 0.02878542212309011,
+  "max_error_Hz_or_dBzdt": 0.026648609495953234,
+  "max_peak_normalized_error_Ex": 0.09418477867481403,
   "max_peak_normalized_error_Ey": 1341448481.774876,
-  "max_peak_normalized_error_Hz_or_dBzdt": 0.025925605699880186,
+  "max_peak_normalized_error_Hz_or_dBzdt": 0.026648609495953234,
   "pass_all_components": false,
-  "physical_failed_components": [],
-  "physical_pass_all_components": true,
+  "physical_failed_components": [
+    "Ex"
+  ],
+  "physical_pass_all_components": false,
   "reference_type": "empymod",
   "relative_error_threshold": 0.05,
-  "rms_error_Ex": 0.02878542212309011,
-  "rms_error_Ey": 1341448481.774876,
-  "rms_error_Hz_or_dBzdt": 0.025925605699880186,
+  "rms_error_Ex": 0.0733554374371474,
+  "rms_error_Ey": 1206314515.4785562,
+  "rms_error_Hz_or_dBzdt": 0.02029754799464998,
   "weak_component_passed": true,
-  "weak_component_primary_scale": 0.0008957478017615674,
+  "weak_component_primary_scale": 0.0008970911655277205,
   "weak_component_reference_max": {
-    "Ey": 1.1173400869144125e-21
+    "Ey": 2.101350461691214e-21
   },
   "weak_component_scaled_abs_error_max": {
-    "Ey": 0.014975738473896322
+    "Ey": 0.014953312810585524
   },
   "weak_components": [
     "Ey"

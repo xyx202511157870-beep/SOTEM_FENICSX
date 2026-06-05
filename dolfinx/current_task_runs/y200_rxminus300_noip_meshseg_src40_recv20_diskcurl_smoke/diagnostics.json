@@ -1,27 +1,41 @@
 {
-  "failed": false,
+  "failed": true,
   "failed_components": [
+    "Ex",
     "Ey"
   ],
   "failed_times": [
-    1e-05
+    1e-05,
+    1.25e-05,
+    1.5625e-05,
+    1.953125e-05,
+    2.44140625e-05
   ],
   "magnetic_receiver_mode": "biot_current",
   "magnetic_recovery": {
     "enabled": true,
-    "faraday_hz_final": -0.002200052766755652,
+    "faraday_hz_final": -0.0021479379050403902,
     "initial_hz": -0.002200052766755652,
-    "max_absolute_hz_difference": 0.0,
-    "max_relative_hz_difference": 0.0,
+    "max_absolute_hz_difference": 1.2998806656861709e-05,
+    "max_relative_hz_difference": 0.006088607710966448,
     "method": "faraday_integrated_dBzdt",
     "rate_consistency": {
-      "enabled": false,
-      "reason": "requires at least two samples"
+      "dbzdt_average_at_max_relative_difference": 4.6013183527433646e-06,
+      "enabled": true,
+      "hz_rate_at_max_relative_difference": 5.836372801787326e-06,
+      "max_absolute_difference": 1.2350544490439615e-06,
+      "max_relative_difference": 0.2684131708269232,
+      "method": "mu_dHzdt_vs_trapezoid_dBzdt",
+      "sample_count": 4,
+      "time_mid_at_max_relative_difference": 2.197265625e-05
     },
-    "reported_hz_final": -0.002200052766755652,
-    "time_at_max_relative_hz_difference": 1e-05
+    "reported_hz_final": -0.0021349390983835285,
+    "time_at_max_relative_hz_difference": 2.44140625e-05
   },
-  "physical_failed_components": [],
+  "magnetic_recovery_note": "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure.",
+  "physical_failed_components": [
+    "Ex"
+  ],
   "receiver_sampling": {
     "baseline_receiver_type": "point",
     "comparisons": {
@@ -29,22 +43,22 @@
         "Ex": {
           "max_absolute_difference": 8.249092870179315e-06,
           "max_relative_difference": 0.008872078004316,
-          "mean_relative_difference": 0.008872078004316,
-          "sample_count": 1,
+          "mean_relative_difference": 0.007077354305596,
+          "sample_count": 5,
           "time_at_max_relative_difference": 1e-05
         },
         "Ey": {
-          "max_absolute_difference": 1.2320876829882233e-05,
-          "max_relative_difference": 11.266264481039924,
-          "mean_relative_difference": 11.266264481039924,
-          "sample_count": 1,
-          "time_at_max_relative_difference": 1e-05
+          "max_absolute_difference": 1.350003833761309e-05,
+          "max_relative_difference": 27.919011873935858,
+          "mean_relative_difference": 10.710906928468933,
+          "sample_count": 5,
+          "time_at_max_relative_difference": 1.25e-05
         },
         "dBzdt": {
           "max_absolute_difference": 1.0271418523862187e-07,
           "max_relative_difference": 0.024071420844084,
-          "mean_relative_difference": 0.024071420844084,
-          "sample_count": 1,
+          "mean_relative_difference": 0.014334347729352,
+          "sample_count": 5,
           "time_at_max_relative_difference": 1e-05
         }
       }
@@ -56,25 +70,25 @@
       "disk_average"
     ],
     "threshold": 0.05,
-    "time_count": 1
+    "time_count": 5
   },
   "receiver_vs_reference": {
     "baseline_receiver_type": "point",
     "comparisons": {
       "disk_average": {
         "Ex": {
-          "baseline_max_relative_error": 0.03799459110341777,
-          "candidate_max_relative_error": 0.02878542212309011,
+          "baseline_max_relative_error": 0.10043500168585454,
+          "candidate_max_relative_error": 0.09418477867481403,
           "improves_over_baseline": true
         },
         "Ey": {
-          "baseline_max_relative_error": 109360798.78665294,
+          "baseline_max_relative_error": 541847199.6851319,
           "candidate_max_relative_error": 1341448481.774876,
           "improves_over_baseline": false
         },
         "dBzdt": {
-          "baseline_max_relative_error": 0.04882181606313593,
-          "candidate_max_relative_error": 0.025925605699880186,
+          "baseline_max_relative_error": 0.04925450189467126,
+          "candidate_max_relative_error": 0.026648609495953234,
           "improves_over_baseline": true
         }
       }
@@ -83,61 +97,61 @@
     "metrics": {
       "disk_average": {
         "Ex": {
-          "max_peak_normalized_error": 0.02878542212309011,
-          "max_relative_error": 0.02878542212309011,
-          "mean_relative_error": 0.02878542212309011,
-          "passes_threshold": true,
-          "sample_count": 1,
-          "time_at_max_relative_error": 1e-05
+          "max_peak_normalized_error": 0.09418477867481403,
+          "max_relative_error": 0.09418477867481403,
+          "mean_relative_error": 0.06949371356616718,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 2.44140625e-05
         },
         "Ey": {
           "max_peak_normalized_error": 1341448481.774876,
           "max_relative_error": 1341448481.774876,
-          "mean_relative_error": 1341448481.774876,
+          "mean_relative_error": 1199531300.964799,
           "passes_threshold": false,
-          "sample_count": 1,
+          "sample_count": 5,
           "time_at_max_relative_error": 1e-05
         },
         "Hz": {
-          "max_peak_normalized_error": 0.001107642062978224,
-          "max_relative_error": 0.001107642062978224,
-          "mean_relative_error": 0.001107642062978224,
+          "max_peak_normalized_error": 0.005081948056243143,
+          "max_relative_error": 0.00520392194214342,
+          "mean_relative_error": 0.00205987308907954,
           "passes_threshold": true,
-          "sample_count": 1,
-          "time_at_max_relative_error": 1e-05
+          "sample_count": 5,
+          "time_at_max_relative_error": 2.44140625e-05
         },
         "dBzdt": {
-          "max_peak_normalized_error": 0.025925605699880186,
-          "max_relative_error": 0.025925605699880186,
-          "mean_relative_error": 0.025925605699880186,
+          "max_peak_normalized_error": 0.026648609495953234,
+          "max_relative_error": 0.026648609495953234,
+          "mean_relative_error": 0.01799363981163003,
           "passes_threshold": true,
-          "sample_count": 1,
-          "time_at_max_relative_error": 1e-05
+          "sample_count": 5,
+          "time_at_max_relative_error": 2.44140625e-05
         }
       },
       "point": {
         "Ex": {
-          "max_peak_normalized_error": 0.03799459110341777,
-          "max_relative_error": 0.03799459110341777,
-          "mean_relative_error": 0.03799459110341777,
-          "passes_threshold": true,
-          "sample_count": 1,
-          "time_at_max_relative_error": 1e-05
+          "max_peak_normalized_error": 0.10043500168585454,
+          "max_relative_error": 0.10043500168585454,
+          "mean_relative_error": 0.07709163888878537,
+          "passes_threshold": false,
+          "sample_count": 5,
+          "time_at_max_relative_error": 2.44140625e-05
         },
         "Ey": {
-          "max_peak_normalized_error": 109360798.78665294,
-          "max_relative_error": 109360798.78665294,
-          "mean_relative_error": 109360798.78665294,
+          "max_peak_normalized_error": 541847199.6851319,
+          "max_relative_error": 541847199.6851319,
+          "mean_relative_error": 249624223.19444495,
           "passes_threshold": false,
-          "sample_count": 1,
-          "time_at_max_relative_error": 1e-05
+          "sample_count": 5,
+          "time_at_max_relative_error": 2.44140625e-05
         },
         "dBzdt": {
-          "max_peak_normalized_error": 0.04882181606313593,
-          "max_relative_error": 0.04882181606313593,
-          "mean_relative_error": 0.04882181606313593,
+          "max_peak_normalized_error": 0.04920108055127566,
+          "max_relative_error": 0.04925450189467126,
+          "mean_relative_error": 0.032453634426745356,
           "passes_threshold": true,
-          "sample_count": 1,
+          "sample_count": 5,
           "time_at_max_relative_error": 1e-05
         }
       }
@@ -210,7 +224,7 @@
     "after_residual": 2.1986488276977117e-10,
     "applied": true,
     "before_residual": 0.15869511184790644,
-    "correction_l1_norm": 0.9197595222313176,
+    "correction_l1_norm": 0.9197595222313177,
     "correction_l1_over_raw": 0.004516530672161857,
     "correction_l2_norm": 0.07528561975404614,
     "correction_l2_over_raw": 0.0053012314244093054,
@@ -219,7 +233,7 @@
     "ksp_iterations": 7,
     "ksp_reason": 2,
     "ksp_residual": 3.3318332568321294e-10,
-    "projected_source_l1_norm": 204.21067512842586,
+    "projected_source_l1_norm": 204.21067512842583,
     "projected_source_l2_norm": 14.201326661865577,
     "projection_mode": "charge_conserving",
     "raw_source_l1_norm": 203.6429261734806,
@@ -248,15 +262,23 @@
   },
   "strict_failed": true,
   "validation_failure": {
-    "failed": false,
+    "failed": true,
     "failed_components": [
+      "Ex",
       "Ey"
     ],
     "failed_times": [
-      1e-05
+      1e-05,
+      1.25e-05,
+      1.5625e-05,
+      1.953125e-05,
+      2.44140625e-05
     ],
     "magnetic_receiver_mode": "biot_current",
-    "physical_failed_components": [],
+    "magnetic_recovery_note": "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure.",
+    "physical_failed_components": [
+      "Ex"
+    ],
     "recommended_check_order": [
       "time_step_error",
       "mesh_error",
