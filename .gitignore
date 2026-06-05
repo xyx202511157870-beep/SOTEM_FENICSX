@@ -1,9 +1,13 @@
-.numba_cache/
+﻿.numba_cache/
+.venv/
 .pytest_cache/
+.mypy_cache/
 .tmp/
 .tmp2/
 tmp/
 outputs/
+output/
+generated/
 __pycache__/
 *.py[cod]
 *.nbc
@@ -15,6 +19,7 @@ __pycache__/
 *.npz
 *.npy
 *.log
+*.svg
 dolfinx/paper_reproduction/
 dolfinx/runs/
 dolfinx/figures/
@@ -23,6 +28,11 @@ dolfinx/empymod_analytic_check/
 dolfinx/sponge_smoke_small/
 dolfinx/sponge_uniform*/
 dolfinx/uniform*/
+
+# Large/proprietary modelling artifacts
+*.mph
+*.class
+*.status
 
 # Local papers and large documents
 *.pdf
