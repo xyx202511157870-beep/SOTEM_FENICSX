@@ -177,6 +177,24 @@ def test_transient_source_projection_uses_unit_current_shape():
     assert sp._endpoint_load_current(config, use_unit_current=True) == pytest.approx(1.0)
 
 
+def test_source_projection_mode_defaults_to_charge_conserving_and_accepts_raw_diagnostic_mode():
+    sp = _load_pipeline_module()
+
+    default_diagnostics = sp.validate_model_consistency(sp.PipelineConfig())
+    raw_diagnostics = sp.validate_model_consistency(sp.PipelineConfig(source_projection_mode="raw"))
+
+    assert sp.PipelineConfig().source_projection_mode == "charge_conserving"
+    assert default_diagnostics["source_projection_mode"] == "charge_conserving"
+    assert raw_diagnostics["source_projection_mode"] == "raw"
+
+
+def test_model_consistency_rejects_unknown_source_projection_mode():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="source_projection_mode"):
+        sp.validate_model_consistency(sp.PipelineConfig(source_projection_mode="bad"))
+
+
 def test_empymod_receiver_mapping_supports_hz_and_dbdt():
     sp = _load_pipeline_module()
 

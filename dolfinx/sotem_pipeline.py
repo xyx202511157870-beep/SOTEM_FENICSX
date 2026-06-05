@@ -107,6 +107,7 @@ class PipelineConfig:
     min_steps_during_turnoff: int = 10
 
     source_mode: str = "auto"  # auto, line, manual_line, regularized
+    source_projection_mode: str = "charge_conserving"  # charge_conserving, raw
     source_rhs_sign: float = -1.0
     source_term_mode: str = "impressed_current"  # impressed_current, primary_dc
     formulation: str = "e"  # e, h
@@ -467,6 +468,9 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     source_term_mode = str(config.source_term_mode).strip().lower()
     if source_term_mode not in {"impressed_current", "primary_dc"}:
         raise ValueError("source_term_mode must be 'impressed_current' or 'primary_dc'")
+    source_projection_mode = str(config.source_projection_mode).strip().lower()
+    if source_projection_mode not in {"charge_conserving", "raw"}:
+        raise ValueError("source_projection_mode must be 'charge_conserving' or 'raw'")
     magnetic_receiver_mode = str(config.magnetic_receiver_mode).strip().lower()
     if magnetic_receiver_mode not in {"curl", "biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_receiver_mode must be 'curl', 'biot_current', or 'biot_ohmic'")
@@ -667,6 +671,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "source_current": float(config.source_current),
             "source_rhs_sign": float(config.source_rhs_sign),
             "source_quadrature_points": source_quadrature_points,
+            "source_projection_mode": source_projection_mode,
             "nedelec_order": nedelec_order,
             "source_term_mode": source_term_mode,
             "initial_dc_mode": initial_dc_mode,
@@ -1611,6 +1616,7 @@ def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=
             spaces,
             source["vector"],
             config,
+            apply_projection=str(config.source_projection_mode).strip().lower() == "charge_conserving",
         )
         return source
     if requested in {"auto", "line"} and ridge_ok:
@@ -1684,7 +1690,13 @@ def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=
         f"density_scale={density_scale:.6e} 1/m^2; weighted local cells={len(weights)}",
         comm=msh.comm,
     )
-    source_vec, projection_diagnostics = _enforce_source_charge_conservation(msh, spaces, source_vec, config)
+    source_vec, projection_diagnostics = _enforce_source_charge_conservation(
+        msh,
+        spaces,
+        source_vec,
+        config,
+        apply_projection=str(config.source_projection_mode).strip().lower() == "charge_conserving",
+    )
     return {"mode": mode, "coeff": source_coeff, "vector": source_vec, "projection_diagnostics": projection_diagnostics}
 
 
@@ -1825,7 +1837,14 @@ def _build_endpoint_scalar_load(msh, S, config: PipelineConfig, *, use_unit_curr
     return b
 
 
-def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec, config: PipelineConfig):
+def _enforce_source_charge_conservation(
+    msh,
+    spaces: dict[str, Any],
+    source_vec,
+    config: PipelineConfig,
+    *,
+    apply_projection: bool = True,
+):
     """Project the edge source load so G.T * source equals the endpoint load."""
 
     import numpy as np
@@ -1848,6 +1867,36 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
     residual_norm = residual.norm()
     raw_source_l2_norm = float(source_vec.norm())
     raw_source_l1_norm = float(source_vec.norm(PETSc.NormType.NORM_1))
+    projection_mode = "charge_conserving" if bool(apply_projection) else "raw"
+    if not apply_projection:
+        log(
+            "[source] charge-conservation projection disabled for raw diagnostic mode; "
+            f"divergence residual={residual_norm:.6e}, endpoint_norm={endpoint_norm:.6e}",
+            comm=msh.comm,
+        )
+        endpoint.destroy()
+        current_div.destroy()
+        residual.destroy()
+        G.destroy()
+        return source_vec, {
+            "projection_mode": projection_mode,
+            "applied": False,
+            "before_residual": float(residual_norm),
+            "after_residual": float(residual_norm),
+            "endpoint_norm": float(endpoint_norm),
+            "raw_source_l2_norm": raw_source_l2_norm,
+            "projected_source_l2_norm": raw_source_l2_norm,
+            "correction_l2_norm": 0.0,
+            "correction_l2_over_raw": 0.0,
+            "raw_source_l1_norm": raw_source_l1_norm,
+            "projected_source_l1_norm": raw_source_l1_norm,
+            "correction_l1_norm": 0.0,
+            "correction_l1_over_raw": 0.0,
+            "divergence_residual_reduction": 0.0,
+            "ksp_iterations": 0,
+            "ksp_reason": 0,
+            "ksp_residual": 0.0,
+        }
     if residual_norm <= max(1.0e-12, 1.0e-10 * endpoint_norm):
         log(
             f"[source] charge-conservation projection skipped; divergence residual={residual_norm:.6e}",
@@ -1858,6 +1907,7 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
         residual.destroy()
         G.destroy()
         return source_vec, {
+            "projection_mode": projection_mode,
             "applied": False,
             "before_residual": float(residual_norm),
             "after_residual": float(residual_norm),
@@ -1922,6 +1972,7 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
         comm=msh.comm,
     )
     diagnostics = {
+        "projection_mode": projection_mode,
         "applied": True,
         "before_residual": float(residual_norm),
         "after_residual": float(corrected_norm),
@@ -4390,6 +4441,7 @@ def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | No
         return None
     out: dict[str, Any] = {}
     for key in (
+        "projection_mode",
         "applied",
         "before_residual",
         "after_residual",
@@ -4412,6 +4464,8 @@ def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | No
         value = diagnostics[key]
         if isinstance(value, bool):
             out[key] = bool(value)
+        elif isinstance(value, str):
+            out[key] = str(value)
         elif isinstance(value, int):
             out[key] = int(value)
         elif value is None:
@@ -4506,6 +4560,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "source_start": list(config.source_start),
         "source_end": list(config.source_end),
         "source_current": float(config.source_current),
+        "source_projection_mode": str(config.source_projection_mode),
         "receiver": list(config.receiver),
         "ramp_off_time": float(config.ramp_off_time),
         "time_origin": str(config.time_origin),
@@ -4791,6 +4846,7 @@ def write_report(
     if source_projection is not None:
         lines.append(
             "  source projection: "
+            f"mode={source_projection.get('projection_mode', config.source_projection_mode)}; "
             f"applied={source_projection.get('applied')}; "
             f"before={float(source_projection.get('before_residual', math.nan)):.6e}; "
             f"after={float(source_projection.get('after_residual', math.nan)):.6e}; "
@@ -4810,6 +4866,7 @@ def write_report(
             f"top_dof_fraction={float(source_local_projection.get('dof_contribution_top_fraction', math.nan)):.6g}"
         )
     lines.append(f"  source RHS sign: {config.source_rhs_sign:g}")
+    lines.append(f"  source projection mode: {config.source_projection_mode}")
     lines.append(f"  source quadrature points: {config.source_quadrature_points if int(config.source_quadrature_points) > 0 else 'auto'}")
     lines.append(f"  source term mode: {config.source_term_mode}")
     lines.append(f"  formulation: {config.formulation}")
@@ -5724,6 +5781,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check-env-only", action="store_true")
     parser.add_argument("--no-install", action="store_true", help="Do not pip install missing non-core packages.")
     parser.add_argument("--source-mode", choices=["auto", "line", "manual_line", "regularized"], default="auto")
+    parser.add_argument(
+        "--source-projection-mode",
+        choices=["charge_conserving", "raw"],
+        default="charge_conserving",
+        help="Use raw only for diagnostics; charge_conserving enforces endpoint balance.",
+    )
     parser.add_argument("--source-rhs-sign", type=float, choices=[-1.0, 1.0], default=-1.0)
     parser.add_argument("--source-term-mode", choices=["impressed_current", "primary_dc"], default="impressed_current")
     parser.add_argument("--formulation", choices=["e", "h"], default="e")
@@ -5829,6 +5892,7 @@ def main(argv: list[str] | None = None) -> int:
         memory_limit_gb=args.memory_limit_gb,
         memory_safety_fraction=args.memory_safety_fraction,
         source_mode=args.source_mode,
+        source_projection_mode=args.source_projection_mode,
         source_rhs_sign=args.source_rhs_sign,
         source_term_mode=args.source_term_mode,
         formulation=args.formulation,

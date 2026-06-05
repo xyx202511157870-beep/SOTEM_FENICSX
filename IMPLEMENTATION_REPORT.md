@@ -558,6 +558,35 @@ Receiver mesh-sensitivity smoke:
   the remaining `Ex` discrepancy or only a necessary consistency correction.
 
 - Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_src40_recv20_nearest_biotrate_rawproj_smoke`.
+- Change: same source40/receiver20/nearest/biot-rate smoke as above, but
+  with `--source-projection-mode raw`, so the assembled manual-line vector is
+  used without the endpoint charge-conservation projection.
+- Source projection diagnostics:
+  - projection mode: `raw`.
+  - applied: `false`.
+  - before residual: `6.561607663609301`.
+  - after residual: `6.561607663609301`.
+  - endpoint norm: `1.414213562373099`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.04866187758167016`
+  - `max_error_Ey = 1033376377.0488973`
+  - `max_error_Hz_or_dBzdt = 0.17328421255717028`
+  - `pass_all_components = false`
+- Diagnostic receiver comparison from the same solve:
+  - disk-average `Ex` error: about `3.91%`.
+  - disk-average `dBzdt` error: about `2.66%`.
+- Interpretation: disabling the projection pulls first-point `Ex` below the
+  `5%` gate and keeps disk-average `dBzdt` below `5%`, but this raw source
+  violates the endpoint balance by the full `6.56` residual and worsens point
+  `dBzdt`. This strongly indicates that the projection/source consistency
+  pathway is a main contributor to the `Ex` discrepancy, but raw mode is not a
+  physically acceptable final solver. The next implementation step should
+  search for a charge-conserving source construction that preserves the
+  physically correct near-source moment, instead of using the current global
+  gradient projection as the only correction.
+
+- Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_src60_recv20_diskcurl_smoke`.
 - Change: source mesh size `60 m`, source refinement radius `400 m`,
   receiver mesh size `20 m`, main receiver `disk_average`, one output point.
@@ -599,6 +628,9 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
+- `source_projection_mode=raw` is implemented only as a diagnostic switch.
+  It can improve first-point `Ex`, but it violates endpoint charge
+  conservation and must not be used as a final accepted solver mode.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. H-form diagnostic output still writes only the main
@@ -619,7 +651,10 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 
 ## Next Steps
 
-1. Add real FEM source residual diagnostics using assembled gradient/divergence/curl operators, including a comparison of raw vs charge-conserved source vectors and their effect on the DC initial field.
+1. Replace or improve the current global gradient charge-conservation source
+   projection with a charge-conserving construction that preserves the
+   near-source moment; use the raw-vs-projected first-point evidence as the
+   regression target.
 2. Extend the latest-model point/disk diagnostic run beyond the first five output times after improving the receiver/curl recovery path, so long runs are not spent confirming the same early-time failure.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
