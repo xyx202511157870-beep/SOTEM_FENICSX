@@ -1,0 +1,32 @@
+{
+  "case_type": "noip",
+  "failed_components": [
+    "Ex",
+    "Ey",
+    "dBzdt"
+  ],
+  "failed_times": [
+    1e-05,
+    1.25e-05,
+    1.5625e-05,
+    1.953125e-05,
+    2.44140625e-05
+  ],
+  "floor_Ex": 8.970911655277204e-10,
+  "floor_Ey": 1e-14,
+  "floor_Hz": 2.1976168597438716e-09,
+  "floor_dBzdt": 4.492992697638011e-12,
+  "magnetic_quantity": "dBzdt",
+  "max_error_Ex": 0.27639692569161395,
+  "max_error_Ey": 5150102111.501422,
+  "max_error_Hz_or_dBzdt": 0.5308318716061439,
+  "max_peak_normalized_error_Ex": 0.27590820545424444,
+  "max_peak_normalized_error_Ey": 5150102111.501422,
+  "max_peak_normalized_error_Hz_or_dBzdt": 0.5302561323212548,
+  "pass_all_components": false,
+  "reference_type": "empymod",
+  "relative_error_threshold": 0.05,
+  "rms_error_Ex": 0.17601914409069597,
+  "rms_error_Ey": 4384334923.879118,
+  "rms_error_Hz_or_dBzdt": 0.40103777944445174
+}

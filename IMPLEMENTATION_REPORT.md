@@ -346,14 +346,55 @@ Receiver averaging smoke:
   to populate those simultaneous diagnostic rows for the latest large-domain
   model.
 
+Simultaneous point/disk receiver diagnostic smoke:
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_point_diskdiag_smoke`.
+- Command used the corrected latest model:
+  `(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver `(0, -300, -0.1)`,
+  `10 A`, `rho_air=1e6 ohm m`, earth layers `100 ohm m` with depths
+  `350,650 m`, big box `x,y=+/-30000 m`, `air_height=10000 m`,
+  `earth_depth=30000 m`, local source/receiver mesh size `80 m`, radius
+  `500 m`.
+- Receiver diagnostics used
+  `--receiver-type point --receiver-diagnostic-types point,disk_average
+  --receiver-average-radius 2`.
+- WSL run was split by checkpoint:
+  - First segment: one output point, terminal wall time `92.8 s`.
+  - Resume segment: four additional output points, terminal wall time `49.0 s`.
+  - Resume report runtime: total `41.017 s`, forward solve `27.619 s`,
+    empymod reference `6.306 s`.
+- Artifacts include:
+  - `receiver_diagnostics.csv`
+  - `receiver_diagnostics.png`
+  - standard `comparison_3comp.png`, `error_curves_3comp.png`,
+    `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
+    `error_summary.json`, `diagnostics.json`.
+- Result over the first five output times
+  (`1.0e-5` to `2.44140625e-5 s`):
+  - `max_error_Ex = 0.27639692569161395`
+  - `max_error_Ey = 5150102111.501422`
+  - `max_error_Hz_or_dBzdt = 0.5308318716061439`
+  - `pass_all_components = false`
+- Point/disk receiver diagnostic difference from the same field solve:
+  - `Ex`: about `0.19%` to `2.35%`.
+  - `Ey`: about `12.48%` to `21.82%`; this remains a near-zero component.
+  - `dBzdt`: about `9.15%` to `31.49%`.
+- Interpretation: simultaneous receiver diagnostics now work. The disk-average
+  electric response is close to the point response for `Ex`, but `dBzdt`
+  changes substantially, supporting the current diagnosis that receiver/curl
+  recovery near the shallow interface is a major contributor to the early
+  magnetic-response error.
+
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
 - Average receiver sampling and simultaneous point/average diagnostic artifact
-  output are implemented for the E-form DOLFINx verification pipeline. H-form
-  diagnostic output still writes only the main receiver response.
+  output are implemented and smoke-tested for the E-form DOLFINx verification
+  pipeline. H-form diagnostic output still writes only the main receiver
+  response.
 - Faraday-integrated `Hz` recovery is not implemented in this round.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.
@@ -371,8 +412,8 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 ## Next Steps
 
 1. Add real FEM source residual diagnostics using assembled gradient/divergence/curl operators.
-2. Run a latest-model WSL diagnostic segment with `--receiver-diagnostic-types point,disk_average` to compare point and averaged receiver rows from the same field solve.
-3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`.
+2. Extend the latest-model point/disk diagnostic run beyond the first five output times after improving the receiver/curl recovery path, so long runs are not spent confirming the same early-time failure.
+3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 5. Continue P4 by implementing real `EmpymodPrimaryProvider` sampling or a 1D reference backend.
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
