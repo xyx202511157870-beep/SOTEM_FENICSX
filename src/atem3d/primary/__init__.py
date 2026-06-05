@@ -4,7 +4,7 @@ from .base import PrimaryFieldProvider
 from .cache import CachedPrimaryProvider
 from .dc import analytic_halfspace_dc_runner, analytic_halfspace_grounded_wire_dc_electric_field
 from .empymod_provider import EmpymodPrimaryProvider
-from .interpolation import PrimaryFEMInterpolator
+from .interpolation import PrimaryFEMInterpolator, TabulatedVectorField, make_tabulated_vector_assembler
 from .zero import ZeroPrimaryProvider
 
 __all__ = [
@@ -12,7 +12,9 @@ __all__ = [
     "EmpymodPrimaryProvider",
     "PrimaryFEMInterpolator",
     "PrimaryFieldProvider",
+    "TabulatedVectorField",
     "ZeroPrimaryProvider",
     "analytic_halfspace_dc_runner",
     "analytic_halfspace_grounded_wire_dc_electric_field",
+    "make_tabulated_vector_assembler",
 ]

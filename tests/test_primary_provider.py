@@ -8,9 +8,11 @@ from atem3d.primary import (
     EmpymodPrimaryProvider,
     PrimaryFEMInterpolator,
     PrimaryFieldProvider,
+    TabulatedVectorField,
     ZeroPrimaryProvider,
     analytic_halfspace_dc_runner,
     analytic_halfspace_grounded_wire_dc_electric_field,
+    make_tabulated_vector_assembler,
 )
 
 
@@ -292,6 +294,58 @@ def test_primary_fem_interpolator_preserves_cached_provider_time_samples():
         interpolator.sample_Ep_times([0.0, 1.0, 2.0]),
         [[[0.0, 0.0, 0.0]], [[1.0, 2.0, 3.0]], [[2.0, 4.0, 6.0]]],
     )
+
+
+def test_tabulated_vector_field_returns_dolfinx_style_component_matrix():
+    field = TabulatedVectorField(
+        points=np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]]),
+        values=np.array([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]]),
+    )
+    x = np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]])
+
+    np.testing.assert_allclose(field(x), [[40.0, 10.0], [50.0, 20.0], [60.0, 30.0]])
+
+
+def test_tabulated_vector_field_rejects_unknown_interpolation_point():
+    field = TabulatedVectorField(
+        points=np.array([[0.0, 0.0, 0.0]]),
+        values=np.array([[1.0, 2.0, 3.0]]),
+        atol=1.0e-12,
+    )
+
+    with pytest.raises(ValueError, match="not in tabulated primary field points"):
+        field(np.array([[1.0], [0.0], [0.0]]))
+
+
+def test_primary_fem_interpolator_can_return_tabulated_dolfinx_callable():
+    points = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+    receivers = np.array([[0.0, 0.0, 0.0]])
+    provider = CachedPrimaryProvider(
+        times=np.array([0.0, 2.0]),
+        points=points,
+        receivers=receivers,
+        Ep_on_V=np.array(
+            [
+                [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+                [[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
+            ]
+        ),
+        receiver_E=np.zeros((2, 1, 3)),
+        receiver_dBdt=np.zeros((2, 1, 3)),
+        Ep_dc_on_V=np.array([[100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]),
+    )
+    interpolator = PrimaryFEMInterpolator(
+        provider=provider,
+        points=points,
+        assembler=make_tabulated_vector_assembler(),
+    )
+
+    transient = interpolator.interpolate_Ep(1.0)
+    dc = interpolator.interpolate_Ep_dc()
+    x = np.array([[2.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+
+    np.testing.assert_allclose(transient(x), [[11.0, 5.0], [0.0, 0.0], [0.0, 0.0]])
+    np.testing.assert_allclose(dc(x), [[200.0, 100.0], [0.0, 0.0], [0.0, 0.0]])
 
 
 def _empymod_provider_config():
