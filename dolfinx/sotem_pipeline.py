@@ -2274,6 +2274,25 @@ def _aggregate_receiver_sample_values(sample_values, mode: str):
     return np.mean(np.vstack(collapsed), axis=0)
 
 
+def _receiver_candidate_count_stats(counts) -> dict[str, float | int]:
+    import numpy as np
+
+    arr = np.asarray(counts, dtype=float)
+    if arr.size == 0:
+        return {
+            "sample_count": 0,
+            "candidate_count_min": 0,
+            "candidate_count_max": 0,
+            "candidate_count_mean": float("nan"),
+        }
+    return {
+        "sample_count": int(arr.size),
+        "candidate_count_min": int(np.min(arr)),
+        "candidate_count_max": int(np.max(arr)),
+        "candidate_count_mean": float(np.mean(arr)),
+    }
+
+
 def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     """Evaluate Ex, Ey and dBz/dt at the configured receiver point."""
 
@@ -2291,10 +2310,12 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     mode = str(config.receiver_evaluation_mode).strip().lower()
     e_samples = []
     dbdt_samples = []
+    candidate_counts = []
     for sample_point in _receiver_sampling_points(config):
         cells = _find_cells_for_point(msh, sample_point)
         if len(cells) == 0:
             continue
+        candidate_counts.append(int(len(cells)))
         point = np.repeat(np.asarray(sample_point, dtype=float).reshape(1, 3), len(cells), axis=0)
         e_vals = np.asarray(E.eval(point, cells), dtype=float).reshape(len(cells), -1)
         dbdt_vals = np.asarray(dbdt.eval(point, cells), dtype=float).reshape(len(cells), -1)
@@ -2307,7 +2328,9 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
         )
     e_val = _aggregate_receiver_sample_values(e_samples, mode)
     dbdt_val = _aggregate_receiver_sample_values(dbdt_samples, mode)
-    return {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
+    rec = {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
+    rec.update(_receiver_candidate_count_stats(candidate_counts))
+    return rec
 
 
 def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time_obs: float, main_record=None):
@@ -2329,6 +2352,10 @@ def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time
                 "Ey": float(rec.get("Ey", np.nan)),
                 "Hz": float(rec.get("Hz", np.nan)),
                 "dBzdt": float(rec.get("dBzdt", np.nan)),
+                "sample_count": int(rec.get("sample_count", 0)),
+                "candidate_count_min": int(rec.get("candidate_count_min", 0)),
+                "candidate_count_max": int(rec.get("candidate_count_max", 0)),
+                "candidate_count_mean": float(rec.get("candidate_count_mean", np.nan)),
             }
         )
     return rows
@@ -4223,6 +4250,8 @@ def write_validation_artifacts(
     _write_component_csv(workdir / "predictions.csv", times, pred_data, components)
     _write_component_csv(workdir / "reference_empymod_or_1d.csv", times, ref_data, components)
     _write_errors_csv(workdir / "errors.csv", rows)
+    _write_receiver_diagnostics_csv(config, receiver_diagnostic_rows)
+    _plot_receiver_diagnostics(config, receiver_diagnostic_rows)
     receiver_reference_rows = _receiver_reference_error_rows(
         receiver_diagnostic_rows,
         times,
@@ -4967,6 +4996,10 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
             "receiver_diagnostic_types": np.asarray([], dtype="<U1"),
             "receiver_diagnostic_radii": np.empty(0, dtype=float),
             "receiver_diagnostic_values": np.empty((0, 4), dtype=float),
+            "receiver_diagnostic_sample_counts": np.empty(0, dtype=int),
+            "receiver_diagnostic_candidate_count_min": np.empty(0, dtype=int),
+            "receiver_diagnostic_candidate_count_max": np.empty(0, dtype=int),
+            "receiver_diagnostic_candidate_count_mean": np.empty(0, dtype=float),
         }
     return {
         "receiver_diagnostic_times": np.asarray([float(row["time_obs"]) for row in rows], dtype=float),
@@ -4984,6 +5017,18 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
             ],
             dtype=float,
         ),
+        "receiver_diagnostic_sample_counts": np.asarray(
+            [int(row.get("sample_count", 0)) for row in rows], dtype=int
+        ),
+        "receiver_diagnostic_candidate_count_min": np.asarray(
+            [int(row.get("candidate_count_min", 0)) for row in rows], dtype=int
+        ),
+        "receiver_diagnostic_candidate_count_max": np.asarray(
+            [int(row.get("candidate_count_max", 0)) for row in rows], dtype=int
+        ),
+        "receiver_diagnostic_candidate_count_mean": np.asarray(
+            [float(row.get("candidate_count_mean", np.nan)) for row in rows], dtype=float
+        ),
     }
 
 
@@ -4996,6 +5041,10 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
     types = [str(item) for item in np.asarray(payload["receiver_diagnostic_types"]).tolist()]
     radii = np.asarray(payload["receiver_diagnostic_radii"], dtype=float)
     values = np.asarray(payload["receiver_diagnostic_values"], dtype=float)
+    sample_counts = np.asarray(payload["receiver_diagnostic_sample_counts"], dtype=int) if "receiver_diagnostic_sample_counts" in payload.files else np.zeros(times.size, dtype=int)
+    candidate_min = np.asarray(payload["receiver_diagnostic_candidate_count_min"], dtype=int) if "receiver_diagnostic_candidate_count_min" in payload.files else np.zeros(times.size, dtype=int)
+    candidate_max = np.asarray(payload["receiver_diagnostic_candidate_count_max"], dtype=int) if "receiver_diagnostic_candidate_count_max" in payload.files else np.zeros(times.size, dtype=int)
+    candidate_mean = np.asarray(payload["receiver_diagnostic_candidate_count_mean"], dtype=float) if "receiver_diagnostic_candidate_count_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
     rows = []
     for i, time_obs in enumerate(times):
         rows.append(
@@ -5007,6 +5056,10 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
                 "Ey": float(values[i, 1]) if i < values.shape[0] else float("nan"),
                 "Hz": float(values[i, 2]) if i < values.shape[0] else float("nan"),
                 "dBzdt": float(values[i, 3]) if i < values.shape[0] else float("nan"),
+                "sample_count": int(sample_counts[i]) if i < sample_counts.size else 0,
+                "candidate_count_min": int(candidate_min[i]) if i < candidate_min.size else 0,
+                "candidate_count_max": int(candidate_max[i]) if i < candidate_max.size else 0,
+                "candidate_count_mean": float(candidate_mean[i]) if i < candidate_mean.size else float("nan"),
             }
         )
     return rows
@@ -5023,8 +5076,21 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
             png_path.unlink()
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "time_obs",
+        "receiver_type",
+        "radius",
+        "Ex",
+        "Ey",
+        "Hz",
+        "dBzdt",
+        "sample_count",
+        "candidate_count_min",
+        "candidate_count_max",
+        "candidate_count_mean",
+    ]
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["time_obs", "receiver_type", "radius", "Ex", "Ey", "Hz", "dBzdt"])
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for row in rows:
             writer.writerow(
@@ -5036,6 +5102,10 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
                     "Ey": float(row.get("Ey", math.nan)),
                     "Hz": float(row.get("Hz", math.nan)),
                     "dBzdt": float(row.get("dBzdt", math.nan)),
+                    "sample_count": int(row.get("sample_count", 0)),
+                    "candidate_count_min": int(row.get("candidate_count_min", 0)),
+                    "candidate_count_max": int(row.get("candidate_count_max", 0)),
+                    "candidate_count_mean": float(row.get("candidate_count_mean", math.nan)),
                 }
             )
 

@@ -58,6 +58,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     - `diagnostics.json`
     - `run_config_resolved.yaml`
   - Added automatic diagnostic scaffolding and source waveform consistency diagnostics.
+  - Receiver diagnostics now record sampling/cell-candidate statistics:
+    `sample_count`, `candidate_count_min`, `candidate_count_max`, and
+    `candidate_count_mean` in `receiver_diagnostics.csv`.
   - Added optional receiver magnetic-rate mode:
     - `--magnetic-dbdt-mode curl` keeps the original E-form `-curl(E)` output.
     - `--magnetic-dbdt-mode biot_rate` uses the finite-difference rate of the
@@ -456,6 +459,12 @@ Receiver mesh-sensitivity smoke:
   error from about `27.6%` to about `13.9%`, and `Hz` is essentially
   matched (`3.6e-5` relative error). However, the Biot-rate `dBzdt` remains
   far above `5%`.
+- Candidate-cell diagnostic from the rerun:
+  - point receiver: `sample_count=1`, `candidate_count=32`.
+  - disk receiver: `sample_count=5`, `candidate_count_min=4`,
+    `candidate_count_max=32`, `candidate_count_mean=9.6`.
+  This confirms that near-interface receiver extraction is sampling many
+  colliding cell candidates, so cell-selection policy is not a minor detail.
 
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_recv10_diskcurl_smoke`.

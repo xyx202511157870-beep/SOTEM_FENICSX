@@ -46,7 +46,19 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
             },
         },
         receiver_diagnostic_rows=[
-            {"time_obs": 1.0e-5, "receiver_type": "point", "radius": 0.0, "Ex": 1.0, "Ey": 0.0, "Hz": np.nan, "dBzdt": 1.0},
+            {
+                "time_obs": 1.0e-5,
+                "receiver_type": "point",
+                "radius": 0.0,
+                "Ex": 1.0,
+                "Ey": 0.0,
+                "Hz": np.nan,
+                "dBzdt": 1.0,
+                "sample_count": 1,
+                "candidate_count_min": 2,
+                "candidate_count_max": 2,
+                "candidate_count_mean": 2.0,
+            },
             {
                 "time_obs": 1.0e-5,
                 "receiver_type": "disk_average",
@@ -55,6 +67,10 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
                 "Ey": 0.0,
                 "Hz": np.nan,
                 "dBzdt": 1.8,
+                "sample_count": 5,
+                "candidate_count_min": 1,
+                "candidate_count_max": 3,
+                "candidate_count_mean": 1.8,
             },
         ],
     )
@@ -105,6 +121,10 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     receiver_rows = list(csv.DictReader((tmp_path / "receiver_reference_errors.csv").open("r", encoding="utf-8", newline="")))
     assert receiver_rows[0]["receiver_type"] == "point"
     assert {"time_obs", "receiver_type", "component", "pred", "ref", "relative_error_with_floor", "pass_5pct"} <= set(receiver_rows[0])
+    diagnostic_rows = list(csv.DictReader((tmp_path / "receiver_diagnostics.csv").open("r", encoding="utf-8", newline="")))
+    assert {"sample_count", "candidate_count_min", "candidate_count_max", "candidate_count_mean"} <= set(diagnostic_rows[0])
+    assert diagnostic_rows[0]["sample_count"] == "1"
+    assert diagnostic_rows[1]["candidate_count_max"] == "3"
 
 
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():

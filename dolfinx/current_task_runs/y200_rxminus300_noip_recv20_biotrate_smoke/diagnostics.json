@@ -11,8 +11,8 @@
   "magnetic_receiver_mode": "biot_current",
   "magnetic_recovery": {
     "enabled": true,
-    "faraday_hz_final": -0.002197539374294769,
-    "initial_hz": -0.002197539374294769,
+    "faraday_hz_final": -0.00219753937429489,
+    "initial_hz": -0.00219753937429489,
     "max_absolute_hz_difference": 0.0,
     "max_relative_hz_difference": 0.0,
     "method": "faraday_integrated_dBzdt",
@@ -20,7 +20,7 @@
       "enabled": false,
       "reason": "requires at least two samples"
     },
-    "reported_hz_final": -0.002197539374294769,
+    "reported_hz_final": -0.00219753937429489,
     "time_at_max_relative_hz_difference": 1e-05
   },
   "magnetic_recovery_note": "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure.",
@@ -29,23 +29,23 @@
     "comparisons": {
       "disk_average": {
         "Ex": {
-          "max_absolute_difference": 2.7379110624995828e-06,
-          "max_relative_difference": 0.003548949232477,
-          "mean_relative_difference": 0.003548949232477,
+          "max_absolute_difference": 2.737911062672296e-06,
+          "max_relative_difference": 0.0035489492327,
+          "mean_relative_difference": 0.0035489492327,
           "sample_count": 1,
           "time_at_max_relative_difference": 1e-05
         },
         "Ey": {
-          "max_absolute_difference": 2.744056478474244e-06,
-          "max_relative_difference": 0.171295415418535,
-          "mean_relative_difference": 0.171295415418535,
+          "max_absolute_difference": 2.7440564785699926e-06,
+          "max_relative_difference": 0.171295415425011,
+          "mean_relative_difference": 0.171295415425011,
           "sample_count": 1,
           "time_at_max_relative_difference": 1e-05
         },
         "dBzdt": {
-          "max_absolute_difference": 1.1929144080790458e-06,
-          "max_relative_difference": 0.481272360600046,
-          "mean_relative_difference": 0.481272360600046,
+          "max_absolute_difference": 1.1929144080849843e-06,
+          "max_relative_difference": 0.481272360604029,
+          "mean_relative_difference": 0.481272360604029,
           "sample_count": 1,
           "time_at_max_relative_difference": 1e-05
         }
@@ -65,18 +65,18 @@
     "comparisons": {
       "disk_average": {
         "Ex": {
-          "baseline_max_relative_error": 0.13874094959702565,
-          "candidate_max_relative_error": 0.14179751424291734,
+          "baseline_max_relative_error": 0.1387409495967228,
+          "candidate_max_relative_error": 0.14179751424280732,
           "improves_over_baseline": false
         },
         "Ey": {
-          "baseline_max_relative_error": 1601943911.790958,
-          "candidate_max_relative_error": 1876349559.6383824,
+          "baseline_max_relative_error": 1601943911.786289,
+          "candidate_max_relative_error": 1876349559.6432884,
           "improves_over_baseline": false
         },
         "dBzdt": {
-          "baseline_max_relative_error": 0.44747549498846956,
-          "candidate_max_relative_error": 0.18156072217219826,
+          "baseline_max_relative_error": 0.4474754949902918,
+          "candidate_max_relative_error": 0.18156072217269673,
           "improves_over_baseline": true
         }
       }
@@ -85,25 +85,25 @@
     "metrics": {
       "disk_average": {
         "Ex": {
-          "max_peak_normalized_error": 0.14179751424291734,
-          "max_relative_error": 0.14179751424291734,
-          "mean_relative_error": 0.14179751424291734,
+          "max_peak_normalized_error": 0.14179751424280732,
+          "max_relative_error": 0.14179751424280732,
+          "mean_relative_error": 0.14179751424280732,
           "passes_threshold": false,
           "sample_count": 1,
           "time_at_max_relative_error": 1e-05
         },
         "Ey": {
-          "max_peak_normalized_error": 1876349559.6383824,
-          "max_relative_error": 1876349559.6383824,
-          "mean_relative_error": 1876349559.6383824,
+          "max_peak_normalized_error": 1876349559.6432884,
+          "max_relative_error": 1876349559.6432884,
+          "mean_relative_error": 1876349559.6432884,
           "passes_threshold": false,
           "sample_count": 1,
           "time_at_max_relative_error": 1e-05
         },
         "dBzdt": {
-          "max_peak_normalized_error": 0.18156072217219826,
-          "max_relative_error": 0.18156072217219826,
-          "mean_relative_error": 0.18156072217219826,
+          "max_peak_normalized_error": 0.18156072217269673,
+          "max_relative_error": 0.18156072217269673,
+          "mean_relative_error": 0.18156072217269673,
           "passes_threshold": false,
           "sample_count": 1,
           "time_at_max_relative_error": 1e-05
@@ -111,33 +111,33 @@
       },
       "point": {
         "Ex": {
-          "max_peak_normalized_error": 0.13874094959702565,
-          "max_relative_error": 0.13874094959702565,
-          "mean_relative_error": 0.13874094959702565,
+          "max_peak_normalized_error": 0.1387409495967228,
+          "max_relative_error": 0.1387409495967228,
+          "mean_relative_error": 0.1387409495967228,
           "passes_threshold": false,
           "sample_count": 1,
           "time_at_max_relative_error": 1e-05
         },
         "Ey": {
-          "max_peak_normalized_error": 1601943911.790958,
-          "max_relative_error": 1601943911.790958,
-          "mean_relative_error": 1601943911.790958,
+          "max_peak_normalized_error": 1601943911.786289,
+          "max_relative_error": 1601943911.786289,
+          "mean_relative_error": 1601943911.786289,
           "passes_threshold": false,
           "sample_count": 1,
           "time_at_max_relative_error": 1e-05
         },
         "Hz": {
-          "max_peak_normalized_error": 3.604705126252336e-05,
-          "max_relative_error": 3.604705126252336e-05,
-          "mean_relative_error": 3.604705126252336e-05,
+          "max_peak_normalized_error": 3.604705120746515e-05,
+          "max_relative_error": 3.604705120746515e-05,
+          "mean_relative_error": 3.604705120746515e-05,
           "passes_threshold": true,
           "sample_count": 1,
           "time_at_max_relative_error": 1e-05
         },
         "dBzdt": {
-          "max_peak_normalized_error": 0.44747549498846956,
-          "max_relative_error": 0.44747549498846956,
-          "mean_relative_error": 0.44747549498846956,
+          "max_peak_normalized_error": 0.4474754949902918,
+          "max_relative_error": 0.4474754949902918,
+          "mean_relative_error": 0.4474754949902918,
           "passes_threshold": false,
           "sample_count": 1,
           "time_at_max_relative_error": 1e-05
@@ -167,16 +167,16 @@
     "expected_current_change": -10.0,
     "initial_curl_residual": null,
     "integral_didt_dt": -10.0,
-    "source_endpoint_balance_residual": 1.3306159896259963e-09,
+    "source_endpoint_balance_residual": 1.3306160344851242e-09,
     "waveform_integral_residual": 0.0
   },
   "source_projection": {
-    "after_residual": 1.3306159896259963e-09,
+    "after_residual": 1.3306160344851242e-09,
     "applied": true,
     "before_residual": 5.459568976579745,
     "endpoint_norm": 1.414213562372995,
     "ksp_iterations": 7,
     "ksp_reason": 2,
-    "ksp_residual": 7.651469810145931e-10
+    "ksp_residual": 7.65146981012309e-10
   }
 }
