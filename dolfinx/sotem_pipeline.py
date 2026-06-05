@@ -3347,7 +3347,7 @@ def get_empymod_reference(t_array, config: PipelineConfig, mode: str = "noip", *
     return {"times": times, "data": data, "components": components}
 
 
-def compute_error(fem_data, ref_data, components, floor_factor: float = 1.0e-3):
+def compute_error(fem_data, ref_data, components, floor_factor: float = 1.0e-6):
     """Compute floor-denominator relative errors per component."""
 
     import numpy as np
@@ -3361,9 +3361,7 @@ def compute_error(fem_data, ref_data, components, floor_factor: float = 1.0e-3):
         ref = ref_arr[:, i]
         diff = fem_arr[:, i] - ref
         ref_max = float(np.max(np.abs(ref)))
-        floor = floor_factor * ref_max
-        if floor == 0.0:
-            floor = 1.0e-300
+        floor = max(_validation_floor(name, ref), floor_factor * ref_max)
         denom = np.maximum(np.abs(ref), floor)
         rel = np.abs(diff) / denom
         max_idx = int(np.argmax(rel))
@@ -3645,7 +3643,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
-def compute_horizontal_electric_error(fem_data, ref_data, floor_factor: float = 1.0e-3):
+def compute_horizontal_electric_error(fem_data, ref_data, floor_factor: float = 1.0e-6):
     """Compute relative error of the horizontal electric vector (Ex, Ey)."""
 
     import numpy as np
@@ -3972,7 +3970,7 @@ def write_report(
             lines.append(f"  term {i}: A={term.delta_sigma:.6e} S/m, tau={term.tau:.6e} s")
 
     lines.append("")
-    lines.append("error metrics with floor denominator denom=max(abs(F_ref), 1e-3*max(abs(F_ref))):")
+    lines.append("error metrics with floor denominator denom=max(abs(F_ref), 1e-6*max(abs(F_ref))):")
     max_error = 0.0
     for comp, values in errors.items():
         max_error = max(max_error, float(values["max"]))

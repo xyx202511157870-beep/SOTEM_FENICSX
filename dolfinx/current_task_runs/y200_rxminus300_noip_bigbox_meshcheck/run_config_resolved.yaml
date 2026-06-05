@@ -1,0 +1,15 @@
+source_start: [-500, 200, -0.1]
+source_end: [500, 200, -0.1]
+source_current: 10
+receiver: [0, -300, -0.1]
+ramp_off_time: 1e-05
+time_origin: after_ramp
+t_min: 1e-05
+t_max: 1
+time_growth: 1.4
+min_steps_during_turnoff: 10
+components: runtime
+outer_boundary_mode: robin
+outer_boundary_robin_scale: 0.1
+magnetic_receiver_mode: biot_current
+polarization: none

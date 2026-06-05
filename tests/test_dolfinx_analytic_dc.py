@@ -248,6 +248,28 @@ def test_plot_verification_supports_hz_component(tmp_path):
     assert config.output_png().exists()
 
 
+def test_compute_error_default_floor_matches_validation_artifact_policy():
+    sp = _load_pipeline_module()
+    fem = np.asarray([[10.0], [1.1e-5]])
+    ref = np.asarray([[10.0], [1.0e-5]])
+
+    errors = sp.compute_error(fem, ref, ["Ex"])
+
+    assert errors["Ex"]["floor"] == pytest.approx(1.0e-5)
+    assert errors["Ex"]["relative"][1] == pytest.approx(0.1)
+
+
+def test_compute_error_uses_component_minimum_floor_for_near_zero_electric_field():
+    sp = _load_pipeline_module()
+    fem = np.asarray([[1.0e-6], [2.0e-6]])
+    ref = np.asarray([[0.0], [1.0e-21]])
+
+    errors = sp.compute_error(fem, ref, ["Ey"])
+
+    assert errors["Ey"]["floor"] == pytest.approx(1.0e-14)
+    np.testing.assert_allclose(errors["Ey"]["relative"], [1.0e8, 2.0e8])
+
+
 def test_debye_backward_euler_coefficients_are_dimensionless():
     sp = _load_pipeline_module()
     term = sp.DebyeTerm(delta_sigma=2.0, tau=4.0)

@@ -228,27 +228,94 @@ The run writes both the legacy combined plot and the new P2 validation artifacts
 
 ## Current Accuracy Status
 
-The latest known no-IP baseline still exceeds 5% over the full time range:
+The current no-IP DOLFINx runs still exceed the 5% target. The corrected
+geometry is used throughout:
 
-- A WSL no-IP DOLFINx run for the current corrected geometry completed from
-  `1e-5 s <= t_obs <= 1 s` in
-  `dolfinx/current_task_runs/y200_rxminus300_noip_meshcheck`.
-- Geometry: source `(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver
-  `(0, -300, -0.1)`, current `10 A`.
-- Mesh preflight: about `22045` local tetrahedral cells, `26467` Nedelec dofs,
-  estimated memory `0.705 GB` under a `32 GB` budget.
-- Runtime report: total `15.585 s`, forward solve `8.204 s`,
-  empymod reference `1.733 s` for the final resumed segment.
-- The run does not pass:
+- Source: `(-500, 200, -0.1) -> (500, 200, -0.1)`.
+- Receiver: `(0, -300, -0.1)`.
+- Current: `10 A`.
+- Time range: `1e-5 s <= t_obs <= 1 s` unless noted.
+- Layer model: `rho_air=1e6 ohm m`, earth layers `100 ohm m`, depths
+  `350,650 m`.
+
+Small-domain baseline:
+
+- Directory: `dolfinx/current_task_runs/y200_rxminus300_noip_meshcheck`.
+- Runtime: total `15.585 s`, forward solve `8.204 s` for the final resumed
+  segment.
+- Result:
   - `max_error_Ex = 3.951694157397999`
   - `max_error_Ey = 4695844246.711698`
   - `max_error_Hz_or_dBzdt = 0.9083946154727693`
   - `pass_all_components = false`
-- The report also flags the physical domain as too small for late time:
-  `Lmax(t_max)=12615.7 m`, recommended radius/depth `>=25231.3 m`, actual
-  radius/depth much smaller.
+- Diagnostic: late diffusion length at `1 s` is about `12615.7 m`; the small
+  domain is too small.
 
-This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem.
+Large-domain run:
+
+- Directory: `dolfinx/current_task_runs/y200_rxminus300_noip_bigbox_meshcheck`.
+- Domain: `x,y = +/-30000 m`, air height `10000 m`, earth depth `30000 m`.
+- Mesh preflight: `84952` tetrahedra from mesh-only, estimated memory
+  `2.5737 GB`.
+- Runtime: total `437.870 s`, forward solve `427.757 s`.
+- Result:
+  - `max_error_Ex = 0.8363447822943816`
+  - `max_error_Ey = 13188019492.654942`
+  - `max_error_Hz_or_dBzdt = 1.3215378612016497`
+  - `pass_all_components = false`
+- Empymod source integration audit `srcpts=21` versus `srcpts=101` shows
+  negligible Ex/Hz/dBzdt reference differences, so finite-source integration is
+  not the dominant error source.
+
+Large-domain local-refinement run:
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_bigbox_refine80_meshcheck`.
+- Local mesh: source/receiver mesh size `80 m`, refinement radius `500 m`.
+- Mesh preflight: `98654` tetrahedra, `16948` nodes, estimated memory
+  `2.986287 GB`.
+- Runtime: total `538.803 s`, forward solve `528.576 s`.
+- Result after task-book floor policy (`E_floor=max(1e-14,1e-6*peak)`,
+  `H_floor=max(1e-16,1e-6*peak)`, `dBdt_floor=max(1e-18,1e-6*peak)`):
+  - `max_error_Ex = 0.3931799684057857`
+  - `max_error_Ey = 5150102111.510694`
+  - `max_error_Hz_or_dBzdt = 1.190629455795599`
+  - `max_peak_normalized_error_Ex = 0.27544871919188463`
+  - `max_peak_normalized_error_Hz_or_dBzdt = 0.5297567763762017`
+  - `pass_all_components = false`
+- Interpretation: local refinement strongly improves early Ex and Hz, but
+  dBzdt/curl recovery and late-time robust relative error still fail.
+
+Time-step audit:
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_bigbox_refine80_tg125_t005`.
+- Same local-refinement mesh, `time_growth=1.25`, truncated to `t_obs=0.05 s`.
+- Runtime: total `1002.950 s`, forward solve `988.441 s`.
+- Result:
+  - `max_error_Ex = 0.27643232362169967`
+  - `max_error_Ey = 5150102111.501422`
+  - `max_error_Hz_or_dBzdt = 0.6688288746586054`
+  - `max_peak_normalized_error_Ex = 0.27552445469860964`
+  - `max_peak_normalized_error_Hz_or_dBzdt = 0.5274395259467757`
+  - `pass_all_components = false`
+- Interpretation: smaller time growth improves RMS errors but does not solve
+  the main discrepancy. It also raises late KSP iteration counts substantially.
+
+Current root-cause status:
+
+- Boundary size is a real contributor: Ex RMS improves from the small-domain
+  run to the big-box runs.
+- Empymod finite-source integration is not the main cause.
+- Local source/receiver mesh refinement is a major contributor: early Ex
+  improves from about `83.6%` max error to about `27.6%` in the first-five-point
+  comparison.
+- Time-step density is a secondary contributor.
+- Remaining dominant issues are likely receiver sampling/curl recovery near the
+  shallow interface, local near-source/receiver discretization, and possibly the
+  total-field source transfer into the E-form solve.
+
+This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 
 ## Known Limitations
 
@@ -263,6 +330,9 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
 - Full no-IP/IP 5% acceptance is not yet achieved.
+- `compute_error` and the validation artifact writer now share the task-book
+  floor policy. Older reports generated before this change should be
+  regenerated with `--postprocess-partial` before comparing error numbers.
 
 ## Next Steps
 
