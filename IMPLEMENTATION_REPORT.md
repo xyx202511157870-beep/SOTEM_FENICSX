@@ -751,6 +751,46 @@ Receiver mesh-sensitivity smoke:
   relative `dBzdt` when the reference has decayed, despite low
   peak-normalized `dBzdt` error.
 
+- Mesh-segment source integration update:
+  - Code now reads Gmsh `source_wire` line elements from `verification_mesh.msh`
+    when available and uses them as source-line integration segments.
+  - Each line segment is still sampled densely according to the existing
+    automatic target spacing; this avoids the failed two-point-per-segment
+    experiment where collision-cell selection on embedded line entities was too
+    ambiguous.
+  - If source line elements are unavailable, the solver falls back to the
+    previous global Gauss rule.
+  - Report output now records `source line integration: mode=...`,
+    segment count, total segment length, and quadrature-per-segment summary.
+- Source-only smoke:
+  - Directory:
+    `dolfinx/current_task_runs/source_only_y200_rxminus300_src40_recv20_meshseg`.
+  - Corrected latest model, source mesh size `40 m`, receiver mesh size `20 m`.
+  - Mesh line segments: `200`, total segment length `1000 m`.
+  - Adaptive segment quadrature: `5200` points, `26` points per segment.
+  - Missed source quadrature points: `0`.
+  - Source projection before residual: `0.15869511184790644`.
+  - Source projection after residual: `2.1986488276977117e-10`.
+  - Projection correction `L2/raw = 0.0053012314244093054`,
+    improved from the previous dense-global-q5001 value of about `0.01524`.
+- First-output mesh-segment no-IP smoke:
+  - Directory:
+    `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_src40_recv20_diskcurl_smoke`.
+  - Main receiver: `disk_average`; magnetic validation quantity: curl `dBzdt`.
+  - Result at `t_obs=1.0e-5 s`:
+    - `max_error_Ex = 0.02878542212309011`
+    - `max_error_Hz = 0.001107642062978224`
+    - `max_error_dBzdt = 0.025925605699880186`
+    - weak `Ey` scaled absolute error: `0.014975738473896322`
+    - `physical_pass_all_components = true`
+  - Point receiver from the same field also passes `Ex` and `dBzdt` at the
+    first output: point `Ex` error `0.03799459110341777`, point `dBzdt` error
+    `0.04882181606313593`.
+  - Interpretation: mesh-segment adaptive source integration is a real P2
+    improvement for source consistency and the first observation point. It has
+    not yet proven full-window `1e-5 s` to `1 s` acceptance; a resumed
+    full-window run is still required.
+
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.
 - Change: same as above, but `--magnetic-dbdt-mode biot_rate`.
@@ -810,9 +850,12 @@ This implementation round improves time-axis correctness and reporting/diagnosti
   conservation and must not be used as a final accepted solver mode.
 - Manual-line automatic quadrature was made denser and now fixes the first
   point `Ex` error for the corrected latest model, but it is still an
-  approximate quadrature over a discontinuous cellwise integrand. Exact
-  cell-segmented line integration remains the better long-term source
-  assembly.
+  approximate quadrature over a discontinuous cellwise integrand.
+- Mesh-segment adaptive source integration now uses the Gmsh source-wire line
+  elements to split the line integral and improves source balance/first-output
+  error. It still uses collision-cell selection for quadrature points on an
+  embedded curve, so a stricter de Rham-compatible source assembly or exact
+  source-edge orientation audit remains a long-term improvement.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.

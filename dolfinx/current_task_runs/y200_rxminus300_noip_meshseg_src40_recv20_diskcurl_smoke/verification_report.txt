@@ -1,0 +1,113 @@
+SOTEM FETD verification report
+==================================
+python: /home/paidaxin/miniconda3/envs/fenicsx/bin/python
+environment:
+  PETSc_hypre: True
+  basix: 0.8.0
+  dolfinx: 0.8.0
+  empymod: 2.5.4
+  gmsh: 4.15.2
+  matplotlib: 3.10.8
+  meshio: 5.3.5
+  mpi4py: 4.1.1
+  numpy: 2.2.6
+  petsc4py: 3.21.6
+  python: /home/paidaxin/miniconda3/envs/fenicsx/bin/python
+  scipy: 1.15.2
+  ufl: 2024.1.0
+
+model runtime:
+  total: 106.821 s
+  mesh: 14.261 s
+  setup: 4.592 s
+  forward solve: 82.690 s
+  empymod reference: 1.440 s
+  postprocess/report: 2.354 s
+
+geometry:
+  x,y extent: +/- 30000 m
+  air height: 10000 m; earth depth: 30000 m
+  source: (-500.0, 200.0, -0.1) -> (500.0, 200.0, -0.1), I=10 A
+  receiver: (0.0, -300.0, -0.1)
+  survey geometry: source_length=1000 m, inline_from_source_start=500 m, parallel_offset=500 m
+  model audit: reference_mode=noip, source_depth=(0.1, 0.1) m, receiver_depth=0.1 m, sigma_earth=1.000000e-02 S/m, time_origin=after_ramp, reference_ramp_window=after_ramp
+  source mode: manual_line
+  source projection: mode=charge_conserving; applied=True; before=1.586951e-01; after=2.198649e-10; endpoint_norm=1.414214e+00; correction_l2/raw=0.00530123; correction_l1/raw=0.00451653
+  source scalar balance: residual_active_dofs=25; residual_l2/endpoint_l2=0.112214; residual_top_fraction=0.18287; current_endpoint_alignment=0.993763
+  source local projection: quadrature=5200; added=5200; missed=0; unique_cells=206; top_cell_fraction=0.00531096; top_dof_fraction=0.00800076
+  source RHS sign: -1
+  source projection mode: charge_conserving
+  source quadrature points: auto
+  source term mode: impressed_current
+  formulation: e
+  Nedelec order: 1
+  initial DC mode: fem
+  magnetic receiver mode: biot_current
+  magnetic dBdt mode: curl
+  outer boundary mode: robin; robin scale=0.1
+  receiver type: disk_average; average radius=2 m
+  receiver evaluation mode: nearest_center
+  receiver diagnostics: baseline=point; types=point,disk_average; time_count=1; sampling_issue_suspected=True
+  divergence cleaning: none
+  checkpoint forward: True; resume forward: False; stop after outputs: 1
+  memory budget: 32 GB; safety fraction: 0.95
+  late diffusion audit: Lmax(t_max)=12615.7 m; recommended radius/depth>=25231.3 m; refinement box radius=1000 m; refinement box depth=500 m; refinement mesh_size=80 m; refinement_underresolved=True; domain radius=30000 m; domain depth=30000 m; domain_underresolved=False
+  transient sponge: enabled=False; strength=0.000000e+00 S/m; thickness=0 m; power=2; apply_to_initial=False; sides=x_min,x_max,y_min,y_max,z_min,z_max
+  time method: theta
+  time origin: after_ramp
+  time theta: 1
+  ramp-off time: 1e-05 s
+  time samples: t_min=1e-05 s; t_max=1 s; ramp_solver_t_min=1e-06 s; min_steps_during_turnoff=10
+  empymod srcpts: 21; ht=dlf; ft=dlf
+  rho_air=1e+06 ohm m; layer_depths=[350, 650] m; layer_resistivities=[100, 100, 100] ohm m
+
+error metrics with floor denominator denom=max(abs(F_ref), 1e-6*max(abs(F_ref))):
+  Ex: mean=2.878542e-02, median=2.878542e-02, RMS=2.878542e-02, max=2.878542e-02 at t=1.000000e-05 s, floor=8.957478e-10
+    note: Ex reference is very small over much of the window; max relative error may be unrepresentative.
+  Ey: mean=1.341448e+09, median=1.341448e+09, RMS=1.341448e+09, max=1.341448e+09 at t=1.000000e-05 s, floor=1.000000e-14
+    note: Ey reference is very small over much of the window; max relative error may be unrepresentative.
+  Hz: mean=1.107642e-03, median=1.107642e-03, RMS=1.107642e-03, max=1.107642e-03 at t=1.000000e-05 s, floor=2.197619e-09
+    note: Hz reference is very small over much of the window; max relative error may be unrepresentative.
+  dBzdt: mean=2.592561e-02, median=2.592561e-02, RMS=2.592561e-02, max=2.592561e-02 at t=1.000000e-05 s, floor=4.486078e-12
+    note: dBzdt reference is very small over much of the window; max relative error may be unrepresentative.
+  Eh_vector: mean=3.244801e-02, median=3.244801e-02, RMS=3.244801e-02, max=3.244801e-02 at t=1.000000e-05 s, floor=8.957478e-10
+
+receiver sampling diagnostics:
+  disk_average vs point:
+    Ex: max_rel_diff=8.872078e-03 at t=1.000000e-05 s; mean_rel_diff=8.872078e-03; max_abs_diff=8.249093e-06
+    Ey: max_rel_diff=1.126626e+01 at t=1.000000e-05 s; mean_rel_diff=1.126626e+01; max_abs_diff=1.232088e-05
+    dBzdt: max_rel_diff=2.407142e-02 at t=1.000000e-05 s; mean_rel_diff=2.407142e-02; max_abs_diff=1.027142e-07
+
+receiver vs reference diagnostics:
+  disk_average vs point:
+    Ex: candidate_max=2.878542e-02; baseline_max=3.799459e-02; improves=True
+    Ey: candidate_max=1.341448e+09; baseline_max=1.093608e+08; improves=False
+    dBzdt: candidate_max=2.592561e-02; baseline_max=4.882182e-02; improves=True
+
+magnetic recovery diagnostics:
+  faraday_integrated_dBzdt: max_rel_hz_diff=0.000000e+00 at t=1.000000e-05 s; max_abs_hz_diff=0.000000e+00; faraday_hz_final=-2.200053e-03; reported_hz_final=-2.200053e-03
+
+strict physical-error passing window (Ex, dBzdt, Eh_vector max <= 0.05): t >= 1.000000e-05 s (n=1, range 1.000000e-05-1.000000e-05 s)
+  maxima: Ex=2.878542e-02, dBzdt=2.592561e-02, Eh_vector=3.244801e-02
+
+weak horizontal-component gate (reference max <= 0.1 * max(|Eh_ref|); absolute error scaled by max(|Eh_ref|)):
+  passed=True; primary_scale=8.957478e-04; weak_components=Ey
+  Ey: ref_max=1.117340e-21, scaled_abs_error_max=1.497574e-02, tolerance=5.000000e-02
+
+solver log:
+  step=0000 t_internal=1.000000e-06 dt=1.000000e-06 its=32 residual=4.534450e-07 reason=2
+  step=0001 t_internal=2.000000e-06 dt=1.000000e-06 its=32 residual=5.616696e-07 reason=2
+  step=0002 t_internal=3.000000e-06 dt=1.000000e-06 its=31 residual=9.610155e-07 reason=2
+  step=0003 t_internal=4.000000e-06 dt=1.000000e-06 its=31 residual=1.021727e-06 reason=2
+  step=0004 t_internal=5.000000e-06 dt=1.000000e-06 its=31 residual=1.068216e-06 reason=2
+  step=0005 t_internal=6.000000e-06 dt=1.000000e-06 its=30 residual=1.601514e-06 reason=2
+  step=0006 t_internal=7.000000e-06 dt=1.000000e-06 its=30 residual=1.650505e-06 reason=2
+  step=0007 t_internal=8.000000e-06 dt=1.000000e-06 its=30 residual=1.696869e-06 reason=2
+  step=0008 t_internal=9.000000e-06 dt=1.000000e-06 its=30 residual=1.742083e-06 reason=2
+  step=0009 t_internal=1.000000e-05 dt=1.000000e-06 its=30 residual=1.786902e-06 reason=2
+  step=0010 t_internal=2.000000e-05 t_obs=1.000000e-05 dt=1.000000e-05 its=54 residual=7.846226e-07 reason=2
+
+[metric note] Physical response metrics pass in the configured window.
+  - The physical gate uses Ex, dBzdt, and Eh_vector; Eh_vector avoids singular relative percentages for near-zero transverse electric components.
+  - Component relative error exceeds tolerance for weak components: Ey.
+  - The weak horizontal-component absolute gate also passes when scaled by max(|Eh_ref|).

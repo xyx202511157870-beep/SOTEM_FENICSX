@@ -158,3 +158,47 @@ def test_write_report_records_model_runtime(tmp_path):
     assert "forward solve: 9.500 s" in text
     assert "empymod reference: 0.750 s" in text
     assert "postprocess/report: 0.500 s" in text
+
+
+def test_write_report_records_manual_line_mesh_segment_integration(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, t_min=1.0e-6, t_max=2.0e-6, time_growth=2.0)
+    times = np.asarray([1.0e-6])
+    data = np.asarray([[1.0, 0.0, 2.0]], dtype=float)
+    fem_result = {
+        "times": times,
+        "data": data,
+        "components": ["Ex", "Ey", "dBzdt"],
+        "solver_log": [],
+    }
+    ref_result = {"times": times, "data": data, "components": ["Ex", "Ey", "dBzdt"]}
+    source_info = {
+        "mode": "manual_line",
+        "local_projection_diagnostics": {
+            "integration_mode": "mesh_segments",
+            "segment_count": 200,
+            "segment_total_length": 1000.0,
+            "quadrature_points_per_segment_min": 26,
+            "quadrature_points_per_segment_max": 26,
+            "quadrature_points_per_segment_mean": 26.0,
+            "quadrature_points": 5200,
+            "added_points": 5200,
+            "missed_points": 0,
+            "unique_hit_cells": 206,
+            "cell_contribution_top_fraction": 0.005,
+            "dof_contribution_top_fraction": 0.008,
+        },
+    }
+
+    sp.write_report(
+        config,
+        env={},
+        fem_result=fem_result,
+        ref_result=ref_result,
+        errors=_error_metrics(),
+        source_info=source_info,
+    )
+
+    text = config.output_report().read_text(encoding="utf-8")
+    assert "source line integration: mode=mesh_segments; segments=200; segment_length_total=1000 m" in text
+    assert "quadrature_per_segment[min/mean/max]=26/26/26" in text

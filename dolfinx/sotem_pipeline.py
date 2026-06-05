@@ -1532,6 +1532,156 @@ def _manual_line_source_quadrature_count(length: float, config: PipelineConfig) 
     return max(51, int(math.ceil(length / target_spacing)) + 1)
 
 
+def _source_line_segments_from_meshio_blocks(points, cell_blocks, physical_blocks, config: PipelineConfig):
+    """Return source-wire line segments from meshio-style line blocks."""
+
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    p0 = np.asarray(config.source_start, dtype=float)
+    p1 = np.asarray(config.source_end, dtype=float)
+    axis = p1 - p0
+    length = float(np.linalg.norm(axis))
+    if length <= 0.0:
+        raise ValueError("source_start and source_end must be distinct")
+    tangent = axis / length
+    selected: list[np.ndarray] = []
+    for block, physical in zip(cell_blocks, physical_blocks):
+        block_type, data = block
+        if str(block_type) != "line":
+            continue
+        lines = np.asarray(data, dtype=np.int64)
+        tags = np.asarray(physical, dtype=np.int64)
+        if lines.size == 0:
+            continue
+        mask = tags == int(PHYS_SOURCE_LINE)
+        if not np.any(mask):
+            continue
+        for edge in lines[mask]:
+            segment = pts[np.asarray(edge, dtype=np.int64)]
+            if segment.shape != (2, 3):
+                continue
+            selected.append(segment)
+    if not selected:
+        return None
+
+    segments = np.asarray(selected, dtype=float)
+    starts = np.dot(segments[:, 0, :] - p0[None, :], tangent) / length
+    ends = np.dot(segments[:, 1, :] - p0[None, :], tangent) / length
+    flip = ends < starts
+    if np.any(flip):
+        segments[flip] = segments[flip, ::-1, :]
+        starts, ends = np.minimum(starts, ends), np.maximum(starts, ends)
+    order = np.argsort(starts)
+    segments = segments[order]
+    lengths = np.linalg.norm(segments[:, 1, :] - segments[:, 0, :], axis=1)
+    return {
+        "segments": segments,
+        "segment_count": int(segments.shape[0]),
+        "total_length": float(np.sum(lengths)),
+        "min_segment_length": float(np.min(lengths)),
+        "max_segment_length": float(np.max(lengths)),
+        "mean_segment_length": float(np.mean(lengths)),
+    }
+
+
+def _source_line_segments_from_msh(mesh_path: Path, config: PipelineConfig):
+    """Read source-wire line segments from the Gmsh .msh file when available."""
+
+    try:
+        import meshio
+    except Exception:
+        return None
+    path = Path(mesh_path)
+    if not path.is_file():
+        return None
+    try:
+        mesh = meshio.read(path)
+    except Exception:
+        return None
+    physical = mesh.cell_data.get("gmsh:physical") if hasattr(mesh, "cell_data") else None
+    if not physical:
+        return None
+    blocks = [(block.type, block.data) for block in mesh.cells]
+    return _source_line_segments_from_meshio_blocks(mesh.points, blocks, physical, config)
+
+
+def _manual_line_source_integration_points(config: PipelineConfig, *, mesh_segments=None):
+    """Build line-integration points and weights for the manual Nedelec source."""
+
+    import numpy as np
+
+    p0 = np.asarray(config.source_start, dtype=float)
+    p1 = np.asarray(config.source_end, dtype=float)
+    axis = p1 - p0
+    length = float(np.linalg.norm(axis))
+    if length <= 0.0:
+        raise ValueError("source_start and source_end must be distinct")
+    tangent = axis / length
+
+    if mesh_segments is not None:
+        segments = np.asarray(mesh_segments["segments"], dtype=float)
+        global_npts = _manual_line_source_quadrature_count(length, config)
+        target_spacing = length / max(global_npts - 1, 1)
+        min_rule_points = max(2, int(config.nedelec_order) + 1)
+        all_points: list[np.ndarray] = []
+        all_weights: list[np.ndarray] = []
+        all_svals: list[np.ndarray] = []
+        segment_rule_points: list[int] = []
+        for segment in segments:
+            a = np.asarray(segment[0], dtype=float)
+            b = np.asarray(segment[1], dtype=float)
+            seg_axis = b - a
+            seg_length = float(np.linalg.norm(seg_axis))
+            if seg_length <= 0.0:
+                continue
+            per_segment = max(min_rule_points, int(math.ceil(seg_length / max(target_spacing, 1.0e-12))) + 1)
+            qx, qw = np.polynomial.legendre.leggauss(per_segment)
+            local_s = 0.5 * (qx + 1.0)
+            seg_points = a[None, :] + local_s[:, None] * seg_axis[None, :]
+            seg_weights = 0.5 * seg_length * qw
+            seg_svals = np.dot(seg_points - p0[None, :], tangent) / length
+            all_points.append(seg_points)
+            all_weights.append(seg_weights)
+            all_svals.append(seg_svals)
+            segment_rule_points.append(int(per_segment))
+        if all_points:
+            points = np.vstack(all_points)
+            weights = np.concatenate(all_weights)
+            svals = np.concatenate(all_svals)
+            order = np.argsort(svals)
+            diagnostics = {
+                "integration_mode": "mesh_segments",
+                "segment_count": int(mesh_segments["segment_count"]),
+                "segment_total_length": float(mesh_segments["total_length"]),
+                "segment_min_length": float(mesh_segments["min_segment_length"]),
+                "segment_max_length": float(mesh_segments["max_segment_length"]),
+                "segment_mean_length": float(mesh_segments["mean_segment_length"]),
+                "quadrature_points_per_segment_min": int(min(segment_rule_points)),
+                "quadrature_points_per_segment_max": int(max(segment_rule_points)),
+                "quadrature_points_per_segment_mean": float(sum(segment_rule_points) / len(segment_rule_points)),
+                "quadrature_points": int(points.shape[0]),
+            }
+            return points[order], weights[order], svals[order], diagnostics
+
+    npts = _manual_line_source_quadrature_count(length, config)
+    qx, qw = np.polynomial.legendre.leggauss(npts)
+    svals = 0.5 * (qx + 1.0)
+    weights = 0.5 * length * qw
+    points = p0[None, :] + svals[:, None] * axis[None, :]
+    diagnostics = {
+        "integration_mode": "global_gauss",
+        "segment_count": 0,
+        "segment_total_length": 0.0,
+        "segment_min_length": 0.0,
+        "segment_max_length": 0.0,
+        "segment_mean_length": 0.0,
+        "quadrature_points_per_segment": 0,
+        "quadrature_points": int(npts),
+    }
+    return points, weights, svals, diagnostics
+
+
 def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfig):
     """Assemble -dI/dt int_Gamma t.v dl by direct Nedelec basis tabulation."""
 
@@ -1551,11 +1701,12 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     if length <= 0.0:
         raise ValueError("source_start and source_end must be distinct")
     tangent = axis / length
-    npts = _manual_line_source_quadrature_count(length, config)
-    qx, qw = np.polynomial.legendre.leggauss(npts)
-    svals = 0.5 * (qx + 1.0)
-    weights = 0.5 * length * qw
-    points = p0[None, :] + svals[:, None] * axis[None, :]
+    mesh_segments = _source_line_segments_from_msh(config.mesh_path(), config)
+    points, weights, svals, integration_diagnostics = _manual_line_source_integration_points(
+        config,
+        mesh_segments=mesh_segments,
+    )
+    npts = int(points.shape[0])
 
     tree = geometry.bb_tree(msh, msh.topology.dim, padding=1.0e-8)
     candidates = geometry.compute_collisions_points(tree, points)
@@ -1611,8 +1762,10 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
         cell_l1_contributions=cell_l1_contributions,
         dof_l1_contributions=dof_l1_contributions,
     )
+    local_diagnostics.update(integration_diagnostics)
     log(
-        f"[source] mode=manual_line; quadrature points={npts}; added={added}; missed={missed}; "
+        f"[source] mode=manual_line; integration={integration_diagnostics['integration_mode']}; "
+        f"quadrature points={npts}; added={added}; missed={missed}; "
         "assembled direct Nedelec line integral int_Gamma t.v dl",
         comm=msh.comm,
     )
@@ -5063,6 +5216,17 @@ def write_report(
             f"top_cell_fraction={float(source_local_projection.get('cell_contribution_top_fraction', math.nan)):.6g}; "
             f"top_dof_fraction={float(source_local_projection.get('dof_contribution_top_fraction', math.nan)):.6g}"
         )
+        if "integration_mode" in source_local_projection:
+            lines.append(
+                "  source line integration: "
+                f"mode={source_local_projection.get('integration_mode')}; "
+                f"segments={int(source_local_projection.get('segment_count', 0))}; "
+                f"segment_length_total={float(source_local_projection.get('segment_total_length', 0.0)):.6g} m; "
+                "quadrature_per_segment[min/mean/max]="
+                f"{float(source_local_projection.get('quadrature_points_per_segment_min', 0.0)):.6g}/"
+                f"{float(source_local_projection.get('quadrature_points_per_segment_mean', 0.0)):.6g}/"
+                f"{float(source_local_projection.get('quadrature_points_per_segment_max', 0.0)):.6g}"
+            )
     lines.append(f"  source RHS sign: {config.source_rhs_sign:g}")
     lines.append(f"  source projection mode: {config.source_projection_mode}")
     lines.append(f"  source quadrature points: {config.source_quadrature_points if int(config.source_quadrature_points) > 0 else 'auto'}")

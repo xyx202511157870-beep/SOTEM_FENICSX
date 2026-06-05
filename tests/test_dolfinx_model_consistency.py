@@ -181,6 +181,80 @@ def test_manual_line_auto_quadrature_resolves_source_mesh_scale():
     assert sp._manual_line_source_quadrature_count(1000.0, sp.PipelineConfig(source_quadrature_points=2001)) == 2001
 
 
+def test_source_line_segments_from_meshio_blocks_selects_and_sorts_physical_source_lines():
+    sp = _load_pipeline_module()
+    points = np.asarray(
+        [
+            [0.0, 1.0, -0.1],
+            [1.0, 1.0, -0.1],
+            [2.0, 1.0, -0.1],
+            [3.0, 1.0, -0.1],
+            [0.0, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    line_cells = np.asarray([[2, 3], [0, 1], [1, 2], [0, 4]], dtype=np.int64)
+    physical_tags = np.asarray([sp.PHYS_SOURCE_LINE, sp.PHYS_SOURCE_LINE, sp.PHYS_SOURCE_LINE, 999], dtype=np.int64)
+
+    segments = sp._source_line_segments_from_meshio_blocks(
+        points,
+        [("line", line_cells)],
+        [physical_tags],
+        sp.PipelineConfig(source_start=(0.0, 1.0, -0.1), source_end=(3.0, 1.0, -0.1)),
+    )
+
+    assert segments is not None
+    np.testing.assert_allclose(
+        segments["segments"],
+        np.asarray(
+            [
+                [[0.0, 1.0, -0.1], [1.0, 1.0, -0.1]],
+                [[1.0, 1.0, -0.1], [2.0, 1.0, -0.1]],
+                [[2.0, 1.0, -0.1], [3.0, 1.0, -0.1]],
+            ]
+        ),
+    )
+    assert segments["segment_count"] == 3
+    assert segments["total_length"] == pytest.approx(3.0)
+    assert segments["max_segment_length"] == pytest.approx(1.0)
+
+
+def test_manual_line_integration_points_use_mesh_segments_when_available():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        source_start=(0.0, 1.0, -0.1),
+        source_end=(2.0, 1.0, -0.1),
+        source_mesh_size=1.0,
+    )
+    mesh_segments = {
+        "segments": np.asarray(
+            [
+                [[0.0, 1.0, -0.1], [1.0, 1.0, -0.1]],
+                [[1.0, 1.0, -0.1], [2.0, 1.0, -0.1]],
+            ],
+            dtype=float,
+        ),
+        "segment_count": 2,
+        "total_length": 2.0,
+        "min_segment_length": 1.0,
+        "max_segment_length": 1.0,
+        "mean_segment_length": 1.0,
+    }
+
+    points, weights, svals, diagnostics = sp._manual_line_source_integration_points(
+        config,
+        mesh_segments=mesh_segments,
+    )
+
+    assert diagnostics["integration_mode"] == "mesh_segments"
+    assert diagnostics["segment_count"] == 2
+    assert diagnostics["quadrature_points_per_segment_min"] >= 2
+    assert diagnostics["quadrature_points_per_segment_max"] > 2
+    assert points.shape[0] > 4
+    assert svals.tolist() == pytest.approx(sorted(svals.tolist()))
+    assert float(np.sum(weights)) == pytest.approx(2.0)
+
+
 def test_transient_source_projection_uses_unit_current_shape():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(source_current=10.0)
