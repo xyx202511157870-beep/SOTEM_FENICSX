@@ -24,6 +24,7 @@ where = ["src"]
 
 [project.scripts]
 atem3d-run = "atem3d.cli:main"
+tdem-ip-forward = "atem3d.cli:main"
 atem3d-compare-empymod = "atem3d.compare_cli:main"
 atem3d-validate-empymod = "atem3d.empymod_validation_cli:main"
 atem3d-boundary-benchmark = "atem3d.benchmark_cli:main"

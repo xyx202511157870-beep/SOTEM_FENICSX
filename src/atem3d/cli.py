@@ -5,11 +5,23 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .config import build_simulation, load_config
-from .io import save_result_hdf5
+import numpy as np
+import yaml
+
+from .materials.prony import DebyeTerm, PronyConductivity
+from .validation_3comp import (
+    ThreeComponentValidationInput,
+    write_three_component_validation_artifacts,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
+        return _main_validate(argv)
+    return _main_run(argv)
+
+
+def _main_run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a grounded-wire TDEM-IP simulation.")
     parser.add_argument("config", type=Path, help="YAML configuration file")
     parser.add_argument("-o", "--output", type=Path, default=Path("outputs/result.h5"))
@@ -19,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Store receiver data without full field histories",
     )
     args = parser.parse_args(argv)
+
+    from .config import build_simulation, load_config
+    from .io import save_result_hdf5
 
     config = load_config(args.config)
     simulation = build_simulation(config)
@@ -34,6 +49,80 @@ def main(argv: list[str] | None = None) -> int:
     if args.data_only:
         print("field histories: not saved")
     return 0
+
+
+def _main_validate(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write three-component validation artifacts.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("validate-noip-3comp", "validate-ip-3comp"):
+        sub = subparsers.add_parser(command)
+        sub.add_argument("config", type=Path, help="YAML validation configuration")
+    args = parser.parse_args(argv)
+
+    config = _load_yaml(args.config)
+    case_type = "ip" if args.command == "validate-ip-3comp" else "noip"
+    case = _validation_case_from_config(config, case_type=case_type)
+    summary = write_three_component_validation_artifacts(case)
+    print(f"wrote {Path(case.output_dir)}")
+    print(f"case_type: {summary['case_type']}; pass_all_components: {summary['pass_all_components']}")
+    return 0
+
+
+def _load_yaml(path: Path) -> dict:
+    with Path(path).open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    if not isinstance(config, dict):
+        raise ValueError("configuration root must be a mapping")
+    return config
+
+
+def _validation_case_from_config(config: dict, *, case_type: str) -> ThreeComponentValidationInput:
+    validation = dict(config.get("validation", config))
+    component_names = [str(name) for name in validation["component_names"]]
+    pred_times, predictions = _read_response_csv(validation["predictions_csv"], component_names)
+    ref_times, reference = _read_response_csv(validation["reference_csv"], component_names)
+    if pred_times.shape != ref_times.shape or not np.allclose(pred_times, ref_times, rtol=0.0, atol=0.0):
+        raise ValueError("prediction and reference CSV time_obs columns must match exactly")
+    material = _material_from_config(config.get("material")) if case_type == "ip" else None
+    return ThreeComponentValidationInput(
+        output_dir=validation["output_dir"],
+        times=pred_times,
+        predictions=predictions,
+        reference=reference,
+        component_names=component_names,
+        case_type=case_type,
+        reference_type=str(validation.get("reference_type", "empymod")),
+        magnetic_quantity=str(validation.get("magnetic_quantity", component_names[-1])),
+        threshold=float(validation.get("relative_error_threshold", 0.05)),
+        diagnostics=dict(validation.get("diagnostics", {})),
+        material=material,
+    )
+
+
+def _read_response_csv(path, component_names: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    table = np.genfromtxt(path, delimiter=",", names=True, dtype=float, encoding="utf-8")
+    if table.ndim == 0:
+        table = np.asarray([table], dtype=table.dtype)
+    names = list(table.dtype.names or [])
+    if "time_obs" not in names:
+        raise ValueError("response CSV must contain time_obs")
+    missing = [name for name in component_names if name not in names]
+    if missing:
+        raise ValueError(f"response CSV missing components: {missing}")
+    times = np.asarray(table["time_obs"], dtype=float)
+    values = np.column_stack([np.asarray(table[name], dtype=float) for name in component_names])
+    return times, values
+
+
+def _material_from_config(config) -> PronyConductivity | None:
+    if config is None:
+        return None
+    cfg = dict(config)
+    terms = [
+        DebyeTerm(delta_sigma=float(term["delta_sigma"]), tau=float(term["tau"]))
+        for term in cfg.get("terms", cfg.get("debye_terms", []))
+    ]
+    return PronyConductivity(sigma_inf=float(cfg["sigma_inf"]), terms=terms)
 
 
 if __name__ == "__main__":

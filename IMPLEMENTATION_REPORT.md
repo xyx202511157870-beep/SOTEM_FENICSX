@@ -13,6 +13,7 @@ This report covers the implementation rounds currently committed or staged from 
 - P6 partial: add no-IP/IP primary-secondary TDEM step kernels with zero-contrast tests.
 - P7 partial: add no-IP/IP three-component validation smoke artifact writer.
 - P8 partial: add complex-terrain leakage-channel material-map smoke utilities.
+- P7 CLI: add `validate-noip-3comp` and `validate-ip-3comp` artifact commands from CSV inputs.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
@@ -83,6 +84,15 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Robust relative error and peak-normalized error output through existing metric code.
   - IP Prony metadata in `error_summary.json`.
 
+- `src/atem3d/cli.py`
+  - Keeps legacy simulation run mode.
+  - Adds `validate-noip-3comp CONFIG.yaml`.
+  - Adds `validate-ip-3comp CONFIG.yaml`.
+  - Uses lazy imports so validation CLI does not require heavy simulation dependencies.
+
+- `pyproject.toml`
+  - Adds `tdem-ip-forward = "atem3d.cli:main"` command alias.
+
 - `src/atem3d/materials/material_map.py`
   - `CellMaterialMap`
   - `mark_leakage_channel`
@@ -106,6 +116,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_noip_3comp_validation_smoke.py`
 - `tests/test_ip_3comp_validation_smoke.py`
 - `tests/test_complex_terrain_leakage_smoke.py`
+- `tests/test_validation_3comp_cli.py`
 
 ## Validation Command
 
@@ -143,6 +154,12 @@ P7 no-IP/IP validation smoke tests:
 
 ```bash
 python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py
+```
+
+P7 validation CLI tests:
+
+```bash
+python -m pytest -q tests/test_validation_3comp_cli.py
 ```
 
 P8 complex-terrain leakage-channel smoke tests:
@@ -199,6 +216,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
+- P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
 - Full no-IP/IP 5% acceptance is not yet achieved.
 
