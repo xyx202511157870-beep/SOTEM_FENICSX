@@ -35,6 +35,16 @@ class SecondaryState:
         object.__setattr__(self, "chi", chi)
 
 
+def secondary_state_from_dc_initialization(initialization) -> SecondaryState:
+    """Create a transient secondary state from DC secondary initialization."""
+
+    return SecondaryState(
+        Es=initialization.Es0,
+        deltaJ=initialization.deltaJ0,
+        chi=list(initialization.chi0),
+    )
+
+
 def secondary_step_noip(
     state: SecondaryState,
     *,

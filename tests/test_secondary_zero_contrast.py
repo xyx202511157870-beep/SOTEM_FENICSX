@@ -1,8 +1,10 @@
 import numpy as np
 
 from atem3d.materials.prony import DebyeTerm, PronyConductivity
+from atem3d.solvers.dc_secondary import DCSecondaryInitialization
 from atem3d.solvers.tdem_secondary import (
     SecondaryState,
+    secondary_state_from_dc_initialization,
     secondary_step_ip,
     secondary_step_noip,
 )
@@ -132,3 +134,27 @@ def test_ip_secondary_passes_expected_rhs_to_solver_and_updates_memory():
         new_state.chi[0],
         material.update_memory(chi_old, Ep_new + new_state.Es, 0.5)[0],
     )
+
+
+def test_secondary_state_from_dc_initialization_preserves_secondary_fields_and_memory():
+    init = DCSecondaryInitialization(
+        Ep0=np.array([[1.0, 0.0, 0.0]]),
+        Es0=np.array([[0.2, 0.0, 0.0]]),
+        Etotal0=np.array([[1.2, 0.0, 0.0]]),
+        chi0=[np.array([[1.2, 0.0, 0.0]])],
+        deltaJ0=np.array([[0.03, 0.0, 0.0]]),
+        phi_s=np.array([0.0]),
+        contrast_is_zero=False,
+    )
+
+    state = secondary_state_from_dc_initialization(init)
+
+    np.testing.assert_allclose(state.Es, init.Es0)
+    np.testing.assert_allclose(state.deltaJ, init.deltaJ0)
+    np.testing.assert_allclose(state.chi[0], init.chi0[0])
+
+
+def test_secondary_state_from_dc_initialization_is_exported_from_solvers_package():
+    from atem3d.solvers import secondary_state_from_dc_initialization as exported
+
+    assert exported is secondary_state_from_dc_initialization

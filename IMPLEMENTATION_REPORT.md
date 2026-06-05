@@ -121,6 +121,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
 - `src/atem3d/solvers/tdem_secondary.py`
   - `SecondaryState`
+  - `secondary_state_from_dc_initialization`
   - `secondary_step_noip`
   - `secondary_step_ip`
   - Variable-`dt` backward-Euler secondary RHS density helpers through injected solvers.
@@ -258,6 +259,15 @@ P6 TDEM secondary stepper tests:
 ```bash
 python -m pytest -q tests/test_secondary_zero_contrast.py
 ```
+
+Current P6 status:
+
+- `secondary_state_from_dc_initialization` converts P5
+  `DCSecondaryInitialization` output into the P6 `SecondaryState` used by the
+  no-IP/IP transient step kernels.
+- This closes the pure-Python state handoff from DC initialization to TDEM
+  stepping. DOLFINx operator assembly and time-loop wiring for the secondary
+  solver are still pending.
 
 P7 no-IP/IP validation smoke tests:
 
@@ -1387,7 +1397,7 @@ field consistency, or the total-field formulation.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a uniform-halfspace analytic grounded-wire DC backend, a provider-to-FEM-point interpolation adapter, a DOLFINx-style tabulated callable assembler, and a shared DOLFINx Nedelec callable interpolation helper; wiring primary provider outputs into the full primary-secondary solver remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver and a provider-driven entry point that consumes `E_p,dc` samples; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
-- P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
+- P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers and a DC-initialization-to-transient-state bridge; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
