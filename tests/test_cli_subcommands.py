@@ -1,3 +1,7 @@
+import json
+
+import yaml
+
 from atem3d import cli
 
 
@@ -43,3 +47,31 @@ def test_cli_plot_subcommand_regenerates_validation_figures(tmp_path):
     assert exit_code == 0
     assert (run_dir / "comparison_3comp.png").exists()
     assert (run_dir / "error_curves_3comp.png").exists()
+
+
+def test_cli_validate_secondary_writes_zero_contrast_summary(tmp_path):
+    output_dir = tmp_path / "secondary"
+    config_path = tmp_path / "secondary.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "output_dir": str(output_dir),
+                "Ep0": [[1.0, 0.0, 0.0], [0.5, 0.25, 0.0]],
+                "sigma": 0.01,
+                "sigma_background": 0.01,
+                "times": [1.0e-5, 2.0e-5],
+                "threshold": 1.0e-12,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["validate-secondary", str(config_path)])
+
+    assert exit_code == 0
+    summary = json.loads((output_dir / "secondary_validation_summary.json").read_text(encoding="utf-8"))
+    assert summary["case_type"] == "secondary_zero_contrast"
+    assert summary["pass_zero_contrast"] is True
+    assert summary["max_abs_Es"] == 0.0
+    assert summary["max_abs_secondary_dBdt"] == 0.0
+    assert summary["total_response_equals_primary"] is True

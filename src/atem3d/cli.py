@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_run(argv[1:])
     if argv and argv[0] == "plot":
         return _main_plot(argv[1:])
+    if argv and argv[0] == "validate-secondary":
+        return _main_validate_secondary(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
@@ -90,6 +93,86 @@ def _main_plot(argv: list[str]) -> int:
     _plot_errors(run_dir / "error_curves_3comp.png", errors, component_names, threshold=0.05)
     print(f"wrote {run_dir / 'comparison_3comp.png'}")
     print(f"wrote {run_dir / 'error_curves_3comp.png'}")
+    return 0
+
+
+def _main_validate_secondary(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Validate primary-secondary zero-contrast state.")
+    parser.add_argument("config", type=Path, help="YAML secondary validation configuration")
+    args = parser.parse_args(argv)
+
+    from .materials.prony import PronyConductivity
+    from .solvers import (
+        initialize_dc_secondary,
+        secondary_state_from_dc_initialization,
+        secondary_step_noip,
+    )
+
+    config = _load_yaml(args.config)
+    cfg = dict(config.get("secondary", config))
+    output_dir = Path(cfg.get("output_dir", "outputs/secondary_validation"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    Ep0 = np.asarray(cfg["Ep0"], dtype=float)
+    sigma = float(cfg["sigma"])
+    sigma_background = float(cfg.get("sigma_background", sigma))
+    threshold = float(cfg.get("threshold", 1.0e-12))
+    times = np.asarray(cfg.get("times", [1.0e-5]), dtype=float)
+    if times.ndim != 1 or times.size == 0 or np.any(times <= 0.0):
+        raise ValueError("times must be positive observation times")
+
+    init = initialize_dc_secondary(
+        Ep0=Ep0,
+        sigma0=sigma,
+        sigma_background=sigma_background,
+        material=PronyConductivity.no_ip(sigma),
+        contrast_atol=threshold,
+    )
+    state = secondary_state_from_dc_initialization(init)
+    max_abs_secondary_dbdt = 0.0
+    previous = state
+    previous_time = 0.0
+    for time in times:
+        dt = float(time - previous_time)
+        if dt <= 0.0:
+            raise ValueError("times must be strictly increasing")
+        state = secondary_step_noip(
+            previous,
+            Ep_old=Ep0,
+            Ep_new=Ep0,
+            sigma=sigma,
+            sigma_background=sigma_background,
+            dt=dt,
+            contrast_atol=threshold,
+        )
+        max_abs_secondary_dbdt = max(
+            max_abs_secondary_dbdt,
+            float(np.max(np.abs((state.Es - previous.Es) / dt))),
+        )
+        previous = state
+        previous_time = float(time)
+
+    max_abs_es = float(np.max(np.abs(state.Es))) if state.Es.size else 0.0
+    total_equals_primary = bool(np.allclose(Ep0 + state.Es, Ep0, rtol=0.0, atol=threshold))
+    summary = {
+        "case_type": "secondary_zero_contrast",
+        "sigma": sigma,
+        "sigma_background": sigma_background,
+        "threshold": threshold,
+        "time_count": int(times.size),
+        "max_abs_Es": max_abs_es,
+        "max_abs_secondary_dBdt": max_abs_secondary_dbdt,
+        "total_response_equals_primary": total_equals_primary,
+        "pass_zero_contrast": bool(
+            max_abs_es <= threshold
+            and max_abs_secondary_dbdt <= threshold
+            and total_equals_primary
+            and init.contrast_is_zero
+        ),
+    }
+    path = output_dir / "secondary_validation_summary.json"
+    path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"wrote {path}")
+    print(f"pass_zero_contrast: {summary['pass_zero_contrast']}")
     return 0
 
 
