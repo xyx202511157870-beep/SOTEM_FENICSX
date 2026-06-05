@@ -1,4 +1,4 @@
-# P0-P7 Implementation Report
+# P0-P8 Implementation Report
 
 ## Scope
 
@@ -12,6 +12,7 @@ This report covers the implementation rounds currently committed or staged from 
 - P5 partial: add a DC secondary initialization core with zero-contrast tests.
 - P6 partial: add no-IP/IP primary-secondary TDEM step kernels with zero-contrast tests.
 - P7 partial: add no-IP/IP three-component validation smoke artifact writer.
+- P8 partial: add complex-terrain leakage-channel material-map smoke utilities.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
@@ -82,6 +83,16 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Robust relative error and peak-normalized error output through existing metric code.
   - IP Prony metadata in `error_summary.json`.
 
+- `src/atem3d/materials/material_map.py`
+  - `CellMaterialMap`
+  - `mark_leakage_channel`
+  - `apply_leakage_channel_marker`
+
+- `src/atem3d/examples/leakage_channel.py`
+  - Synthetic terrain elevation.
+  - Irregular leakage-channel marker assignment.
+  - Background/no-IP and leakage/IP material map diagnostics.
+
 ## Tests Added
 
 - `tests/test_waveform.py`
@@ -94,6 +105,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_secondary_zero_contrast.py`
 - `tests/test_noip_3comp_validation_smoke.py`
 - `tests/test_ip_3comp_validation_smoke.py`
+- `tests/test_complex_terrain_leakage_smoke.py`
 
 ## Validation Command
 
@@ -131,6 +143,12 @@ P7 no-IP/IP validation smoke tests:
 
 ```bash
 python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py
+```
+
+P8 complex-terrain leakage-channel smoke tests:
+
+```bash
+python -m pytest -q tests/test_complex_terrain_leakage_smoke.py
 ```
 
 ## Running No-IP Three-Component Validation
@@ -181,6 +199,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
+- P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
 - Full no-IP/IP 5% acceptance is not yet achieved.
 
 ## Next Steps
@@ -193,4 +212,4 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
 7. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
 8. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
-9. Continue to P8: complex terrain and leakage-channel example.
+9. Continue P8 by generating a gmsh terrain/leakage mesh and running a small DOLFINx forward example.
