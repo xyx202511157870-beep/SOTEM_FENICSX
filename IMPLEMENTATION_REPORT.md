@@ -239,12 +239,15 @@ WSL/DOLFINx environment check:
 python dolfinx/sotem_pipeline.py --check-env-only --no-install
 ```
 
-Observed in WSL `fenicsx` conda environment:
+Latest observed in WSL `Ubuntu` / `fenicsx` conda environment on 2026-06-06:
 
 - DOLFINx `0.8.0`
 - empymod `2.5.4`
 - gmsh `4.15.2`
+- meshio `5.3.5`
+- PETSc hypre support: `True`
 - pipeline reports regularized volume source fallback unless explicitly overridden.
+- WSL was shut down after the check and confirmed `Stopped` with `wsl -l -v`.
 
 Lightweight P0-P2 tests:
 
