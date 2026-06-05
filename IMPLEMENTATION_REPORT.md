@@ -467,6 +467,22 @@ Receiver mesh-sensitivity smoke:
   colliding cell candidates, so cell-selection policy is not a minor detail.
 
 - Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_recv20_nearest_biotrate_smoke`.
+- Change: same receiver 20 m mesh as above, but
+  `--receiver-evaluation-mode nearest_center`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.13800838032493573`
+  - `max_error_Ey = 1268457408.674592`
+  - `max_error_Hz_or_dBzdt = 0.44747549498846956`
+  - `pass_all_components = false`
+- Interpretation: nearest-center candidate selection only slightly improves
+  point `Ex` relative to median (`13.9% -> 13.8%`). The simultaneous
+  disk diagnostic improves `dBzdt` to about `14.9%`, but still does not reach
+  `5%`. This suggests that the remaining first-point error is not caused only
+  by arbitrary candidate-cell ordering; local source/receiver discretization
+  and the shallow-interface total-field transfer still need improvement.
+
+- Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_recv10_diskcurl_smoke`.
 - Change: receiver mesh size `10 m`, receiver refinement radius `120 m`,
   `--receiver-type disk_average`, `--magnetic-dbdt-mode curl`, one output

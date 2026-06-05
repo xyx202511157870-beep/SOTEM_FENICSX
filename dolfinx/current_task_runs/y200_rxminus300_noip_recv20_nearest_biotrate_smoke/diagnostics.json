@@ -1,0 +1,182 @@
+{
+  "failed": true,
+  "failed_components": [
+    "Ex",
+    "Ey",
+    "dBzdt"
+  ],
+  "failed_times": [
+    1e-05
+  ],
+  "magnetic_receiver_mode": "biot_current",
+  "magnetic_recovery": {
+    "enabled": true,
+    "faraday_hz_final": -0.002197539374294769,
+    "initial_hz": -0.002197539374294769,
+    "max_absolute_hz_difference": 0.0,
+    "max_relative_hz_difference": 0.0,
+    "method": "faraday_integrated_dBzdt",
+    "rate_consistency": {
+      "enabled": false,
+      "reason": "requires at least two samples"
+    },
+    "reported_hz_final": -0.002197539374294769,
+    "time_at_max_relative_hz_difference": 1e-05
+  },
+  "magnetic_recovery_note": "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure.",
+  "receiver_sampling": {
+    "baseline_receiver_type": "point",
+    "comparisons": {
+      "disk_average": {
+        "Ex": {
+          "max_absolute_difference": 1.3261016121255678e-06,
+          "max_relative_difference": 0.001717465446776,
+          "mean_relative_difference": 0.001717465446776,
+          "sample_count": 1,
+          "time_at_max_relative_difference": 1e-05
+        },
+        "Ey": {
+          "max_absolute_difference": 2.826224852117487e-05,
+          "max_relative_difference": 2.228080212066878,
+          "mean_relative_difference": 2.228080212066878,
+          "sample_count": 1,
+          "time_at_max_relative_difference": 1e-05
+        },
+        "dBzdt": {
+          "max_absolute_difference": 1.299273680712346e-06,
+          "max_relative_difference": 0.524182210514895,
+          "mean_relative_difference": 0.524182210514895,
+          "sample_count": 1,
+          "time_at_max_relative_difference": 1e-05
+        }
+      }
+    },
+    "enabled": true,
+    "receiver_sampling_issue_suspected": true,
+    "receiver_types": [
+      "point",
+      "disk_average"
+    ],
+    "threshold": 0.05,
+    "time_count": 1
+  },
+  "receiver_vs_reference": {
+    "baseline_receiver_type": "point",
+    "comparisons": {
+      "disk_average": {
+        "Ex": {
+          "baseline_max_relative_error": 0.13800838032493573,
+          "candidate_max_relative_error": 0.1394888211471378,
+          "improves_over_baseline": false
+        },
+        "Ey": {
+          "baseline_max_relative_error": 1268457408.674592,
+          "candidate_max_relative_error": 1557767443.4428952,
+          "improves_over_baseline": false
+        },
+        "dBzdt": {
+          "baseline_max_relative_error": 0.44747549498846956,
+          "candidate_max_relative_error": 0.15785197858787747,
+          "improves_over_baseline": true
+        }
+      }
+    },
+    "enabled": true,
+    "metrics": {
+      "disk_average": {
+        "Ex": {
+          "max_peak_normalized_error": 0.1394888211471378,
+          "max_relative_error": 0.1394888211471378,
+          "mean_relative_error": 0.1394888211471378,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Ey": {
+          "max_peak_normalized_error": 1557767443.4428952,
+          "max_relative_error": 1557767443.4428952,
+          "mean_relative_error": 1557767443.4428952,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.15785197858787747,
+          "max_relative_error": 0.15785197858787747,
+          "mean_relative_error": 0.15785197858787747,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        }
+      },
+      "point": {
+        "Ex": {
+          "max_peak_normalized_error": 0.13800838032493573,
+          "max_relative_error": 0.13800838032493573,
+          "mean_relative_error": 0.13800838032493573,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Ey": {
+          "max_peak_normalized_error": 1268457408.674592,
+          "max_relative_error": 1268457408.674592,
+          "mean_relative_error": 1268457408.674592,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Hz": {
+          "max_peak_normalized_error": 3.604705126252336e-05,
+          "max_relative_error": 3.604705126252336e-05,
+          "mean_relative_error": 3.604705126252336e-05,
+          "passes_threshold": true,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.44747549498846956,
+          "max_relative_error": 0.44747549498846956,
+          "mean_relative_error": 0.44747549498846956,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        }
+      }
+    },
+    "receiver_types": [
+      "point",
+      "disk_average"
+    ],
+    "threshold": 0.05
+  },
+  "recommended_check_order": [
+    "time_step_error",
+    "mesh_error",
+    "boundary_error",
+    "source_term_error",
+    "receiver_sampling_error",
+    "magnetic_recovery_error",
+    "ip_memory_error"
+  ],
+  "source_consistency": {
+    "current_final": 0.0,
+    "current_initial": 10.0,
+    "dc_current_conservation_residual": null,
+    "endpoint_source_total_sum": 0.0,
+    "expected_current_change": -10.0,
+    "initial_curl_residual": null,
+    "integral_didt_dt": -10.0,
+    "source_endpoint_balance_residual": 1.3306159896259963e-09,
+    "waveform_integral_residual": 0.0
+  },
+  "source_projection": {
+    "after_residual": 1.3306159896259963e-09,
+    "applied": true,
+    "before_residual": 5.459568976579745,
+    "endpoint_norm": 1.414213562372995,
+    "ksp_iterations": 7,
+    "ksp_reason": 2,
+    "ksp_residual": 7.651469810145931e-10
+  }
+}

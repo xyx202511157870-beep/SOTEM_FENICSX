@@ -189,3 +189,30 @@ def test_biot_receiver_dbdt_from_h_uses_interval_rate():
     dbdt = sp._biot_receiver_dbdt_from_h([0.0, 1.0, 5.0], [0.0, -1.0, 1.0], dt=2.0, mu=4.0)
 
     np.testing.assert_allclose(dbdt, np.asarray([0.0, 4.0, 8.0]))
+
+
+def test_receiver_candidate_collapse_supports_geometric_selection_modes():
+    sp = _load_pipeline_module()
+    values = np.asarray(
+        [
+            [1.0, 10.0, 100.0],
+            [2.0, 20.0, 200.0],
+            [3.0, 30.0, 300.0],
+        ]
+    )
+    centers = np.asarray(
+        [
+            [0.0, 0.0, -10.0],
+            [1.0, 0.0, -0.05],
+            [0.0, 0.0, -0.02],
+        ]
+    )
+
+    np.testing.assert_allclose(
+        sp._collapse_receiver_cell_candidates(values, "nearest_center", centers=centers, point=[0.9, 0.0, -0.1]),
+        values[1],
+    )
+    np.testing.assert_allclose(
+        sp._collapse_receiver_cell_candidates(values, "shallowest", centers=centers, point=[0.0, 0.0, -0.1]),
+        values[2],
+    )

@@ -113,7 +113,7 @@ class PipelineConfig:
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
     magnetic_receiver_mode: str = "curl"  # curl, biot_current, biot_ohmic
     magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
-    receiver_evaluation_mode: str = "median"  # first_cell, mean, median
+    receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
     divergence_cleaning: str = "none"  # none, conductivity
     polarization: str = "none"  # none, cole-cole
     cole_rho0: float = 100.0
@@ -484,8 +484,10 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             f"got {float(config.outer_boundary_robin_scale):.12g}"
         )
     receiver_evaluation_mode = str(config.receiver_evaluation_mode).strip().lower()
-    if receiver_evaluation_mode not in {"first_cell", "mean", "median"}:
-        raise ValueError("receiver_evaluation_mode must be 'first_cell', 'mean', or 'median'")
+    if receiver_evaluation_mode not in {"first_cell", "mean", "median", "nearest_center", "shallowest"}:
+        raise ValueError(
+            "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', or 'shallowest'"
+        )
     receiver_type = str(config.receiver_type).strip().lower()
     if receiver_type not in {"point", "volume_average", "disk_average"}:
         raise ValueError("receiver_type must be 'point', 'volume_average', or 'disk_average'")
@@ -2249,7 +2251,7 @@ def _receiver_config_for_type(config: PipelineConfig, receiver_type: str) -> Pip
     return replace(config, receiver_type=receiver_type)
 
 
-def _collapse_receiver_cell_candidates(values, mode: str):
+def _collapse_receiver_cell_candidates(values, mode: str, *, centers=None, point=None):
     import numpy as np
 
     arr = np.asarray(values, dtype=float)
@@ -2262,13 +2264,34 @@ def _collapse_receiver_cell_candidates(values, mode: str):
         return np.median(arr, axis=0)
     if mode == "mean":
         return np.mean(arr, axis=0)
-    raise ValueError("receiver_evaluation_mode must be 'first_cell', 'mean', or 'median'")
+    if mode in {"nearest_center", "shallowest"}:
+        if centers is None:
+            raise ValueError(f"receiver_evaluation_mode='{mode}' requires candidate cell centers")
+        center_arr = np.asarray(centers, dtype=float)
+        if center_arr.shape != (arr.shape[0], 3):
+            raise ValueError("candidate cell centers must have shape (n_candidates, 3)")
+        if mode == "nearest_center":
+            if point is None:
+                raise ValueError("receiver_evaluation_mode='nearest_center' requires the receiver point")
+            point_arr = np.asarray(point, dtype=float).reshape(1, 3)
+            idx = int(np.argmin(np.linalg.norm(center_arr - point_arr, axis=1)))
+        else:
+            idx = int(np.argmax(center_arr[:, 2]))
+        return arr[idx]
+    raise ValueError(
+        "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', or 'shallowest'"
+    )
 
 
-def _aggregate_receiver_sample_values(sample_values, mode: str):
+def _aggregate_receiver_sample_values(sample_values, mode: str, *, sample_centers=None, sample_points=None):
     import numpy as np
 
-    collapsed = [_collapse_receiver_cell_candidates(values, mode) for values in sample_values]
+    centers = list(sample_centers or [None] * len(sample_values))
+    points = list(sample_points or [None] * len(sample_values))
+    collapsed = [
+        _collapse_receiver_cell_candidates(values, mode, centers=centers[i], point=points[i])
+        for i, values in enumerate(sample_values)
+    ]
     if not collapsed:
         raise ValueError("at least one receiver sample value is required")
     return np.mean(np.vstack(collapsed), axis=0)
@@ -2310,7 +2333,10 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     mode = str(config.receiver_evaluation_mode).strip().lower()
     e_samples = []
     dbdt_samples = []
+    center_samples = []
+    point_samples = []
     candidate_counts = []
+    cell_centers = _cell_centers(msh) if mode in {"nearest_center", "shallowest"} else None
     for sample_point in _receiver_sampling_points(config):
         cells = _find_cells_for_point(msh, sample_point)
         if len(cells) == 0:
@@ -2321,13 +2347,25 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
         dbdt_vals = np.asarray(dbdt.eval(point, cells), dtype=float).reshape(len(cells), -1)
         e_samples.append(e_vals)
         dbdt_samples.append(dbdt_vals)
+        center_samples.append(cell_centers[np.asarray(cells, dtype=int)] if cell_centers is not None else None)
+        point_samples.append(np.asarray(sample_point, dtype=float))
     if not e_samples:
         raise RuntimeError(
             f"receiver {config.receiver} was not found in a local cell; run in serial "
             "for point extraction or add MPI point ownership handling."
         )
-    e_val = _aggregate_receiver_sample_values(e_samples, mode)
-    dbdt_val = _aggregate_receiver_sample_values(dbdt_samples, mode)
+    e_val = _aggregate_receiver_sample_values(
+        e_samples,
+        mode,
+        sample_centers=center_samples,
+        sample_points=point_samples,
+    )
+    dbdt_val = _aggregate_receiver_sample_values(
+        dbdt_samples,
+        mode,
+        sample_centers=center_samples,
+        sample_points=point_samples,
+    )
     rec = {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
     rec.update(_receiver_candidate_count_stats(candidate_counts))
     return rec
@@ -5515,7 +5553,11 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Comma-separated receiver diagnostics to write separately, e.g. point,disk_average.",
     )
-    parser.add_argument("--receiver-evaluation-mode", choices=["first_cell", "mean", "median"], default="median")
+    parser.add_argument(
+        "--receiver-evaluation-mode",
+        choices=["first_cell", "mean", "median", "nearest_center", "shallowest"],
+        default="median",
+    )
     parser.add_argument("--divergence-cleaning", choices=["none", "conductivity"], default="none")
     parser.add_argument("--polarization", choices=["none", "cole-cole"], default="none")
     parser.add_argument("--cole-layer-top", type=float, default=0.0, help="Top depth of the polarizable Cole-Cole interval in meters.")
