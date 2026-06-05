@@ -146,3 +146,105 @@ class PointReceiver:
         edge_component = {"dBxdt": "Ex", "dBydt": "Ey", "dBzdt": "Ez"}[self.component]
         matrix = mesh.get_interpolation_matrix(loc, edge_component)
         return float((matrix @ (mu * (h_new - h_old) / dt))[0])
+
+
+@dataclass(frozen=True)
+class AverageReceiver:
+    """Average point receiver over deterministic disk or volume samples."""
+
+    location: tuple[float, float, float]
+    component: str
+    receiver_type: str
+    radius: float
+
+    def __post_init__(self) -> None:
+        location = np.asarray(self.location, dtype=float)
+        if location.shape != (3,):
+            raise ValueError("location must be a 3D coordinate")
+        receiver_type = str(self.receiver_type).strip().lower()
+        if receiver_type not in {"disk_average", "volume_average"}:
+            raise ValueError("receiver_type must be 'disk_average' or 'volume_average'")
+        radius = float(self.radius)
+        if not np.isfinite(radius) or radius <= 0.0:
+            raise ValueError("radius must be positive")
+        object.__setattr__(self, "location", tuple(float(v) for v in location))
+        object.__setattr__(self, "receiver_type", receiver_type)
+        object.__setattr__(self, "radius", radius)
+
+    @property
+    def sample_points(self) -> np.ndarray:
+        center = np.asarray(self.location, dtype=float)
+        r = float(self.radius)
+        if self.receiver_type == "disk_average":
+            offsets = np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [r, 0.0, 0.0],
+                    [-r, 0.0, 0.0],
+                    [0.0, r, 0.0],
+                    [0.0, -r, 0.0],
+                ],
+                dtype=float,
+            )
+        else:
+            offsets = np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [r, 0.0, 0.0],
+                    [-r, 0.0, 0.0],
+                    [0.0, r, 0.0],
+                    [0.0, -r, 0.0],
+                    [0.0, 0.0, r],
+                    [0.0, 0.0, -r],
+                ],
+                dtype=float,
+            )
+        return center.reshape(1, 3) + offsets
+
+    @property
+    def sample_count(self) -> int:
+        return int(self.sample_points.shape[0])
+
+    def point_receivers(self) -> list[PointReceiver]:
+        return [
+            PointReceiver(location=tuple(float(value) for value in point), component=self.component)
+            for point in self.sample_points
+        ]
+
+    def sample(self, mesh, e: np.ndarray, b: np.ndarray, mu: float = mu_0) -> float:
+        values = [receiver.sample(mesh, e, b, mu) for receiver in self.point_receivers()]
+        return float(np.mean(values))
+
+    def sample_hj(self, mesh, e: np.ndarray, h: np.ndarray, mu: float = mu_0) -> float:
+        values = [receiver.sample_hj(mesh, e, h, mu) for receiver in self.point_receivers()]
+        return float(np.mean(values))
+
+    def sample_time_derivative(
+        self,
+        mesh,
+        e: np.ndarray,
+        b_new: np.ndarray,
+        b_old: np.ndarray,
+        dt: float,
+        mu: float = mu_0,
+    ) -> float:
+        values = [
+            receiver.sample_time_derivative(mesh, e, b_new, b_old, dt, mu)
+            for receiver in self.point_receivers()
+        ]
+        return float(np.mean(values))
+
+    def sample_hj_time_derivative(
+        self,
+        mesh,
+        e: np.ndarray,
+        h_new: np.ndarray,
+        h_old: np.ndarray,
+        dt: float,
+        mu: float = mu_0,
+    ) -> float:
+        values = [
+            receiver.sample_hj_time_derivative(mesh, e, h_new, h_old, dt, mu)
+            for receiver in self.point_receivers()
+        ]
+        return float(np.mean(values))

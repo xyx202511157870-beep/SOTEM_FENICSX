@@ -132,6 +132,11 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     fixed point/vector samples into a DOLFINx `Function.interpolate`-style
     callable with `(3, n)` coordinate input and `(3, n)` component output.
 
+- `src/atem3d/receivers.py`
+  - `PointReceiver`
+  - `AverageReceiver` for deterministic `disk_average` and `volume_average`
+    sampling around a point receiver.
+
 - `src/atem3d/solvers/dc_secondary.py`
   - `DCSecondaryInitialization`
   - `initialize_dc_secondary`
@@ -209,6 +214,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_complex_terrain_leakage_smoke.py`
 - `tests/test_validation_3comp_cli.py`
 - `tests/test_source_consistency.py`
+- `tests/test_average_receivers.py`
 - Existing `tests/test_empymod_validation.py`
 - Existing `tests/test_empymod_validation_cli.py`
 
@@ -230,7 +236,7 @@ Observed in WSL `fenicsx` conda environment:
 Lightweight P0-P2 tests:
 
 ```bash
-python -m pytest -q tests/test_waveform.py tests/test_time_grid.py tests/test_source_consistency.py tests/test_error_metric_floor.py tests/test_dolfinx_validation_artifacts.py tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_solves_through_ramp_then_returns_observation_times tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_keeps_ramp_grid_when_observations_end_before_ramp tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_uses_ramp_solver_t_min_before_later_observation_start
+python -m pytest -q tests/test_waveform.py tests/test_time_grid.py tests/test_source_consistency.py tests/test_average_receivers.py tests/test_error_metric_floor.py tests/test_dolfinx_validation_artifacts.py tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_solves_through_ramp_then_returns_observation_times tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_keeps_ramp_grid_when_observations_end_before_ramp tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_uses_ramp_solver_t_min_before_later_observation_start
 ```
 
 P3 material-interface tests:
