@@ -136,6 +136,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `src/atem3d/validation_3comp.py`
   - `ThreeComponentValidationInput`
   - `write_three_component_validation_artifacts`
+  - Enforces the task-book validation window coverage:
+    `1e-5 s <= t_obs <= 1 s`.
   - Required no-IP/IP validation CSV/JSON/PNG output names.
   - `run_config_resolved.yaml` resolved validation configuration output.
   - Robust relative error and peak-normalized error output through existing metric code.

@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from atem3d.validation_3comp import (
     ThreeComponentValidationInput,
@@ -59,3 +60,22 @@ def test_noip_3comp_validation_smoke_writes_required_artifacts(tmp_path):
     resolved = json.loads((tmp_path / "run_config_resolved.yaml").read_text(encoding="utf-8"))
     assert resolved["case_type"] == "noip"
     assert resolved["component_names"] == ["Ex", "Ey", "dBzdt"]
+
+
+def test_validation_rejects_time_table_that_does_not_cover_required_window(tmp_path):
+    times = np.array([1.0e-5, 1.0e-3, 1.0e-2])
+    reference = np.ones((3, 3))
+
+    with pytest.raises(ValueError, match="cover 1e-5 s to 1 s"):
+        write_three_component_validation_artifacts(
+            ThreeComponentValidationInput(
+                output_dir=tmp_path,
+                times=times,
+                predictions=reference,
+                reference=reference,
+                component_names=["Ex", "Ey", "dBzdt"],
+                case_type="noip",
+                reference_type="empymod",
+                magnetic_quantity="dBzdt",
+            )
+        )

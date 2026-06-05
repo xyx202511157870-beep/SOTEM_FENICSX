@@ -12,6 +12,9 @@ import numpy as np
 from atem3d.materials.prony import PronyConductivity
 from atem3d.metrics import robust_component_errors
 
+REQUIRED_TIME_MIN = 1.0e-5
+REQUIRED_TIME_MAX = 1.0
+
 
 @dataclass(frozen=True)
 class ThreeComponentValidationInput:
@@ -115,6 +118,8 @@ def _validated_arrays(
         raise ValueError("times must be a non-empty 1D array")
     if np.any(times <= 0.0):
         raise ValueError("times must be positive observation times")
+    if np.min(times) > REQUIRED_TIME_MIN or np.max(times) < REQUIRED_TIME_MAX:
+        raise ValueError("validation times must cover 1e-5 s to 1 s")
     if predictions.shape != reference.shape:
         raise ValueError("predictions and reference must have the same shape")
     if predictions.shape != (times.size, len(component_names)):
