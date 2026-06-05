@@ -71,6 +71,8 @@ class PipelineConfig:
     source_quadrature_points: int = 0
 
     receiver: tuple[float, float, float] = (500.0, 50.0, -0.1)
+    receiver_type: str = "point"  # point, volume_average, disk_average
+    receiver_average_radius: float = 2.0
     receiver_mesh_size: float = 10.0
     receiver_refinement_radius: float = 60.0
     outer_boundary_mode: str = "pec"  # pec, natural, robin
@@ -471,6 +473,12 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     receiver_evaluation_mode = str(config.receiver_evaluation_mode).strip().lower()
     if receiver_evaluation_mode not in {"first_cell", "mean", "median"}:
         raise ValueError("receiver_evaluation_mode must be 'first_cell', 'mean', or 'median'")
+    receiver_type = str(config.receiver_type).strip().lower()
+    if receiver_type not in {"point", "volume_average", "disk_average"}:
+        raise ValueError("receiver_type must be 'point', 'volume_average', or 'disk_average'")
+    receiver_average_radius = float(config.receiver_average_radius)
+    if receiver_type != "point" and (not math.isfinite(receiver_average_radius) or receiver_average_radius <= 0.0):
+        raise ValueError("receiver_average_radius must be positive for average receiver types")
     divergence_cleaning = str(config.divergence_cleaning).strip().lower()
     if divergence_cleaning not in {"none", "conductivity"}:
         raise ValueError("divergence_cleaning must be 'none' or 'conductivity'")
@@ -646,6 +654,8 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "outer_boundary_mode": outer_boundary_mode,
             "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
             "receiver_evaluation_mode": receiver_evaluation_mode,
+            "receiver_type": receiver_type,
+            "receiver_average_radius": receiver_average_radius,
             "divergence_cleaning": divergence_cleaning,
             "diffusion_refinement": _diffusion_refinement_audit(config),
             "sponge": sponge,
@@ -2136,6 +2146,70 @@ def compute_dbdt(E, spaces: dict[str, Any]):
     return dbdt
 
 
+def _receiver_sampling_points(config: PipelineConfig):
+    """Return deterministic diagnostic sample points for the configured receiver."""
+
+    import numpy as np
+
+    center = np.asarray(config.receiver, dtype=float).reshape(1, 3)
+    receiver_type = str(config.receiver_type).strip().lower()
+    if receiver_type == "point":
+        return center
+    radius = float(config.receiver_average_radius)
+    if receiver_type == "disk_average":
+        offsets = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [radius, 0.0, 0.0],
+                [-radius, 0.0, 0.0],
+                [0.0, radius, 0.0],
+                [0.0, -radius, 0.0],
+            ],
+            dtype=float,
+        )
+    elif receiver_type == "volume_average":
+        offsets = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [radius, 0.0, 0.0],
+                [-radius, 0.0, 0.0],
+                [0.0, radius, 0.0],
+                [0.0, -radius, 0.0],
+                [0.0, 0.0, radius],
+                [0.0, 0.0, -radius],
+            ],
+            dtype=float,
+        )
+    else:
+        raise ValueError("receiver_type must be 'point', 'volume_average', or 'disk_average'")
+    return center + offsets
+
+
+def _collapse_receiver_cell_candidates(values, mode: str):
+    import numpy as np
+
+    arr = np.asarray(values, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] == 0:
+        raise ValueError("receiver candidate values must have shape (n_candidates, n_components)")
+    mode = str(mode).strip().lower()
+    if mode == "first_cell":
+        return arr[0]
+    if mode == "median":
+        return np.median(arr, axis=0)
+    if mode == "mean":
+        return np.mean(arr, axis=0)
+    raise ValueError("receiver_evaluation_mode must be 'first_cell', 'mean', or 'median'")
+
+
+def _aggregate_receiver_sample_values(sample_values, mode: str):
+    import numpy as np
+
+    collapsed = [_collapse_receiver_cell_candidates(values, mode) for values in sample_values]
+    if not collapsed:
+        raise ValueError("at least one receiver sample value is required")
+    return np.mean(np.vstack(collapsed), axis=0)
+
+
 def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     """Evaluate Ex, Ey and dBz/dt at the configured receiver point."""
 
@@ -2143,30 +2217,32 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
 
     if not getattr(evaluate_receivers, "_logged_dbdt_mode", False):
         log(
-            f"[receiver] Ex/Ey and dBz/dt are evaluated with receiver_evaluation_mode={config.receiver_evaluation_mode}. "
+            f"[receiver] Ex/Ey and dBz/dt are evaluated with receiver_type={config.receiver_type}, "
+            f"receiver_evaluation_mode={config.receiver_evaluation_mode}. "
             "dBz/dt comes from a DG0 interpolation of -curl(E); at shared receiver points, "
             "the selected mode combines the colliding cellwise-constant candidates.",
             comm=msh.comm,
         )
         setattr(evaluate_receivers, "_logged_dbdt_mode", True)
-    cells = _find_cells_for_point(msh, config.receiver)
-    if len(cells) == 0:
+    mode = str(config.receiver_evaluation_mode).strip().lower()
+    e_samples = []
+    dbdt_samples = []
+    for sample_point in _receiver_sampling_points(config):
+        cells = _find_cells_for_point(msh, sample_point)
+        if len(cells) == 0:
+            continue
+        point = np.repeat(np.asarray(sample_point, dtype=float).reshape(1, 3), len(cells), axis=0)
+        e_vals = np.asarray(E.eval(point, cells), dtype=float).reshape(len(cells), -1)
+        dbdt_vals = np.asarray(dbdt.eval(point, cells), dtype=float).reshape(len(cells), -1)
+        e_samples.append(e_vals)
+        dbdt_samples.append(dbdt_vals)
+    if not e_samples:
         raise RuntimeError(
             f"receiver {config.receiver} was not found in a local cell; run in serial "
             "for point extraction or add MPI point ownership handling."
         )
-    mode = str(config.receiver_evaluation_mode).strip().lower()
-    if mode == "first_cell":
-        cells = cells[:1]
-    point = np.repeat(np.asarray(config.receiver, dtype=float).reshape(1, 3), len(cells), axis=0)
-    e_vals = np.asarray(E.eval(point, cells), dtype=float).reshape(len(cells), -1)
-    dbdt_vals = np.asarray(dbdt.eval(point, cells), dtype=float).reshape(len(cells), -1)
-    if mode == "median":
-        e_val = np.median(e_vals, axis=0)
-        dbdt_val = np.median(dbdt_vals, axis=0)
-    else:
-        e_val = np.mean(e_vals, axis=0)
-        dbdt_val = np.mean(dbdt_vals, axis=0)
+    e_val = _aggregate_receiver_sample_values(e_samples, mode)
+    dbdt_val = _aggregate_receiver_sample_values(dbdt_samples, mode)
     return {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
 
 
@@ -3909,6 +3985,10 @@ def write_report(
         f"  outer boundary mode: {config.outer_boundary_mode}; "
         f"robin scale={float(config.outer_boundary_robin_scale):.6g}"
     )
+    lines.append(
+        f"  receiver type: {config.receiver_type}; "
+        f"average radius={float(config.receiver_average_radius):.6g} m"
+    )
     lines.append(f"  receiver evaluation mode: {config.receiver_evaluation_mode}")
     lines.append(f"  divergence cleaning: {config.divergence_cleaning}")
     lines.append(
@@ -4562,6 +4642,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--magnetic-receiver-mode", choices=["curl", "biot_current", "biot_ohmic"], default="curl")
     parser.add_argument("--outer-boundary-mode", choices=["pec", "natural", "robin"], default="pec")
     parser.add_argument("--outer-boundary-robin-scale", type=float, default=1.0)
+    parser.add_argument("--receiver-type", choices=["point", "volume_average", "disk_average"], default="point")
+    parser.add_argument("--receiver-average-radius", type=float, default=2.0)
     parser.add_argument("--receiver-evaluation-mode", choices=["first_cell", "mean", "median"], default="median")
     parser.add_argument("--divergence-cleaning", choices=["none", "conductivity"], default="none")
     parser.add_argument("--polarization", choices=["none", "cole-cole"], default="none")
@@ -4655,6 +4737,8 @@ def main(argv: list[str] | None = None) -> int:
         magnetic_receiver_mode=args.magnetic_receiver_mode,
         outer_boundary_mode=args.outer_boundary_mode,
         outer_boundary_robin_scale=args.outer_boundary_robin_scale,
+        receiver_type=args.receiver_type,
+        receiver_average_radius=args.receiver_average_radius,
         receiver_evaluation_mode=args.receiver_evaluation_mode,
         divergence_cleaning=args.divergence_cleaning,
         polarization=args.polarization,

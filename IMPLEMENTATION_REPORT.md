@@ -34,6 +34,13 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Added `min_steps_during_turnoff`.
   - Replaced point-value source derivative with interval-average `dI/dt`.
   - Updated after-ramp internal schedule to include turn-off history before observation times.
+  - Added receiver sampling modes:
+    - `--receiver-type point`
+    - `--receiver-type volume_average`
+    - `--receiver-type disk_average`
+    - `--receiver-average-radius R`
+    Average receiver modes evaluate deterministic diagnostic sample points and
+    average the per-point collapsed cell candidates.
   - Added P2 validation artifacts:
     - `predictions.csv`
     - `reference_empymod_or_1d.csv`
@@ -315,12 +322,30 @@ Current root-cause status:
   shallow interface, local near-source/receiver discretization, and possibly the
   total-field source transfer into the E-form solve.
 
+Receiver averaging smoke:
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_receiver_smoke`.
+- Command used `--receiver-type disk_average --receiver-average-radius 2` with
+  `--stop-after-outputs 1`.
+- Result: DOLFINx completed the first observation point and wrote the standard
+  validation artifacts. The first receiver row was
+  `Ex=6.467738e-04`, `Ey=-5.793007e-05`, `Hz=-2.111455e-03`,
+  `dBzdt=2.768666e-06`.
+- Runtime: total `77.323 s`, forward solve `63.619 s` in the WSL `fenicsx`
+  environment.
+- Interpretation: average receiver sampling is now a working diagnostic path,
+  but the task-book requirement to output point and average receiver curves
+  simultaneously remains open.
+
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
-- Average receivers and Faraday-integrated `Hz` recovery are not fully implemented in this round.
+- Average receiver sampling is implemented for the DOLFINx verification
+  pipeline, but simultaneous point/average artifact output is still pending.
+- Faraday-integrated `Hz` recovery is not implemented in this round.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
@@ -337,7 +362,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 ## Next Steps
 
 1. Add real FEM source residual diagnostics using assembled gradient/divergence/curl operators.
-2. Add `point`, `volume_average`, and `disk_average` receiver modes in DOLFINx.
+2. Extend validation artifacts to output point and average receiver curves in the same run.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 5. Continue P4 by implementing real `EmpymodPrimaryProvider` sampling or a 1D reference backend.

@@ -270,6 +270,77 @@ def test_compute_error_uses_component_minimum_floor_for_near_zero_electric_field
     np.testing.assert_allclose(errors["Ey"]["relative"], [1.0e8, 2.0e8])
 
 
+def test_receiver_sampling_points_point_receiver_uses_center_only():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(receiver=(1.0, 2.0, -0.1), receiver_type="point")
+
+    points = sp._receiver_sampling_points(config)
+
+    np.testing.assert_allclose(points, [[1.0, 2.0, -0.1]])
+
+
+def test_receiver_sampling_points_volume_average_uses_center_and_axis_offsets():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver=(1.0, 2.0, -0.1),
+        receiver_type="volume_average",
+        receiver_average_radius=2.0,
+    )
+
+    points = sp._receiver_sampling_points(config)
+
+    expected = np.asarray(
+        [
+            [1.0, 2.0, -0.1],
+            [3.0, 2.0, -0.1],
+            [-1.0, 2.0, -0.1],
+            [1.0, 4.0, -0.1],
+            [1.0, 0.0, -0.1],
+            [1.0, 2.0, 1.9],
+            [1.0, 2.0, -2.1],
+        ]
+    )
+    np.testing.assert_allclose(points, expected)
+
+
+def test_receiver_sampling_points_disk_average_uses_horizontal_offsets():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver=(1.0, 2.0, -0.1),
+        receiver_type="disk_average",
+        receiver_average_radius=2.0,
+    )
+
+    points = sp._receiver_sampling_points(config)
+
+    expected = np.asarray(
+        [
+            [1.0, 2.0, -0.1],
+            [3.0, 2.0, -0.1],
+            [-1.0, 2.0, -0.1],
+            [1.0, 4.0, -0.1],
+            [1.0, 0.0, -0.1],
+        ]
+    )
+    np.testing.assert_allclose(points, expected)
+
+
+def test_receiver_sample_aggregation_collapses_cell_candidates_then_averages_points():
+    sp = _load_pipeline_module()
+    sample_values = [
+        np.asarray([[1.0, 10.0, 100.0], [3.0, 30.0, 300.0], [9.0, 90.0, 900.0]]),
+        np.asarray([[10.0, 20.0, 30.0]]),
+    ]
+
+    median = sp._aggregate_receiver_sample_values(sample_values, "median")
+    mean = sp._aggregate_receiver_sample_values(sample_values, "mean")
+    first = sp._aggregate_receiver_sample_values(sample_values, "first_cell")
+
+    np.testing.assert_allclose(median, [6.5, 25.0, 165.0])
+    np.testing.assert_allclose(mean, [43.0 / 6.0, 95.0 / 3.0, 695.0 / 3.0])
+    np.testing.assert_allclose(first, [5.5, 15.0, 65.0])
+
+
 def test_debye_backward_euler_coefficients_are_dimensionless():
     sp = _load_pipeline_module()
     term = sp.DebyeTerm(delta_sigma=2.0, tau=4.0)
