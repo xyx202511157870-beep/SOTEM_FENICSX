@@ -173,6 +173,31 @@ def test_model_consistency_reports_divergence_cleaning_strength():
     assert diagnostics["divergence_cleaning_strength"] == pytest.approx(0.25)
 
 
+def test_model_consistency_rejects_negative_divergence_cleaning_t_obs_min():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="divergence_cleaning_t_obs_min"):
+        sp.validate_model_consistency(sp.PipelineConfig(divergence_cleaning_t_obs_min=-1.0e-3))
+
+
+def test_model_consistency_reports_divergence_cleaning_t_obs_min():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(
+        sp.PipelineConfig(divergence_cleaning="conductivity", divergence_cleaning_t_obs_min=0.05)
+    )
+
+    assert diagnostics["divergence_cleaning_t_obs_min"] == pytest.approx(0.05)
+
+
+def test_should_apply_divergence_cleaning_respects_observation_time_gate():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(ramp_off_time=1.0e-5, divergence_cleaning_t_obs_min=0.05)
+
+    assert sp._should_apply_divergence_cleaning(0.04999 + 1.0e-5, config) is False
+    assert sp._should_apply_divergence_cleaning(0.05 + 1.0e-5, config) is True
+
+
 def test_model_consistency_accepts_positive_source_rhs_sign_for_diagnostics():
     sp = _load_pipeline_module()
 

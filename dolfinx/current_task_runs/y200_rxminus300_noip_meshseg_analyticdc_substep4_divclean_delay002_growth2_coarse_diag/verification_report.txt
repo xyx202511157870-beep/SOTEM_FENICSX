@@ -1,0 +1,142 @@
+SOTEM FETD verification report
+==================================
+python: /home/paidaxin/miniconda3/envs/fenicsx/bin/python
+environment:
+  PETSc_hypre: True
+  basix: 0.8.0
+  dolfinx: 0.8.0
+  empymod: 2.5.4
+  gmsh: 4.15.2
+  matplotlib: 3.10.8
+  meshio: 5.3.5
+  mpi4py: 4.1.1
+  numpy: 2.2.6
+  petsc4py: 3.21.6
+  python: /home/paidaxin/miniconda3/envs/fenicsx/bin/python
+  scipy: 1.15.2
+  ufl: 2024.1.0
+
+model runtime:
+  total: 22.646 s
+  mesh: 1.869 s
+  setup: 3.497 s
+  forward solve: 10.274 s
+  empymod reference: 1.822 s
+  postprocess/report: 3.700 s
+
+geometry:
+  x,y extent: +/- 30000 m
+  air height: 10000 m; earth depth: 30000 m
+  source: (-500.0, 200.0, -0.1) -> (500.0, 200.0, -0.1), I=10 A
+  receiver: (0.0, -300.0, -0.1)
+  survey geometry: source_length=1000 m, inline_from_source_start=500 m, parallel_offset=500 m
+  model audit: reference_mode=noip, source_depth=(0.1, 0.1) m, receiver_depth=0.1 m, sigma_earth=1.000000e-02 S/m, time_origin=after_ramp, reference_ramp_window=after_ramp
+  source mode: manual_line
+  source projection: mode=charge_conserving; applied=True; before=2.785359e-01; after=2.834619e-11; endpoint_norm=1.414214e+00; correction_l2/raw=0.00587359; correction_l1/raw=0.00382686
+  source scalar balance: residual_active_dofs=7; residual_l2/endpoint_l2=0.196955; residual_top_fraction=0.485037; current_endpoint_alignment=0.981151
+  source local projection: quadrature=2800; added=2800; missed=0; unique_cells=202; top_cell_fraction=0.00554331; top_dof_fraction=0.00536228
+  source line integration: mode=mesh_segments; segments=200; segment_length_total=1000 m; quadrature_per_segment[min/mean/max]=14/14/14
+  source RHS sign: -1
+  source projection mode: charge_conserving
+  source quadrature points: auto
+  source term mode: impressed_current
+  formulation: e
+  Nedelec order: 1
+  initial DC mode: analytic_halfspace
+  magnetic receiver mode: biot_current
+  magnetic dBdt mode: curl
+  outer boundary mode: robin; robin scale=0.1
+  receiver type: disk_average; average radius=2 m
+  receiver evaluation mode: nearest_center
+  receiver diagnostics: baseline=point; types=point,disk_average; time_count=18; sampling_issue_suspected=True
+  divergence cleaning: conductivity; strength=1; t_obs_min=0.02 s
+  checkpoint forward: True; resume forward: True; stop after outputs: 0
+  memory budget: 32 GB; safety fraction: 0.95
+  late diffusion audit: Lmax(t_max)=12615.7 m; recommended radius/depth>=25231.3 m; refinement box radius=1000 m; refinement box depth=500 m; refinement mesh_size=80 m; refinement_underresolved=True; domain radius=30000 m; domain depth=30000 m; domain_underresolved=False
+  transient sponge: enabled=False; strength=0.000000e+00 S/m; thickness=0 m; power=2; apply_to_initial=False; sides=x_min,x_max,y_min,y_max,z_min,z_max
+  time method: theta
+  time origin: after_ramp
+  time theta: 1
+  ramp-off time: 1e-05 s
+  time samples: t_min=1e-05 s; t_max=1 s; ramp_solver_t_min=1e-06 s; min_steps_during_turnoff=10; min_steps_before_first_observation=4
+  empymod srcpts: 21; ht=dlf; ft=dlf
+  rho_air=1e+06 ohm m; layer_depths=[350, 650] m; layer_resistivities=[100, 100, 100] ohm m
+
+error metrics with floor denominator denom=max(abs(F_ref), 1e-6*max(abs(F_ref))):
+  Ex: mean=4.641436e-01, median=3.796193e-01, RMS=6.936984e-01, max=2.175801e+00 at t=1.024000e-02 s, floor=8.985278e-10
+  Ey: mean=1.171541e+09, median=2.474540e+08, RMS=1.836611e+09, max=4.104474e+09 at t=1.000000e-05 s, floor=1.000000e-14
+    note: Ey reference is very small over much of the window; max relative error may be unrepresentative.
+  Hz: mean=3.314640e-01, median=3.529139e-01, RMS=4.187203e-01, max=6.595940e-01 at t=8.192000e-02 s, floor=2.197617e-09
+  dBzdt: mean=1.100395e+00, median=3.859030e-01, RMS=1.667065e+00, max=3.434224e+00 at t=8.192000e-02 s, floor=4.495067e-12
+  Eh_vector: mean=4.753441e-01, median=3.873511e-01, RMS=6.981207e-01, max=2.178190e+00 at t=1.024000e-02 s, floor=8.985278e-10
+
+receiver sampling diagnostics:
+  disk_average vs point:
+    Ex: max_rel_diff=3.452246e-02 at t=1.024000e-02 s; mean_rel_diff=6.742195e-03; max_abs_diff=2.027568e-06
+    Ey: max_rel_diff=1.384153e+01 at t=1.024000e-02 s; mean_rel_diff=1.109350e+00; max_abs_diff=2.102954e-06
+    dBzdt: max_rel_diff=4.865530e-02 at t=8.000000e-05 s; mean_rel_diff=1.539589e-02; max_abs_diff=2.096466e-07
+
+receiver vs reference diagnostics:
+  disk_average vs point:
+    Ex: candidate_max=2.175801e+00; baseline_max=2.069823e+00; improves=False
+    Ey: candidate_max=4.104474e+09; baseline_max=9.093317e+09; improves=True
+    dBzdt: candidate_max=3.434224e+00; baseline_max=3.431163e+00; improves=False
+
+magnetic recovery diagnostics:
+  faraday_integrated_dBzdt: max_rel_hz_diff=3.599363e+04 at t=1.000000e+00 s; max_abs_hz_diff=1.045008e-03; faraday_hz_final=1.044979e-03; reported_hz_final=-2.903315e-08
+
+strict physical-error passing window: none found for Ex, dBzdt, and Eh_vector max <= 0.05
+
+weak horizontal-component gate (reference max <= 0.1 * max(|Eh_ref|); absolute error scaled by max(|Eh_ref|)):
+  passed=True; primary_scale=8.985278e-04; weak_components=Ey
+  Ey: ref_max=9.750393e-22, scaled_abs_error_max=4.567999e-02, tolerance=5.000000e-02
+
+solver log:
+  step=0000 t_internal=1.000000e-06 dt=1.000000e-06 its=49 residual=1.663735e-06 reason=2
+  step=0001 t_internal=2.000000e-06 dt=1.000000e-06 its=49 residual=1.763926e-06 reason=2
+  step=0002 t_internal=3.000000e-06 dt=1.000000e-06 its=49 residual=1.829999e-06 reason=2
+  step=0003 t_internal=4.000000e-06 dt=1.000000e-06 its=49 residual=1.876146e-06 reason=2
+  step=0004 t_internal=5.000000e-06 dt=1.000000e-06 its=49 residual=1.914302e-06 reason=2
+  step=0005 t_internal=6.000000e-06 dt=1.000000e-06 its=49 residual=1.949032e-06 reason=2
+  step=0006 t_internal=7.000000e-06 dt=1.000000e-06 its=49 residual=1.981516e-06 reason=2
+  step=0007 t_internal=8.000000e-06 dt=1.000000e-06 its=49 residual=2.012114e-06 reason=2
+  step=0008 t_internal=9.000000e-06 dt=1.000000e-06 its=49 residual=2.041039e-06 reason=2
+  step=0009 t_internal=1.000000e-05 dt=1.000000e-06 its=49 residual=2.068467e-06 reason=2
+  step=0010 t_internal=1.250000e-05 dt=2.500000e-06 its=55 residual=2.000783e-06 reason=2
+  step=0011 t_internal=1.500000e-05 dt=2.500000e-06 its=55 residual=1.825809e-06 reason=2
+  step=0012 t_internal=1.750000e-05 dt=2.500000e-06 its=55 residual=1.661670e-06 reason=2
+  step=0013 t_internal=2.000000e-05 t_obs=1.000000e-05 dt=2.500000e-06 its=54 residual=2.138847e-06 reason=2
+  step=0014 t_internal=3.000000e-05 t_obs=2.000000e-05 dt=1.000000e-05 its=72 residual=1.816060e-06 reason=2
+  step=0015 t_internal=5.000000e-05 t_obs=4.000000e-05 dt=2.000000e-05 its=91 residual=1.509294e-06 reason=2
+  step=0016 t_internal=9.000000e-05 t_obs=8.000000e-05 dt=4.000000e-05 its=126 residual=1.145785e-06 reason=2
+  step=0017 t_internal=1.700000e-04 t_obs=1.600000e-04 dt=8.000000e-05 its=170 residual=7.764423e-07 reason=2
+  step=0018 t_internal=3.300000e-04 t_obs=3.200000e-04 dt=1.600000e-04 its=264 residual=5.099605e-07 reason=2
+  step=0019 t_internal=6.500000e-04 t_obs=6.400000e-04 dt=3.200000e-04 its=389 residual=3.013284e-07 reason=2
+  step=0020 t_internal=1.290000e-03 t_obs=1.280000e-03 dt=6.400000e-04 its=475 residual=1.593871e-07 reason=2
+  step=0021 t_internal=2.570000e-03 t_obs=2.560000e-03 dt=1.280000e-03 its=744 residual=8.863413e-08 reason=2
+  step=0022 t_internal=5.130000e-03 t_obs=5.120000e-03 dt=2.560000e-03 its=1741 residual=4.562052e-08 reason=2
+  step=0023 t_internal=1.025000e-02 t_obs=1.024000e-02 dt=5.120000e-03 its=2344 residual=2.244744e-08 reason=2
+  step=0024 t_internal=2.049000e-02 t_obs=2.048000e-02 dt=1.024000e-02 its=3470 residual=1.177456e-08 reason=2 div_clean_before=1.173273e+04 div_clean_after=7.261752e-07 div_clean_correction=1.870250e+02 div_clean_applied=1.870250e+02 div_clean_strength=1
+  step=0025 t_internal=4.097000e-02 t_obs=4.096000e-02 dt=2.048000e-02 its=1480 residual=7.902901e-10 reason=2 div_clean_before=6.333715e-04 div_clean_after=7.075596e-11 div_clean_correction=1.916853e-02 div_clean_applied=1.916853e-02 div_clean_strength=1
+  step=0026 t_internal=8.193000e-02 t_obs=8.192000e-02 dt=4.096000e-02 its=1922 residual=4.079960e-10 reason=2 div_clean_before=6.448248e-04 div_clean_after=3.795047e-11 div_clean_correction=1.208635e-02 div_clean_applied=1.208635e-02 div_clean_strength=1
+  step=0027 t_internal=1.638500e-01 t_obs=1.638400e-01 dt=8.192000e-02 its=1938 residual=2.068778e-10 reason=2 div_clean_before=6.165779e-04 div_clean_after=3.675382e-11 div_clean_correction=7.061792e-03 div_clean_applied=7.061792e-03 div_clean_strength=1
+  step=0028 t_internal=3.276900e-01 t_obs=3.276800e-01 dt=1.638400e-01 its=1742 residual=1.033461e-10 reason=2 div_clean_before=5.595391e-04 div_clean_after=1.662126e-11 div_clean_correction=3.773580e-03 div_clean_applied=3.773580e-03 div_clean_strength=1
+  step=0029 t_internal=6.553700e-01 t_obs=6.553600e-01 dt=3.276800e-01 its=2137 residual=4.814883e-11 reason=2 div_clean_before=4.764285e-04 div_clean_after=1.071939e-11 div_clean_correction=1.808310e-03 div_clean_applied=1.808310e-03 div_clean_strength=1
+  step=0030 t_internal=1.000010e+00 t_obs=1.000000e+00 dt=3.446400e-01 its=37 residual=2.718214e-11 reason=2 div_clean_before=3.296240e-04 div_clean_after=7.709987e-12 div_clean_correction=9.782299e-04 div_clean_applied=9.782299e-04 div_clean_strength=1
+
+[optimization note] The configured run exceeds the physical gate. Check likely causes:
+1. 3D FEM geometry and empymod air-earth geometry are inconsistent.
+2. Source normalization is inconsistent.
+3. empymod finite-length source integration needs more srcpts.
+4. Source or receiver lies exactly on the z=0 interface.
+5. Local mesh refinement around source/receiver is insufficient.
+6. Outer boundary is too close.
+7. Ramp-off waveform discretization is too coarse.
+8. dBz/dt extraction mode is inconsistent.
+9. Relative error is amplified where the reference value is near zero.
+
+Second-run suggestions:
+  - Use --force-mesh and reduce source/receiver local SizeMin.
+  - Increase --x-extent/--y-extent/--earth-depth/--air-height to audit boundary effects.
+  - Increase --wire-radius or refine the source region to improve source-volume integration.
+  - Reduce --time-growth or shorten the first-stage window to audit ramp-off discretization.

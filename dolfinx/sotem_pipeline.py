@@ -118,6 +118,7 @@ class PipelineConfig:
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
     divergence_cleaning: str = "none"  # none, conductivity
     divergence_cleaning_strength: float = 1.0
+    divergence_cleaning_t_obs_min: float = 0.0
     polarization: str = "none"  # none, cole-cole
     cole_rho0: float = 100.0
     cole_m: float = 0.2
@@ -525,6 +526,12 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "divergence_cleaning_strength must be finite and in [0, 1]; "
             f"got {divergence_cleaning_strength:.12g}"
         )
+    divergence_cleaning_t_obs_min = float(config.divergence_cleaning_t_obs_min)
+    if not math.isfinite(divergence_cleaning_t_obs_min) or divergence_cleaning_t_obs_min < 0.0:
+        raise ValueError(
+            "divergence_cleaning_t_obs_min must be finite and nonnegative; "
+            f"got {divergence_cleaning_t_obs_min:.12g}"
+        )
     initial_dc_mode = str(config.initial_dc_mode).strip().lower()
     if initial_dc_mode not in {"fem", "analytic_halfspace"}:
         raise ValueError("initial_dc_mode must be 'analytic_halfspace' or 'fem'")
@@ -711,6 +718,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "receiver_diagnostic_types": receiver_diagnostic_types,
             "divergence_cleaning": divergence_cleaning,
             "divergence_cleaning_strength": divergence_cleaning_strength,
+            "divergence_cleaning_t_obs_min": divergence_cleaning_t_obs_min,
             "diffusion_refinement": _diffusion_refinement_audit(config),
             "sponge": sponge,
             "time_method": time_method,
@@ -2450,6 +2458,13 @@ def _source_current(t: float, config: PipelineConfig) -> float:
     return config.source_current * (1.0 - t / config.ramp_off_time)
 
 
+def _should_apply_divergence_cleaning(t_internal: float, config: PipelineConfig) -> bool:
+    if _source_current(float(t_internal), config) != 0.0:
+        return False
+    t_obs = max(0.0, float(t_internal) - float(config.ramp_off_time))
+    return t_obs >= float(config.divergence_cleaning_t_obs_min)
+
+
 def _source_interval_average_didt(t0: float, t1: float, config: PipelineConfig) -> float:
     """Return interval-average dI/dt used by Backward-Euler source loading."""
 
@@ -3648,7 +3663,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             raise RuntimeError(f"KSP failed at step={step}, t={t:.6e}, reason={reason}, residual={residual:.6e}")
 
         clean_stats = None
-        if divergence_cleaner is not None and _source_current(float(t), config) == 0.0:
+        if divergence_cleaner is not None and _should_apply_divergence_cleaning(float(t), config):
             clean_stats = _apply_conductivity_divergence_cleaning(divergence_cleaner, E_new, operators, config)
         _update_debye_memories(debye, memories, E_new, dt)
         if magnetic_receiver_mode == "biot_current":
@@ -4879,6 +4894,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
         "divergence_cleaning": str(config.divergence_cleaning),
         "divergence_cleaning_strength": float(config.divergence_cleaning_strength),
+        "divergence_cleaning_t_obs_min": float(config.divergence_cleaning_t_obs_min),
         "polarization": str(config.polarization),
     }
     lines = []
@@ -5293,7 +5309,8 @@ def write_report(
         )
     lines.append(
         f"  divergence cleaning: {config.divergence_cleaning}; "
-        f"strength={float(config.divergence_cleaning_strength):.6g}"
+        f"strength={float(config.divergence_cleaning_strength):.6g}; "
+        f"t_obs_min={float(config.divergence_cleaning_t_obs_min):.6g} s"
     )
     lines.append(
         f"  checkpoint forward: {bool(config.checkpoint_forward)}; resume forward: {bool(config.resume_forward)}; "
@@ -6336,6 +6353,12 @@ def main(argv: list[str] | None = None) -> int:
         default=1.0,
         help="Fraction of the conductivity divergence-cleaning correction to apply; 1 keeps the existing full projection.",
     )
+    parser.add_argument(
+        "--divergence-cleaning-t-obs-min",
+        type=float,
+        default=0.0,
+        help="Only apply conductivity divergence cleaning after this post-ramp observation time in seconds.",
+    )
     parser.add_argument("--polarization", choices=["none", "cole-cole"], default="none")
     parser.add_argument("--cole-layer-top", type=float, default=0.0, help="Top depth of the polarizable Cole-Cole interval in meters.")
     parser.add_argument(
@@ -6442,6 +6465,7 @@ def main(argv: list[str] | None = None) -> int:
         receiver_evaluation_mode=args.receiver_evaluation_mode,
         divergence_cleaning=args.divergence_cleaning,
         divergence_cleaning_strength=args.divergence_cleaning_strength,
+        divergence_cleaning_t_obs_min=args.divergence_cleaning_t_obs_min,
         polarization=args.polarization,
         cole_layer_top=args.cole_layer_top,
         cole_layer_bottom=args.cole_layer_bottom,

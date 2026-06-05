@@ -1042,6 +1042,69 @@ Receiver mesh-sensitivity smoke:
 
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 
+## P2 Delayed Divergence-Cleaning Diagnostic
+
+After adding persistent divergence-cleaning solver-log fields, I added a
+diagnostic gate:
+
+```text
+--divergence-cleaning-t-obs-min <seconds>
+```
+
+The default is `0`, which preserves the previous behavior. A positive value
+delays conductivity divergence cleaning until the post-ramp observation time
+exceeds the configured threshold.
+
+Two WSL diagnostics were attempted with the corrected latest model geometry:
+
+- Fine run:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_substep4_divclean_delay008_growth2_diag`
+  used `source_mesh_size=40`, `receiver_mesh_size=20`,
+  `time_growth=2`, and `divergence_cleaning_t_obs_min=0.08`. It timed out
+  after 1 hour at `t_obs=0.04096 s`, before the cleaning gate was reached.
+  This run is not a validation result.
+- Coarse diagnostic:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_substep4_divclean_delay002_growth2_coarse_diag`
+  used `source_mesh_size=80`, `receiver_mesh_size=40`,
+  `time_growth=2`, and `divergence_cleaning_t_obs_min=0.02`. The first WSL
+  segment reached `t_obs=0.65536 s` after the 30 minute timeout; a resume
+  completed the final `1 s` output and wrote the full artifact set. The resume
+  report records `total=22.646 s`, `forward solve=10.274 s`, and
+  `empymod reference=1.822 s`.
+
+The coarse delayed-cleaning result does not meet the 5% target:
+
+```text
+max_error_Ex = 2.1758013524216264
+max_peak_normalized_error_Ex = 0.1816751111359116
+max_error_dBzdt = 3.4342239301412913
+max_peak_normalized_error_dBzdt = 0.0977590474346503
+physical_failed_components = Ex, Hz, dBzdt
+weak_component_passed = true
+```
+
+Key response comparison:
+
+```text
+t_obs=1 s:
+  Ex_pred = 2.5184030602385072e-08
+  Ex_ref  = 2.1069619302160945e-08
+
+t_obs=0.08192 s:
+  dBzdt_pred = 9.0908513912550654e-11
+  dBzdt_ref  = 2.0501561343036178e-11
+```
+
+Interpretation: delaying the projection can remove the late static electric
+offset, but the first cleaning step applies a very large correction
+(`div_clean_before=1.173273e+04`, `correction=1.870250e+02` at
+`t_obs=0.02048 s`) and the mid-time `dBzdt` response remains over-amplified.
+This supports the current root-cause diagnosis: the total-field E-form state
+contains a gradient/static residual, but a post-step projection is too
+aggressive for the inductive transient. The next P2 path should be a
+variational divergence-control term or a primary-secondary formulation, not
+more per-step projection tuning.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
@@ -1089,17 +1152,19 @@ This implementation round improves time-axis correctness and reporting/diagnosti
   Applying a half correction at every post-ramp step behaves nearly like full
   cleaning over the coarse full-window run, so it does not solve the P2
   full-window error.
+- `divergence_cleaning_t_obs_min` is a diagnostic gate. The coarse
+  `t_obs_min=0.02 s` run still fails the P2 physical gate, so delayed
+  post-step cleaning should not be treated as the accepted algorithm.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
 
 ## Next Steps
 
-1. Replace the current all-or-nothing post-ramp conductivity divergence
-   projection with a controlled consistency treatment. The next useful
-   experiments are delayed/thresholded cleaning and a variational divergence
-   control term; simple per-step strength scaling has already been shown to be
-   ineffective.
+1. Replace the current post-ramp conductivity divergence projection with a
+   variational consistency treatment or move to the primary-secondary solver
+   path. Simple per-step strength scaling and delayed post-step cleaning have
+   both been shown to be insufficient.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.
