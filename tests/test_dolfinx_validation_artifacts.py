@@ -68,6 +68,15 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
                 "candidate_count_min": 2,
                 "candidate_count_max": 2,
                 "candidate_count_mean": 2.0,
+                "multi_candidate_sample_count": 1,
+                "candidate_center_distance_min": 0.1,
+                "candidate_center_distance_max": 0.3,
+                "candidate_center_distance_mean": 0.2,
+                "selected_center_distance_mean": 0.1,
+                "selected_center_distance_max": 0.1,
+                "candidate_center_z_min": -0.3,
+                "candidate_center_z_max": -0.1,
+                "selected_center_z_mean": -0.1,
             },
             {
                 "time_obs": 1.0e-5,
@@ -81,6 +90,15 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
                 "candidate_count_min": 1,
                 "candidate_count_max": 3,
                 "candidate_count_mean": 1.8,
+                "multi_candidate_sample_count": 2,
+                "candidate_center_distance_min": 0.2,
+                "candidate_center_distance_max": 0.4,
+                "candidate_center_distance_mean": 0.3,
+                "selected_center_distance_mean": 0.2,
+                "selected_center_distance_max": 0.25,
+                "candidate_center_z_min": -0.4,
+                "candidate_center_z_max": -0.05,
+                "selected_center_z_mean": -0.05,
             },
         ],
     )
@@ -136,8 +154,21 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert {"time_obs", "receiver_type", "component", "pred", "ref", "relative_error_with_floor", "pass_5pct"} <= set(receiver_rows[0])
     diagnostic_rows = list(csv.DictReader((tmp_path / "receiver_diagnostics.csv").open("r", encoding="utf-8", newline="")))
     assert {"sample_count", "candidate_count_min", "candidate_count_max", "candidate_count_mean"} <= set(diagnostic_rows[0])
+    assert {
+        "multi_candidate_sample_count",
+        "candidate_center_distance_min",
+        "candidate_center_distance_max",
+        "candidate_center_distance_mean",
+        "selected_center_distance_mean",
+        "selected_center_distance_max",
+        "candidate_center_z_min",
+        "candidate_center_z_max",
+        "selected_center_z_mean",
+    } <= set(diagnostic_rows[0])
     assert diagnostic_rows[0]["sample_count"] == "1"
     assert diagnostic_rows[1]["candidate_count_max"] == "3"
+    assert diagnostic_rows[1]["multi_candidate_sample_count"] == "2"
+    assert float(diagnostic_rows[1]["selected_center_z_mean"]) == pytest.approx(-0.05)
 
 
 def test_validation_artifacts_report_physical_pass_for_weak_horizontal_component(tmp_path):
@@ -564,3 +595,66 @@ def test_receiver_candidate_collapse_supports_geometric_selection_modes():
         sp._collapse_receiver_cell_candidates(values, "shallowest", centers=centers, point=[0.0, 0.0, -0.1]),
         values[2],
     )
+
+
+def test_receiver_candidate_collapse_reports_geometric_metadata():
+    sp = _load_pipeline_module()
+    values = np.asarray(
+        [
+            [1.0, 10.0, 100.0],
+            [2.0, 20.0, 200.0],
+            [3.0, 30.0, 300.0],
+        ]
+    )
+    centers = np.asarray(
+        [
+            [0.0, 0.0, -10.0],
+            [1.0, 0.0, -0.05],
+            [0.0, 0.0, -0.02],
+        ]
+    )
+
+    collapsed, metadata = sp._collapse_receiver_cell_candidates_with_metadata(
+        values,
+        "nearest_center",
+        centers=centers,
+        point=[0.9, 0.0, -0.1],
+    )
+
+    np.testing.assert_allclose(collapsed, values[1])
+    assert metadata["selected_index"] == 1
+    assert metadata["candidate_count"] == 3
+    assert metadata["candidate_center_z_min"] == pytest.approx(-10.0)
+    assert metadata["candidate_center_z_max"] == pytest.approx(-0.02)
+    assert metadata["selected_center_distance"] == pytest.approx(np.linalg.norm([0.1, 0.0, 0.05]))
+    assert metadata["selected_center_z"] == pytest.approx(-0.05)
+
+
+def test_receiver_sample_aggregation_reports_candidate_geometry_stats():
+    sp = _load_pipeline_module()
+    sample_values = [
+        np.asarray([[1.0, 0.0, 10.0], [2.0, 0.0, 20.0]]),
+        np.asarray([[3.0, 0.0, 30.0]]),
+    ]
+    sample_centers = [
+        np.asarray([[0.0, 0.0, -1.0], [2.0, 0.0, -0.5]]),
+        np.asarray([[4.0, 0.0, -0.25]]),
+    ]
+    sample_points = [np.asarray([0.5, 0.0, -0.5]), np.asarray([3.0, 0.0, -0.25])]
+
+    aggregated, stats = sp._aggregate_receiver_sample_values_with_metadata(
+        sample_values,
+        "nearest_center",
+        sample_centers=sample_centers,
+        sample_points=sample_points,
+    )
+
+    np.testing.assert_allclose(aggregated, [2.0, 0.0, 20.0])
+    assert stats["multi_candidate_sample_count"] == 1
+    assert stats["candidate_center_distance_min"] == pytest.approx(np.sqrt(0.5))
+    assert stats["candidate_center_distance_max"] == pytest.approx(1.5)
+    assert stats["selected_center_distance_mean"] == pytest.approx((np.sqrt(0.5) + 1.0) / 2.0)
+    assert stats["selected_center_distance_max"] == pytest.approx(1.0)
+    assert stats["candidate_center_z_min"] == pytest.approx(-1.0)
+    assert stats["candidate_center_z_max"] == pytest.approx(-0.25)
+    assert stats["selected_center_z_mean"] == pytest.approx((-1.0 - 0.25) / 2.0)

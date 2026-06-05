@@ -2686,19 +2686,31 @@ def _receiver_config_for_type(config: PipelineConfig, receiver_type: str) -> Pip
 
 
 def _collapse_receiver_cell_candidates(values, mode: str, *, centers=None, point=None):
+    collapsed, _metadata = _collapse_receiver_cell_candidates_with_metadata(
+        values,
+        mode,
+        centers=centers,
+        point=point,
+    )
+    return collapsed
+
+
+def _collapse_receiver_cell_candidates_with_metadata(values, mode: str, *, centers=None, point=None):
     import numpy as np
 
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 2 or arr.shape[0] == 0:
         raise ValueError("receiver candidate values must have shape (n_candidates, n_components)")
     mode = str(mode).strip().lower()
+    selected_index = None
     if mode == "first_cell":
-        return arr[0]
-    if mode == "median":
-        return np.median(arr, axis=0)
-    if mode == "mean":
-        return np.mean(arr, axis=0)
-    if mode in {"nearest_center", "shallowest"}:
+        selected_index = 0
+        collapsed = arr[0]
+    elif mode == "median":
+        collapsed = np.median(arr, axis=0)
+    elif mode == "mean":
+        collapsed = np.mean(arr, axis=0)
+    elif mode in {"nearest_center", "shallowest"}:
         if centers is None:
             raise ValueError(f"receiver_evaluation_mode='{mode}' requires candidate cell centers")
         center_arr = np.asarray(centers, dtype=float)
@@ -2711,24 +2723,61 @@ def _collapse_receiver_cell_candidates(values, mode: str, *, centers=None, point
             idx = int(np.argmin(np.linalg.norm(center_arr - point_arr, axis=1)))
         else:
             idx = int(np.argmax(center_arr[:, 2]))
-        return arr[idx]
-    raise ValueError(
-        "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', or 'shallowest'"
-    )
+        selected_index = idx
+        collapsed = arr[idx]
+    else:
+        raise ValueError(
+            "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', or 'shallowest'"
+        )
+
+    metadata: dict[str, Any] = {"selected_index": selected_index, "candidate_count": int(arr.shape[0])}
+    if centers is not None:
+        center_arr = np.asarray(centers, dtype=float)
+        if center_arr.shape != (arr.shape[0], 3):
+            raise ValueError("candidate cell centers must have shape (n_candidates, 3)")
+        metadata["candidate_center_z_min"] = float(np.min(center_arr[:, 2]))
+        metadata["candidate_center_z_max"] = float(np.max(center_arr[:, 2]))
+        if point is not None:
+            point_arr = np.asarray(point, dtype=float).reshape(1, 3)
+            distances = np.linalg.norm(center_arr - point_arr, axis=1)
+            metadata["candidate_center_distance_min"] = float(np.min(distances))
+            metadata["candidate_center_distance_max"] = float(np.max(distances))
+            metadata["candidate_center_distance_mean"] = float(np.mean(distances))
+            if selected_index is not None:
+                metadata["selected_center_distance"] = float(distances[int(selected_index)])
+                metadata["selected_center_z"] = float(center_arr[int(selected_index), 2])
+    return collapsed, metadata
 
 
 def _aggregate_receiver_sample_values(sample_values, mode: str, *, sample_centers=None, sample_points=None):
+    aggregated, _metadata = _aggregate_receiver_sample_values_with_metadata(
+        sample_values,
+        mode,
+        sample_centers=sample_centers,
+        sample_points=sample_points,
+    )
+    return aggregated
+
+
+def _aggregate_receiver_sample_values_with_metadata(sample_values, mode: str, *, sample_centers=None, sample_points=None):
     import numpy as np
 
     centers = list(sample_centers or [None] * len(sample_values))
     points = list(sample_points or [None] * len(sample_values))
-    collapsed = [
-        _collapse_receiver_cell_candidates(values, mode, centers=centers[i], point=points[i])
-        for i, values in enumerate(sample_values)
-    ]
+    collapsed = []
+    sample_metadata = []
+    for i, values in enumerate(sample_values):
+        value, metadata = _collapse_receiver_cell_candidates_with_metadata(
+            values,
+            mode,
+            centers=centers[i],
+            point=points[i],
+        )
+        collapsed.append(value)
+        sample_metadata.append(metadata)
     if not collapsed:
         raise ValueError("at least one receiver sample value is required")
-    return np.mean(np.vstack(collapsed), axis=0)
+    return np.mean(np.vstack(collapsed), axis=0), _receiver_candidate_geometry_stats(sample_metadata)
 
 
 def _receiver_candidate_count_stats(counts) -> dict[str, float | int]:
@@ -2747,6 +2796,59 @@ def _receiver_candidate_count_stats(counts) -> dict[str, float | int]:
         "candidate_count_min": int(np.min(arr)),
         "candidate_count_max": int(np.max(arr)),
         "candidate_count_mean": float(np.mean(arr)),
+    }
+
+
+def _receiver_candidate_geometry_stats(sample_metadata) -> dict[str, float | int]:
+    import numpy as np
+
+    items = [dict(item) for item in sample_metadata or []]
+    if not items:
+        return {
+            "multi_candidate_sample_count": 0,
+            "candidate_center_distance_min": float("nan"),
+            "candidate_center_distance_max": float("nan"),
+            "candidate_center_distance_mean": float("nan"),
+            "selected_center_distance_mean": float("nan"),
+            "selected_center_distance_max": float("nan"),
+            "candidate_center_z_min": float("nan"),
+            "candidate_center_z_max": float("nan"),
+            "selected_center_z_mean": float("nan"),
+        }
+
+    distances = []
+    distance_mins = []
+    distance_maxs = []
+    selected_distances = []
+    selected_z = []
+    z_mins = []
+    z_maxs = []
+    multi_count = 0
+    for item in items:
+        if int(item.get("candidate_count", 0)) > 1:
+            multi_count += 1
+        if math.isfinite(float(item.get("candidate_center_distance_mean", math.nan))):
+            distances.append(float(item["candidate_center_distance_mean"]))
+            distance_mins.append(float(item["candidate_center_distance_min"]))
+            distance_maxs.append(float(item["candidate_center_distance_max"]))
+        if math.isfinite(float(item.get("selected_center_distance", math.nan))):
+            selected_distances.append(float(item["selected_center_distance"]))
+        if math.isfinite(float(item.get("candidate_center_z_min", math.nan))):
+            z_mins.append(float(item["candidate_center_z_min"]))
+            z_maxs.append(float(item["candidate_center_z_max"]))
+        if math.isfinite(float(item.get("selected_center_z", math.nan))):
+            selected_z.append(float(item["selected_center_z"]))
+
+    return {
+        "multi_candidate_sample_count": int(multi_count),
+        "candidate_center_distance_min": float(np.min(distance_mins)) if distance_mins else float("nan"),
+        "candidate_center_distance_max": float(np.max(distance_maxs)) if distance_maxs else float("nan"),
+        "candidate_center_distance_mean": float(np.mean(distances)) if distances else float("nan"),
+        "selected_center_distance_mean": float(np.mean(selected_distances)) if selected_distances else float("nan"),
+        "selected_center_distance_max": float(np.max(selected_distances)) if selected_distances else float("nan"),
+        "candidate_center_z_min": float(np.min(z_mins)) if z_mins else float("nan"),
+        "candidate_center_z_max": float(np.max(z_maxs)) if z_maxs else float("nan"),
+        "selected_center_z_mean": float(np.mean(selected_z)) if selected_z else float("nan"),
     }
 
 
@@ -2770,7 +2872,8 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     center_samples = []
     point_samples = []
     candidate_counts = []
-    cell_centers = _cell_centers(msh) if mode in {"nearest_center", "shallowest"} else None
+    needs_geometry_stats = bool(_parse_receiver_diagnostic_types(config)) or mode in {"nearest_center", "shallowest"}
+    cell_centers = _cell_centers(msh) if needs_geometry_stats else None
     for sample_point in _receiver_sampling_points(config):
         cells = _find_cells_for_point(msh, sample_point)
         if len(cells) == 0:
@@ -2794,7 +2897,7 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
         sample_centers=center_samples,
         sample_points=point_samples,
     )
-    dbdt_val = _aggregate_receiver_sample_values(
+    dbdt_val, candidate_geometry_stats = _aggregate_receiver_sample_values_with_metadata(
         dbdt_samples,
         mode,
         sample_centers=center_samples,
@@ -2802,6 +2905,7 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     )
     rec = {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
     rec.update(_receiver_candidate_count_stats(candidate_counts))
+    rec.update(candidate_geometry_stats)
     return rec
 
 
@@ -2828,6 +2932,15 @@ def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time
                 "candidate_count_min": int(rec.get("candidate_count_min", 0)),
                 "candidate_count_max": int(rec.get("candidate_count_max", 0)),
                 "candidate_count_mean": float(rec.get("candidate_count_mean", np.nan)),
+                "multi_candidate_sample_count": int(rec.get("multi_candidate_sample_count", 0)),
+                "candidate_center_distance_min": float(rec.get("candidate_center_distance_min", np.nan)),
+                "candidate_center_distance_max": float(rec.get("candidate_center_distance_max", np.nan)),
+                "candidate_center_distance_mean": float(rec.get("candidate_center_distance_mean", np.nan)),
+                "selected_center_distance_mean": float(rec.get("selected_center_distance_mean", np.nan)),
+                "selected_center_distance_max": float(rec.get("selected_center_distance_max", np.nan)),
+                "candidate_center_z_min": float(rec.get("candidate_center_z_min", np.nan)),
+                "candidate_center_z_max": float(rec.get("candidate_center_z_max", np.nan)),
+                "selected_center_z_mean": float(rec.get("selected_center_z_mean", np.nan)),
             }
         )
     return rows
@@ -6002,6 +6115,15 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
             "receiver_diagnostic_candidate_count_min": np.empty(0, dtype=int),
             "receiver_diagnostic_candidate_count_max": np.empty(0, dtype=int),
             "receiver_diagnostic_candidate_count_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_multi_candidate_sample_count": np.empty(0, dtype=int),
+            "receiver_diagnostic_candidate_center_distance_min": np.empty(0, dtype=float),
+            "receiver_diagnostic_candidate_center_distance_max": np.empty(0, dtype=float),
+            "receiver_diagnostic_candidate_center_distance_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_selected_center_distance_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_selected_center_distance_max": np.empty(0, dtype=float),
+            "receiver_diagnostic_candidate_center_z_min": np.empty(0, dtype=float),
+            "receiver_diagnostic_candidate_center_z_max": np.empty(0, dtype=float),
+            "receiver_diagnostic_selected_center_z_mean": np.empty(0, dtype=float),
         }
     return {
         "receiver_diagnostic_times": np.asarray([float(row["time_obs"]) for row in rows], dtype=float),
@@ -6031,6 +6153,33 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
         "receiver_diagnostic_candidate_count_mean": np.asarray(
             [float(row.get("candidate_count_mean", np.nan)) for row in rows], dtype=float
         ),
+        "receiver_diagnostic_multi_candidate_sample_count": np.asarray(
+            [int(row.get("multi_candidate_sample_count", 0)) for row in rows], dtype=int
+        ),
+        "receiver_diagnostic_candidate_center_distance_min": np.asarray(
+            [float(row.get("candidate_center_distance_min", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_candidate_center_distance_max": np.asarray(
+            [float(row.get("candidate_center_distance_max", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_candidate_center_distance_mean": np.asarray(
+            [float(row.get("candidate_center_distance_mean", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_selected_center_distance_mean": np.asarray(
+            [float(row.get("selected_center_distance_mean", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_selected_center_distance_max": np.asarray(
+            [float(row.get("selected_center_distance_max", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_candidate_center_z_min": np.asarray(
+            [float(row.get("candidate_center_z_min", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_candidate_center_z_max": np.asarray(
+            [float(row.get("candidate_center_z_max", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_selected_center_z_mean": np.asarray(
+            [float(row.get("selected_center_z_mean", np.nan)) for row in rows], dtype=float
+        ),
     }
 
 
@@ -6047,6 +6196,15 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
     candidate_min = np.asarray(payload["receiver_diagnostic_candidate_count_min"], dtype=int) if "receiver_diagnostic_candidate_count_min" in payload.files else np.zeros(times.size, dtype=int)
     candidate_max = np.asarray(payload["receiver_diagnostic_candidate_count_max"], dtype=int) if "receiver_diagnostic_candidate_count_max" in payload.files else np.zeros(times.size, dtype=int)
     candidate_mean = np.asarray(payload["receiver_diagnostic_candidate_count_mean"], dtype=float) if "receiver_diagnostic_candidate_count_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    multi_candidate = np.asarray(payload["receiver_diagnostic_multi_candidate_sample_count"], dtype=int) if "receiver_diagnostic_multi_candidate_sample_count" in payload.files else np.zeros(times.size, dtype=int)
+    distance_min = np.asarray(payload["receiver_diagnostic_candidate_center_distance_min"], dtype=float) if "receiver_diagnostic_candidate_center_distance_min" in payload.files else np.full(times.size, np.nan, dtype=float)
+    distance_max = np.asarray(payload["receiver_diagnostic_candidate_center_distance_max"], dtype=float) if "receiver_diagnostic_candidate_center_distance_max" in payload.files else np.full(times.size, np.nan, dtype=float)
+    distance_mean = np.asarray(payload["receiver_diagnostic_candidate_center_distance_mean"], dtype=float) if "receiver_diagnostic_candidate_center_distance_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    selected_distance_mean = np.asarray(payload["receiver_diagnostic_selected_center_distance_mean"], dtype=float) if "receiver_diagnostic_selected_center_distance_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    selected_distance_max = np.asarray(payload["receiver_diagnostic_selected_center_distance_max"], dtype=float) if "receiver_diagnostic_selected_center_distance_max" in payload.files else np.full(times.size, np.nan, dtype=float)
+    center_z_min = np.asarray(payload["receiver_diagnostic_candidate_center_z_min"], dtype=float) if "receiver_diagnostic_candidate_center_z_min" in payload.files else np.full(times.size, np.nan, dtype=float)
+    center_z_max = np.asarray(payload["receiver_diagnostic_candidate_center_z_max"], dtype=float) if "receiver_diagnostic_candidate_center_z_max" in payload.files else np.full(times.size, np.nan, dtype=float)
+    selected_z_mean = np.asarray(payload["receiver_diagnostic_selected_center_z_mean"], dtype=float) if "receiver_diagnostic_selected_center_z_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
     rows = []
     for i, time_obs in enumerate(times):
         rows.append(
@@ -6062,6 +6220,15 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
                 "candidate_count_min": int(candidate_min[i]) if i < candidate_min.size else 0,
                 "candidate_count_max": int(candidate_max[i]) if i < candidate_max.size else 0,
                 "candidate_count_mean": float(candidate_mean[i]) if i < candidate_mean.size else float("nan"),
+                "multi_candidate_sample_count": int(multi_candidate[i]) if i < multi_candidate.size else 0,
+                "candidate_center_distance_min": float(distance_min[i]) if i < distance_min.size else float("nan"),
+                "candidate_center_distance_max": float(distance_max[i]) if i < distance_max.size else float("nan"),
+                "candidate_center_distance_mean": float(distance_mean[i]) if i < distance_mean.size else float("nan"),
+                "selected_center_distance_mean": float(selected_distance_mean[i]) if i < selected_distance_mean.size else float("nan"),
+                "selected_center_distance_max": float(selected_distance_max[i]) if i < selected_distance_max.size else float("nan"),
+                "candidate_center_z_min": float(center_z_min[i]) if i < center_z_min.size else float("nan"),
+                "candidate_center_z_max": float(center_z_max[i]) if i < center_z_max.size else float("nan"),
+                "selected_center_z_mean": float(selected_z_mean[i]) if i < selected_z_mean.size else float("nan"),
             }
         )
     return rows
@@ -6090,6 +6257,15 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
         "candidate_count_min",
         "candidate_count_max",
         "candidate_count_mean",
+        "multi_candidate_sample_count",
+        "candidate_center_distance_min",
+        "candidate_center_distance_max",
+        "candidate_center_distance_mean",
+        "selected_center_distance_mean",
+        "selected_center_distance_max",
+        "candidate_center_z_min",
+        "candidate_center_z_max",
+        "selected_center_z_mean",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -6108,6 +6284,15 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
                     "candidate_count_min": int(row.get("candidate_count_min", 0)),
                     "candidate_count_max": int(row.get("candidate_count_max", 0)),
                     "candidate_count_mean": float(row.get("candidate_count_mean", math.nan)),
+                    "multi_candidate_sample_count": int(row.get("multi_candidate_sample_count", 0)),
+                    "candidate_center_distance_min": float(row.get("candidate_center_distance_min", math.nan)),
+                    "candidate_center_distance_max": float(row.get("candidate_center_distance_max", math.nan)),
+                    "candidate_center_distance_mean": float(row.get("candidate_center_distance_mean", math.nan)),
+                    "selected_center_distance_mean": float(row.get("selected_center_distance_mean", math.nan)),
+                    "selected_center_distance_max": float(row.get("selected_center_distance_max", math.nan)),
+                    "candidate_center_z_min": float(row.get("candidate_center_z_min", math.nan)),
+                    "candidate_center_z_max": float(row.get("candidate_center_z_max", math.nan)),
+                    "selected_center_z_mean": float(row.get("selected_center_z_mean", math.nan)),
                 }
             )
 

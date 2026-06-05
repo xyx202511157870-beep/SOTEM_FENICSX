@@ -370,6 +370,74 @@ source transfer, boundary/domain setup, and primary-secondary formulation are
 still higher-value next diagnostics than a blind local mesh-size sweep. WSL was
 shut down after the run and confirmed `Stopped`.
 
+Receiver cell-candidate geometry diagnostic update:
+
+- `dolfinx/sotem_pipeline.py` now writes additional receiver diagnostic fields
+  for candidate-cell geometry:
+  `multi_candidate_sample_count`, candidate-center distance min/max/mean,
+  selected-center distance mean/max, candidate-center z min/max, and
+  selected-center z mean.
+- These fields are written to `receiver_diagnostics.csv` and persisted through
+  forward checkpoint/partial payloads.
+- The default lightweight receiver path remains unchanged unless receiver
+  diagnostics are requested or the evaluation mode is `nearest_center` or
+  `shallowest`.
+
+WSL coarse receiver-geometry smoke for the corrected explicit geometry:
+
+```text
+workdir = dolfinx/current_task_runs/y200_rxminus300_receiver_geometry_diag_coarse
+source_mesh_size = 200 m
+receiver_mesh_size = 200 m
+receiver_evaluation_mode = nearest_center
+receiver_diagnostic_types = point,disk_average,volume_average
+t_obs = 1.0e-5 s
+stop_after_outputs = 1
+```
+
+Runtime outcome:
+
+```text
+mesh nodes = 2434
+mesh cells reported by DOLFINx = 12575
+Nedelec dofs = 15330
+estimated solver memory = 0.4299255 GB
+WSL wall time = 40.2 s
+WSL shutdown state after run = Ubuntu Stopped
+```
+
+First-output error summary:
+
+```text
+point Ex robust error = 0.4934159805166578
+point Ey robust error = 21390432199.75224
+point Hz robust error = 0.18925507396055294
+point dBzdt robust error = 0.011191680824714136
+```
+
+Receiver-geometry diagnostic at the point receiver:
+
+```text
+sample_count = 1
+candidate_count = 18
+candidate_center_distance_min = 30.683430835714788 m
+candidate_center_distance_max = 95.46041877884072 m
+candidate_center_distance_mean = 54.74736420492263 m
+candidate_center_z_min = -89.49570752684954 m
+candidate_center_z_max = -0.025 m
+selected_center_distance_mean = 30.683430835714788 m
+selected_center_z_mean = -0.025 m
+```
+
+Interpretation: the coarse receiver cell geometry is not a reliable point
+evaluation environment. The selected near-surface cell is still about `30.7 m`
+from the receiver, while colliding candidates extend down to about `89.5 m`.
+The point `dBzdt` happened to pass the 5% gate at the first output, but `Ex`,
+`Hz`, and the weak-component-scaled `Ey` did not. Disk/volume averaging did not
+improve `Ex` or `dBzdt` against empymod in this smoke. This supports continuing
+with receiver/source-aligned mesh construction and the primary-secondary
+formulation rather than treating averaging as a fix.
+
 Lightweight P0-P2 tests:
 
 ```bash
