@@ -1232,6 +1232,45 @@ dimensionless `1e-3`. This smoke is not an accuracy acceptance run; the coarse
 two-point run still exceeds the physical gate and only validates the new
 diagnostic/control plumbing.
 
+## P2 LHS Divergence-Control Short-Window Sweep
+
+I ran a controlled short-window no-IP sweep using the same corrected latest
+model and the same coarse mesh settings as the `lhs` smoke:
+
+```text
+source = (-500, 200, -0.1) -> (500, 200, -0.1)
+receiver = (0, -300, -0.1)
+t_obs = 1e-5, 2e-5 s
+source_mesh_size = 180 m
+receiver_mesh_size = 120 m
+divergence_control_scale = lhs
+relative weights = 0, 1e-5, 1e-4, 1e-3
+```
+
+Summary artifacts:
+
+```text
+dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_divcontrol_lhs_sweep_summary
+```
+
+The sweep table is:
+
+```text
+relative_weight  max_peak_error_Ex  max_peak_error_dBzdt  max_applied_weight
+0                0.6724526431       0.6486769606          0
+1e-5             0.6724526438       0.6486769648          0.113733704
+1e-4             0.6724526471       0.6486769711          1.137337039
+1e-3             0.6724526775       0.6486769895          11.373370395
+```
+
+Interpretation: on this controlled short-window mesh, the normalized
+divergence-control term does not reduce the early Ex or dBzdt disagreement
+with empymod. Increasing the relative weight slightly worsens the metrics. This
+is evidence that the dominant early-time discrepancy is not primarily fixed by
+weak divergence damping. The next useful P2 work should focus on source/receiver
+consistency and the primary-secondary path instead of continuing to tune this
+variational penalty.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
@@ -1285,7 +1324,8 @@ diagnostic/control plumbing.
 - `divergence_control_weight` is implemented only as a diagnostic weak
   divergence-control term for non-polarizable E-form runs. The `lhs` scale mode
   now makes the weight dimensionless relative to the implicit LHS matrix, but
-  it is still a diagnostic path and does not meet the P2 5% gate.
+  it is still a diagnostic path and does not meet the P2 5% gate. A controlled
+  short-window sweep over relative weights `0..1e-3` did not improve Ex/dBzdt.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
@@ -1297,8 +1337,9 @@ diagnostic/control plumbing.
    path. Simple per-step strength scaling and delayed post-step cleaning have
    both been shown to be insufficient.
    The new divergence-control path now has dimensionless `lhs` scaling; the
-   next step is a short-window sweep over relative weights before any full
-   fine-grid run.
+   short-window sweep did not improve the early error, so the next step should
+   shift to source/receiver consistency audits and the primary-secondary path
+   before any full fine-grid run.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.
