@@ -1,0 +1,10 @@
+cases:
+  - name: no_boundary_dt1ms
+    overrides:
+      boundary:
+        kind: none
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: low_frequency_ratio
+      time_steps:
+        - [0.001, 12]

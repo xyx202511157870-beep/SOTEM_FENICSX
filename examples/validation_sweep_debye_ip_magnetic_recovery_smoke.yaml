@@ -1,0 +1,34 @@
+cases:
+  - name: current_biot_strict_sub1_20step
+    overrides:
+      time_steps:
+        - [1.0e-05, 20]
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+
+  - name: current_biot_delta6_sub1_20step
+    overrides:
+      time_steps:
+        - [1.0e-05, 20]
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+      magnetic_recovery_source_primary_delta6: true
+
+  - name: edge_basis_cell_biot_strict_sub1_20step
+    overrides:
+      time_steps:
+        - [1.0e-05, 20]
+      magnetic_receiver_mode: edge_basis_cell_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+
+  - name: edge_basis_cell_biot_delta6_sub1_20step
+    overrides:
+      time_steps:
+        - [1.0e-05, 20]
+      magnetic_receiver_mode: edge_basis_cell_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+      magnetic_recovery_source_primary_delta6: true

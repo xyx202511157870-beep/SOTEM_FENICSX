@@ -1,0 +1,44 @@
+coordinate_system: z_up
+
+mesh:
+  # Lightweight validation scaffold. Increase padding and refine the core for
+  # quantitative acceptance runs.
+  hx: [[10.0, 3, -1.25], [5.0, 16], [10.0, 3, 1.25]]
+  hy: [[10.0, 3, -1.25], [5.0, 8], [10.0, 3, 1.25]]
+  hz: [[20.0, 3], [5.0, 8], [20.0, 3]]
+  origin: [-87.65625, -67.65625, -100.0]
+
+model:
+  require_layer_boundary_alignment: true
+  layers:
+    - top: 1000000000.0
+      bottom: 0.0
+      sigma_infinity: 1.0e-8
+    - top: 0.0
+      bottom: -40.0
+      sigma_infinity: 0.01
+    - top: -40.0
+      bottom: -1000000000.0
+      sigma_infinity: 0.03
+
+boundary:
+  # Use none for the first empymod physics check; use the boundary benchmark
+  # workflow separately to qualify sponge parameters.
+  kind: none
+
+source:
+  start: [-25.0, 0.0, -0.5]
+  end: [25.0, 0.0, -0.5]
+  current: 1.0
+  waveform:
+    type: step_off
+    off_time: 0.0
+    on_value: 1.0
+
+time_steps: [0.001, 0.001, 0.005, 0.005]
+
+receiver_line:
+  x: [-20.0, 0.0, 20.0]
+  y: 10.0
+  z: -0.5
+  components: [Ex, Ey, Hz]

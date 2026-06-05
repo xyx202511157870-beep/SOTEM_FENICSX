@@ -1,0 +1,25 @@
+cases:
+  - name: stored_h
+    overrides: {}
+  - name: current_biot_sub1
+    overrides:
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+  - name: current_biot_sub5
+    overrides:
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 5
+  - name: face_basis_cell_biot_sub5
+    overrides:
+      magnetic_receiver_mode: face_basis_cell_biot
+      magnetic_recovery_subdivisions: 5
+  - name: face_basis_cell_biot_lowfreq_sub5
+    overrides:
+      magnetic_receiver_mode: face_basis_cell_biot
+      magnetic_recovery_subdivisions: 5
+      magnetic_recovery_polarization_scale: low_frequency_ratio
+  - name: face_basis_cell_biot_initial1_sub5
+    overrides:
+      magnetic_receiver_mode: face_basis_cell_biot
+      magnetic_recovery_subdivisions: 5
+      magnetic_recovery_initial_polarization_scale: 1.0

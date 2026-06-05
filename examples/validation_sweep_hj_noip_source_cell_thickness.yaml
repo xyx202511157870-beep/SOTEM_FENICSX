@@ -1,0 +1,43 @@
+cases:
+  source_cell_1p00m:
+    magnetic_recovery_subdivisions: 5
+    mesh:
+      hz:
+        - [80.0, 8]
+        - [5.0, 7]
+        - [1.0, 4]
+        - [1.0, 1]
+        - [80.0, 3]
+  source_cell_0p75m:
+    magnetic_recovery_subdivisions: 5
+    mesh:
+      hz:
+        - [80.0, 8]
+        - [5.0, 7]
+        - [1.0, 4]
+        - [0.125, 1]
+        - [0.75, 1]
+        - [0.125, 1]
+        - [80.0, 3]
+  source_cell_0p50m:
+    magnetic_recovery_subdivisions: 5
+    mesh:
+      hz:
+        - [80.0, 8]
+        - [5.0, 7]
+        - [1.0, 4]
+        - [0.25, 1]
+        - [0.5, 1]
+        - [0.25, 1]
+        - [80.0, 3]
+  source_cell_0p25m:
+    magnetic_recovery_subdivisions: 5
+    mesh:
+      hz:
+        - [80.0, 8]
+        - [5.0, 7]
+        - [1.0, 4]
+        - [0.375, 1]
+        - [0.25, 1]
+        - [0.375, 1]
+        - [80.0, 3]

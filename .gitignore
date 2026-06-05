@@ -1,0 +1,29 @@
+.numba_cache/
+.pytest_cache/
+.tmp/
+.tmp2/
+tmp/
+outputs/
+__pycache__/
+*.py[cod]
+*.nbc
+*.nbi
+
+# Generated modelling outputs
+*.msh
+*.h5
+*.npz
+*.npy
+*.log
+dolfinx/paper_reproduction/
+dolfinx/runs/
+dolfinx/figures/
+dolfinx/analyticdc_small_smoke/
+dolfinx/empymod_analytic_check/
+dolfinx/sponge_smoke_small/
+dolfinx/sponge_uniform*/
+dolfinx/uniform*/
+
+# Local papers and large documents
+*.pdf
+*.docx

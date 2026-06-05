@@ -1,0 +1,32 @@
+cases:
+  - name: current_biot_delta6_wire_sub1
+    overrides:
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+      magnetic_recovery_source_primary_delta6: true
+      magnetic_recovery_source_primary_delta6_basis: wire
+
+  - name: current_biot_delta6_edge_current_sub1
+    overrides:
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+      magnetic_recovery_source_primary_delta6: true
+      magnetic_recovery_source_primary_delta6_basis: edge_current
+
+  - name: edge_basis_cell_biot_delta6_wire_sub1
+    overrides:
+      magnetic_receiver_mode: edge_basis_cell_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+      magnetic_recovery_source_primary_delta6: true
+      magnetic_recovery_source_primary_delta6_basis: wire
+
+  - name: edge_basis_cell_biot_delta6_edge_current_sub1
+    overrides:
+      magnetic_receiver_mode: edge_basis_cell_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: 1.0
+      magnetic_recovery_source_primary_delta6: true
+      magnetic_recovery_source_primary_delta6_basis: edge_current

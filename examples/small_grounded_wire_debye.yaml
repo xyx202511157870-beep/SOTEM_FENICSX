@@ -1,0 +1,37 @@
+mesh:
+  hx: [[2.0, 4, -1.25], [2.0, 10], [2.0, 4, 1.25]]
+  hy: [[2.0, 4, -1.25], [2.0, 8], [2.0, 4, 1.25]]
+  hz: [[2.0, 4, -1.25], [2.0, 6], [2.0, 4, 1.25]]
+  origin: CCC
+
+model:
+  sigma_infinity: 0.02
+  debye_terms:
+    - delta_sigma: 0.004
+      tau: 0.01
+
+boundary:
+  kind: sponge
+  thickness_cells: 2
+  strength: 0.2
+  power: 2.0
+  disable_ip_in_shell: true
+
+source:
+  start: [-5.0, 0.0, 0.0]
+  end: [5.0, 0.0, 0.0]
+  current: 1.0
+  waveform:
+    type: step_off
+    off_time: 0.0
+    on_value: 1.0
+
+time_steps: [0.0005, 0.0005, 0.001, 0.001, 0.002, 0.002]
+
+receivers:
+  - location: [0.0, 4.0, 0.0]
+    component: Ex
+  - location: [0.0, 4.0, 0.0]
+    component: Ey
+  - location: [0.0, 4.0, 0.0]
+    component: Hz

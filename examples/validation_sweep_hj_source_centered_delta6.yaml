@@ -1,0 +1,20 @@
+cases:
+  - name: current_biot_baseline
+    overrides:
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_source_primary_delta6: false
+
+  - name: current_biot_delta6_wire
+    overrides:
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_source_primary_delta6: true
+      magnetic_recovery_source_primary_delta6_basis: wire
+
+  - name: current_biot_delta6_face_current
+    overrides:
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_source_primary_delta6: true
+      magnetic_recovery_source_primary_delta6_basis: face_current

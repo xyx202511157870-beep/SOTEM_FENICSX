@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atem3d"
+version = "0.1.0"
+description = "Direct time-domain grounded-wire TDEM solver with Debye IP coupling."
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "scipy",
+  "discretize",
+  "simpeg",
+  "empymod",
+  "pymatsolver",
+  "PyYAML",
+  "h5py",
+  "matplotlib",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+atem3d-run = "atem3d.cli:main"
+atem3d-compare-empymod = "atem3d.compare_cli:main"
+atem3d-validate-empymod = "atem3d.empymod_validation_cli:main"
+atem3d-boundary-benchmark = "atem3d.benchmark_cli:main"
+atem3d-initial-field-diagnostics = "atem3d.initial_field_diagnostics_cli:main"
+atem3d-source-primary-fit = "atem3d.source_primary_cli:main"
+atem3d-empymod-source-primary-scan = "atem3d.empymod_source_primary_scan_cli:main"
+atem3d-ampere-source-projection = "atem3d.ampere_source_projection_cli:main"
+atem3d-source-history-matrix-fit = "atem3d.source_history_matrix_cli:main"
+atem3d-source-history-matrix-scan = "atem3d.source_history_matrix_scan_cli:main"
+atem3d-source-history-postprocess = "atem3d.source_history_postprocess_cli:main"
+atem3d-recovery-spectrum = "atem3d.recovery_spectrum_cli:main"
+atem3d-recovery-driven-trace-audit = "atem3d.recovery_driven_trace_audit_cli:main"
+atem3d-time-warp-audit = "atem3d.time_warp_audit_cli:main"
+atem3d-source-neighborhood-audit = "atem3d.source_neighborhood_audit_cli:main"
+atem3d-source-diffusion-law-audit = "atem3d.source_diffusion_law_audit_cli:main"
+atem3d-source-diffusion-amplitude-scale-audit = "atem3d.source_diffusion_amplitude_scale_audit_cli:main"
+atem3d-source-geometry-audit = "atem3d.source_geometry_audit_cli:main"
+atem3d-clean-delta-decomposition = "atem3d.clean_delta_decomposition_cli:main"
+atem3d-magnetic-recovery-decomposition = "atem3d.magnetic_recovery_decomposition_cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

@@ -1,0 +1,14 @@
+cases:
+  - name: ampere_initial_current_biot_lowfreq
+    overrides:
+      initial_magnetic_field: ampere
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: low_frequency_ratio
+
+  - name: biot_wire_initial_current_biot_lowfreq
+    overrides:
+      initial_magnetic_field: biot_savart_wire
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+      magnetic_recovery_polarization_scale: low_frequency_ratio

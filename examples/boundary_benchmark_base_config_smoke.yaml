@@ -1,0 +1,48 @@
+tolerance: 0.5
+absolute_tolerance: 1.0e-7
+reference: sponge_strong
+component_names: [Ex, Hz]
+time_min: 0.01
+data_only: true
+
+base_config:
+  mesh:
+    hx: [1.0, 1.0, 1.0]
+    hy: [1.0, 1.0, 1.0]
+    hz: [1.0, 1.0, 1.0]
+    origin: [-1.5, -1.5, -1.5]
+  model:
+    sigma_infinity: 0.1
+  boundary:
+    kind: none
+  source:
+    start: [-0.5, 0.0, 0.0]
+    end: [0.5, 0.0, 0.0]
+    current: 1.0
+    waveform: {type: step_off, off_time: 0.0}
+  time_steps: [0.01, 0.01]
+  receivers:
+    - {location: [0.0, 0.5, 0.0], component: Ex}
+    - {location: [0.0, 0.5, 0.0], component: Hz}
+
+cases:
+  - name: no_boundary
+    overrides:
+      boundary:
+        kind: none
+
+  - name: sponge_weak
+    overrides:
+      boundary:
+        kind: sponge
+        thickness_cells: 1
+        strength: 0.2
+        power: 2.0
+
+  - name: sponge_strong
+    overrides:
+      boundary:
+        kind: sponge
+        thickness_cells: 1
+        strength: 0.4
+        power: 2.0

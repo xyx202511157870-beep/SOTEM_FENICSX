@@ -1,0 +1,20 @@
+cases:
+  - name: no_boundary_current_biot
+    overrides:
+      boundary:
+        kind: none
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
+
+  - name: sponge4_strength0p1_current_biot
+    overrides:
+      boundary:
+        kind: sponge
+        thickness_cells: 4
+        strength: 0.1
+        power: 2.0
+        disable_ip_in_shell: true
+        apply_to_initial: false
+        sides: [x_min, x_max, y_min, y_max, z_min]
+      magnetic_receiver_mode: current_biot
+      magnetic_recovery_subdivisions: 1
