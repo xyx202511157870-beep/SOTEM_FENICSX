@@ -695,6 +695,62 @@ Receiver mesh-sensitivity smoke:
   ill-conditioned. This is not yet a full `1e-5 s` to `1 s` acceptance result;
   it is a first-point corrected-model smoke result.
 
+- Full-window continuation for the same directory was completed to
+  `t_obs=1.0 s` from the saved checkpoint.
+- The first resume using the default `--max-it 1000` reached
+  `t_obs=0.2869859254937225 s` but stopped at the iteration cap after about
+  `1942.5 s` wall time. This was a linear-solver iteration limit, not a memory
+  failure.
+- A second resume with `--max-it 3000` completed the remaining window to
+  `1.0 s`. The final postprocessed report records 53 observation times and a
+  postprocess-only runtime of `6.437 s`; the final resume segment took about
+  `100.9 s` wall time in WSL.
+- Full-window result:
+  - `pass_all_components = false`
+  - `physical_pass_all_components = false`
+  - `physical_failed_components = ["Ex", "Hz", "dBzdt"]`
+  - `weak_components = ["Ey"]`
+  - `weak_component_passed = true`
+  - `weak_component_scaled_abs_error_max(Ey) = 0.04275824798239449`
+  - `max_error_Ex = 0.2976303365126635` at
+    `t_obs=0.03081487911019577 s`
+  - `max_error_Hz = 0.18380782675248264` at
+    `t_obs=0.012621774483536187 s`
+  - `max_error_dBzdt = 0.77079512254321` at
+    `t_obs=0.019721522630525293 s`
+  - `max_peak_normalized_error_Ex = 0.09545122731533442`
+  - `max_peak_normalized_error_Hz = 0.05201560660020918`
+  - `max_peak_normalized_error_dBzdt = 0.029014850706464392`
+- Receiver diagnostics over the 53-time full window:
+  - `disk_average` vs `point` `Ex` max relative difference:
+    `0.057614147566712`
+  - `disk_average` vs `point` `dBzdt` max relative difference:
+    `0.02935319014773`
+  - `disk_average` slightly improves reference error for `dBzdt` but does not
+    bring it below the `5%` robust-relative gate.
+- Magnetic recovery diagnostics:
+  - Faraday-integrated `Hz` from curl `dBzdt` ends at
+    `1.4787901570827183e-04`.
+  - Reported Biot-Savart `Hz` ends at `-2.0103580162363813e-08`.
+  - `max_relative_hz_difference = 7356.854753926774` at `t_obs=1.0 s`.
+  - This supports treating Biot-Savart `Hz` as an auxiliary diagnostic over the
+    full window; E-form validation should prioritize curl `dBzdt` until a
+    consistent Faraday-integrated `Hz` receiver is implemented.
+- Boundary/refinement diagnostic after report fix:
+  - `Lmax(t_max) = 12615.7 m`
+  - recommended radius/depth `>= 25231.3 m`
+  - finite domain radius/depth are both `30000 m`, so
+    `domain_underresolved = false`
+  - the separate late-diffusion local refinement box remains
+    `1000 m x 500 m`, so `refinement_underresolved = true`
+- Interpretation: the latest corrected no-IP total-field run now covers the
+  required `1e-5 s <= t_obs <= 1 s` window and writes all required P2
+  artifacts, but it does not meet the task-book `5%` physical gate. The weak
+  `Ey` treatment is no longer the main issue. The remaining failures are
+  dominated by mid-time `Ex`, magnetic recovery/`Hz`, and scalar robust
+  relative `dBzdt` when the reference has decayed, despite low
+  peak-normalized `dBzdt` error.
+
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.
 - Change: same as above, but `--magnetic-dbdt-mode biot_rate`.
@@ -762,6 +818,10 @@ This implementation round improves time-axis correctness and reporting/diagnosti
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.
   H-form diagnostic output still writes only the main receiver response.
 - Faraday-integrated `Hz` recovery is not implemented in this round.
+- Late-diffusion diagnostics now report finite-domain coverage separately from
+  the local refinement box. Existing artifacts generated before this fix may
+  still show the old ambiguous `actual radius/depth` wording until
+  regenerated with `--postprocess-partial`.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
@@ -771,8 +831,8 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
 - Full no-IP/IP `1e-5 s` to `1 s` 5% acceptance is not yet achieved. The latest
-  corrected-model no-IP smoke passes only the first output point under the
-  physical weak-component gate.
+  corrected-model no-IP run covers the full window, but the physical gate still
+  fails for `Ex`, `Hz`, and `dBzdt`; only the weak `Ey` gate passes.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.

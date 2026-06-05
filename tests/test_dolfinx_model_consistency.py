@@ -442,6 +442,27 @@ def test_late_time_diffusion_audit_accepts_explicit_diffusion_refinement_factor(
     assert audit["underresolved"] is False
 
 
+def test_late_time_diffusion_audit_reports_finite_domain_separately_from_refinement_box():
+    sp = _load_pipeline_module()
+
+    config = sp.PipelineConfig(
+        rho_earth=100.0,
+        t_max=1.0,
+        x_extent=30000.0,
+        y_extent=30000.0,
+        earth_depth=30000.0,
+        diffusion_refinement_factor=0.0,
+    )
+    audit = sp._diffusion_refinement_audit(config)
+
+    assert audit["box_radius"] == pytest.approx(1000.0)
+    assert audit["box_depth"] == pytest.approx(500.0)
+    assert audit["underresolved"] is True
+    assert audit["domain_horizontal_radius"] == pytest.approx(30000.0)
+    assert audit["domain_depth"] == pytest.approx(30000.0)
+    assert audit["domain_underresolved"] is False
+
+
 def test_ramp_start_time_origin_reports_ramp_start_reference_window():
     sp = _load_pipeline_module()
 

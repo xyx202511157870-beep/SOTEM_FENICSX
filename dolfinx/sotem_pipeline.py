@@ -304,13 +304,16 @@ def _diffusion_refinement_box(config: PipelineConfig) -> dict[str, float]:
 
 
 def _diffusion_refinement_audit(config: PipelineConfig) -> dict[str, Any]:
-    """Audit whether the late-diffusion mesh box covers the requested t_max."""
+    """Audit late diffusion coverage for both refinement and finite domain."""
 
     diffusion_length = _max_earth_diffusion_length(config)
     recommended_factor = 2.0
     recommended_radius = recommended_factor * diffusion_length
     box = _diffusion_refinement_box(config)
     underresolved = bool(box["radius"] < recommended_radius or box["depth"] < recommended_radius)
+    domain_horizontal_radius = min(float(config.x_extent), float(config.y_extent))
+    domain_depth = float(config.earth_depth)
+    domain_underresolved = bool(domain_horizontal_radius < recommended_radius or domain_depth < recommended_radius)
     return {
         "diffusion_length": float(diffusion_length),
         "recommended_factor": float(recommended_factor),
@@ -320,6 +323,9 @@ def _diffusion_refinement_audit(config: PipelineConfig) -> dict[str, Any]:
         "box_top": float(box["top"]),
         "mesh_size": float(box["mesh_size"]),
         "underresolved": underresolved,
+        "domain_horizontal_radius": float(domain_horizontal_radius),
+        "domain_depth": float(domain_depth),
+        "domain_underresolved": domain_underresolved,
     }
 
 
@@ -5100,11 +5106,14 @@ def write_report(
     lines.append(
         "  late diffusion audit: "
         f"Lmax(t_max)={diffusion_audit['diffusion_length']:.6g} m; "
-        f"recommended box radius/depth>={diffusion_audit['recommended_radius']:.6g} m; "
-        f"actual radius={diffusion_audit['box_radius']:.6g} m; "
-        f"actual depth={diffusion_audit['box_depth']:.6g} m; "
-        f"mesh_size={diffusion_audit['mesh_size']:.6g} m; "
-        f"underresolved={diffusion_audit['underresolved']}"
+        f"recommended radius/depth>={diffusion_audit['recommended_radius']:.6g} m; "
+        f"refinement box radius={diffusion_audit['box_radius']:.6g} m; "
+        f"refinement box depth={diffusion_audit['box_depth']:.6g} m; "
+        f"refinement mesh_size={diffusion_audit['mesh_size']:.6g} m; "
+        f"refinement_underresolved={diffusion_audit['underresolved']}; "
+        f"domain radius={diffusion_audit['domain_horizontal_radius']:.6g} m; "
+        f"domain depth={diffusion_audit['domain_depth']:.6g} m; "
+        f"domain_underresolved={diffusion_audit['domain_underresolved']}"
     )
     sponge = _sponge_diagnostics(config)
     lines.append(
