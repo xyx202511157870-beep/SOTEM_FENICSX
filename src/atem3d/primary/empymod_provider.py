@@ -17,14 +17,24 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
     config: dict[str, Any]
     reference_runner: Callable[..., np.ndarray] | None = None
     empymod_kwargs: dict[str, Any] | None = None
+    dc_runner: Callable[..., np.ndarray] | None = None
+    dc_kwargs: dict[str, Any] | None = None
 
     def get_Ep_on_V(self, t: float, V) -> np.ndarray:
         points = as_points(V, "points")
         return self._receiver_components(t, points, ["Ex", "Ey", "Ez"])
 
     def get_Ep_dc_on_V(self, V) -> np.ndarray:
-        as_points(V, "points")
-        raise NotImplementedError("EmpymodPrimaryProvider DC sampling is not implemented yet")
+        points = as_points(V, "points")
+        if self.dc_runner is None:
+            raise NotImplementedError("EmpymodPrimaryProvider DC sampling is not implemented yet")
+        values = np.asarray(
+            self.dc_runner(points, config=self.config, **(self.dc_kwargs or {})),
+            dtype=float,
+        )
+        if values.shape != points.shape:
+            raise ValueError("dc_runner returned an unexpected DC field shape")
+        return values.copy()
 
     def get_receiver_E(self, t: float, receivers) -> np.ndarray:
         points = as_points(receivers, "receivers")

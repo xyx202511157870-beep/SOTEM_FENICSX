@@ -206,9 +206,10 @@ Current P4 status:
   sample `Ex/Ey/Ez` at arbitrary FEM point coordinates. This is the first
   runner-backed FEM-space primary field sampling hook needed by the
   primary-secondary solver path.
-- `get_Ep_dc_on_V` is still pending; DC primary sampling needs either an
-  analytic/background DC provider or a dedicated injected DC runner before it
-  can be used in the DOLFINx primary-secondary initialization.
+- `EmpymodPrimaryProvider.get_Ep_dc_on_V` now accepts a dedicated injected
+  `dc_runner(points, config=..., **dc_kwargs)` and validates that it returns an
+  `(n_points, 3)` DC primary field table. A concrete analytic/background DC
+  backend is still pending.
 
 P5 DC secondary initialization tests:
 
@@ -1348,7 +1349,7 @@ field consistency, or the total-field formulation.
   still show the old ambiguous `actual radius/depth` wording until
   regenerated with `--postprocess-partial`.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
-- P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, and runner-backed FEM point `E_p(t)` sampling through an injected/reference runner; DC primary sampling and DOLFINx FEM interpolation remain pending.
+- P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, and injected DC primary point sampling; concrete analytic/1D DC backend wiring and DOLFINx FEM interpolation remain pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
@@ -1399,7 +1400,7 @@ field consistency, or the total-field formulation.
    it with any DOLFINx-native source assembly.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
-5. Continue P4 by adding DC primary sampling and wiring runner-backed `E_p(t)` samples into a DOLFINx FEM-space interpolation path.
+5. Continue P4 by adding a concrete analytic/1D DC primary backend and wiring runner-backed `E_p(t)`/`E_p,dc` samples into a DOLFINx FEM-space interpolation path.
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
 7. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
 8. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.

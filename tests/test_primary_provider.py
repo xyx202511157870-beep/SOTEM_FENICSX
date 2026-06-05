@@ -176,6 +176,29 @@ def test_empymod_primary_provider_get_Ep_on_V_uses_reference_runner():
     assert seen["kwargs"] == {"srcpts": 9}
 
 
+def test_empymod_primary_provider_get_Ep_dc_on_V_uses_dc_runner():
+    seen = {}
+
+    def fake_dc_runner(points, **kwargs):
+        seen["points"] = points.copy()
+        seen["kwargs"] = kwargs
+        return np.array([[0.1, 0.2, 0.3], [1.0, 2.0, 3.0]])
+
+    provider = EmpymodPrimaryProvider(
+        config=_empymod_provider_config(),
+        dc_runner=fake_dc_runner,
+        dc_kwargs={"method": "analytic_halfspace"},
+    )
+    points = np.array([[0.0, 10.0, -0.5], [1.0, 11.0, -0.5]])
+
+    values = provider.get_Ep_dc_on_V(points)
+
+    np.testing.assert_allclose(values, [[0.1, 0.2, 0.3], [1.0, 2.0, 3.0]])
+    np.testing.assert_allclose(seen["points"], points)
+    assert seen["kwargs"]["config"] == _empymod_provider_config()
+    assert seen["kwargs"]["method"] == "analytic_halfspace"
+
+
 def _empymod_provider_config():
     return {
         "source_start": [-25.0, 0.0, -0.5],
