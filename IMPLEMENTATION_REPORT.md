@@ -483,6 +483,45 @@ Receiver mesh-sensitivity smoke:
   and the shallow-interface total-field transfer still need improvement.
 
 - Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_src40_recv20_nearest_biotrate_smoke`.
+- Change: source mesh size `40 m`, source refinement radius `300 m`,
+  receiver mesh size `20 m`, `nearest_center`, one output point.
+- Mesh preflight: `142161` cells in the `.msh` file, estimated memory
+  `4.0858845 GB`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.11406489203543935`
+  - `max_error_Ey = 5952295267.625508`
+  - `max_error_Hz_or_dBzdt = 0.15683277651412947`
+  - `pass_all_components = false`
+- Diagnostic receiver comparison from the same solve:
+  - point `dBzdt` error: about `15.7%`.
+  - disk-average `dBzdt` error: about `3.0%` and passes the first-point
+    `5%` gate.
+- Interpretation: source-local refinement changes the early response
+  substantially. Compared with the source80/receiver20 run, `Ex` moves from
+  under-prediction to over-prediction, while disk/curl `dBzdt` becomes
+  acceptable for the first point. This makes the source transfer/local source
+  mesh a major remaining P2 error channel.
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_src60_recv20_diskcurl_smoke`.
+- Change: source mesh size `60 m`, source refinement radius `400 m`,
+  receiver mesh size `20 m`, main receiver `disk_average`, one output point.
+- Mesh preflight: `128553` cells in the `.msh` file, estimated memory
+  `3.6948645 GB`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.43962372084123774`
+  - `max_error_Ey = 26621862371.412643`
+  - `max_error_Hz_or_dBzdt = 0.057429855867726115`
+  - `pass_all_components = false`
+- Interpretation: the source60/source-radius400 configuration is not a
+  useful midpoint; it strongly over-predicts `Ex`. The source mesh response is
+  non-monotonic, likely because the gmsh source-line embedding/local sizing
+  changes the Nedelec line-source projection and nearby shallow-interface
+  cells. The next improvement should make source projection diagnostics local
+  and geometric, not just global residuals.
+
+- Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_recv10_diskcurl_smoke`.
 - Change: receiver mesh size `10 m`, receiver refinement radius `120 m`,
   `--receiver-type disk_average`, `--magnetic-dbdt-mode curl`, one output
