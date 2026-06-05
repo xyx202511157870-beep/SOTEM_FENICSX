@@ -6,6 +6,7 @@ import pytest
 from atem3d.primary import (
     CachedPrimaryProvider,
     EmpymodPrimaryProvider,
+    PrimaryFEMInterpolator,
     PrimaryFieldProvider,
     ZeroPrimaryProvider,
     analytic_halfspace_dc_runner,
@@ -229,6 +230,68 @@ def test_analytic_halfspace_dc_runner_reads_empymod_provider_config():
     )
 
     np.testing.assert_allclose(runner_values, direct_values)
+
+
+def test_primary_fem_interpolator_calls_provider_and_injected_assembler():
+    points = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]])
+    seen = {}
+
+    class RecordingProvider(ZeroPrimaryProvider):
+        def get_Ep_on_V(self, t, V):
+            seen["transient"] = (float(t), np.asarray(V).copy())
+            return np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+        def get_Ep_dc_on_V(self, V):
+            seen["dc"] = np.asarray(V).copy()
+            return np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+
+    def assembler(query_points, values):
+        seen["assembled"] = (query_points.copy(), values.copy())
+        return values.reshape(-1)
+
+    interpolator = PrimaryFEMInterpolator(
+        provider=RecordingProvider(),
+        points=points,
+        assembler=assembler,
+    )
+
+    np.testing.assert_allclose(interpolator.interpolate_Ep(0.25), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    np.testing.assert_allclose(interpolator.interpolate_Ep_dc(), [0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+    assert seen["transient"][0] == 0.25
+    np.testing.assert_allclose(seen["transient"][1], points)
+    np.testing.assert_allclose(seen["dc"], points)
+    np.testing.assert_allclose(seen["assembled"][0], points)
+
+
+def test_primary_fem_interpolator_zero_provider_returns_point_samples_without_assembler():
+    points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    interpolator = PrimaryFEMInterpolator(provider=ZeroPrimaryProvider(), points=points)
+
+    np.testing.assert_allclose(interpolator.interpolate_Ep(1.0e-3), np.zeros((2, 3)))
+    np.testing.assert_allclose(interpolator.interpolate_Ep_dc(), np.zeros((2, 3)))
+    np.testing.assert_allclose(interpolator.sample_Ep_times([0.0, 1.0]), np.zeros((2, 2, 3)))
+
+
+def test_primary_fem_interpolator_preserves_cached_provider_time_samples():
+    points = np.array([[0.0, 0.0, 0.0]])
+    receivers = np.array([[10.0, 0.0, 0.0]])
+    provider = CachedPrimaryProvider(
+        times=np.array([0.0, 2.0]),
+        points=points,
+        receivers=receivers,
+        Ep_on_V=np.array([[[0.0, 0.0, 0.0]], [[2.0, 4.0, 6.0]]]),
+        receiver_E=np.zeros((2, 1, 3)),
+        receiver_dBdt=np.zeros((2, 1, 3)),
+        Ep_dc_on_V=np.array([[10.0, 20.0, 30.0]]),
+    )
+    interpolator = PrimaryFEMInterpolator(provider=provider, points=points)
+
+    np.testing.assert_allclose(interpolator.sample_Ep(1.0), [[1.0, 2.0, 3.0]])
+    np.testing.assert_allclose(interpolator.sample_Ep_dc(), [[10.0, 20.0, 30.0]])
+    np.testing.assert_allclose(
+        interpolator.sample_Ep_times([0.0, 1.0, 2.0]),
+        [[[0.0, 0.0, 0.0]], [[1.0, 2.0, 3.0]], [[2.0, 4.0, 6.0]]],
+    )
 
 
 def _empymod_provider_config():
