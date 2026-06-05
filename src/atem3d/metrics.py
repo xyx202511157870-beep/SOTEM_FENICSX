@@ -131,12 +131,83 @@ def robust_component_errors(
         summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{key}"] = float(np.max(peak_values))
 
+    strict_failed_components = sorted(failed_components)
+    weak_gate = _weak_horizontal_component_gate(
+        numerical,
+        reference,
+        component_names,
+        threshold=float(threshold),
+    )
+    weak_components = set(weak_gate["weak_components"])
+    physical_failed_components = sorted(
+        component for component in failed_components if component not in weak_components
+    )
+    if not weak_gate["passed"]:
+        physical_failed_components.extend(
+            component for component in weak_gate["weak_components"] if component not in physical_failed_components
+        )
+
     summary["pass_all_components"] = len(failed_components) == 0
-    summary["failed_components"] = sorted(failed_components)
+    summary["failed_components"] = strict_failed_components
     summary["failed_times"] = sorted(failed_times)
+    summary["physical_pass_all_components"] = len(physical_failed_components) == 0
+    summary["physical_failed_components"] = sorted(physical_failed_components)
+    summary["weak_component_passed"] = bool(weak_gate["passed"])
+    summary["weak_components"] = list(weak_gate["weak_components"])
+    summary["weak_component_primary_scale"] = float(weak_gate["primary_scale"])
+    summary["weak_component_scaled_abs_error_max"] = dict(weak_gate["maxima"])
+    summary["weak_component_reference_max"] = dict(weak_gate["reference_maxima"])
     if magnetic_component is not None:
         summary["magnetic_quantity"] = magnetic_component
     return np.asarray(rows, dtype=dtype), summary
+
+
+def _weak_horizontal_component_gate(
+    numerical,
+    reference,
+    component_names,
+    *,
+    threshold: float,
+    weak_reference_fraction: float = 0.1,
+) -> dict[str, object]:
+    component_names = [str(name) for name in component_names]
+    if "Ex" not in component_names or "Ey" not in component_names:
+        return {
+            "passed": True,
+            "weak_components": [],
+            "primary_scale": 0.0,
+            "maxima": {},
+            "reference_maxima": {},
+        }
+
+    numerical = np.asarray(numerical, dtype=float)
+    reference = np.asarray(reference, dtype=float)
+    ix = component_names.index("Ex")
+    iy = component_names.index("Ey")
+    ref_horizontal = np.sqrt(reference[:, ix] ** 2 + reference[:, iy] ** 2)
+    primary_scale = float(np.max(np.abs(ref_horizontal))) if ref_horizontal.size else 0.0
+    if primary_scale <= 0.0:
+        primary_scale = float(np.max(np.abs(reference[:, [ix, iy]]))) if reference.size else 0.0
+    if primary_scale <= 0.0:
+        primary_scale = 1.0
+
+    weak_components: list[str] = []
+    maxima: dict[str, float] = {}
+    reference_maxima: dict[str, float] = {}
+    for component, index in (("Ex", ix), ("Ey", iy)):
+        ref_max = float(np.max(np.abs(reference[:, index]))) if reference.shape[0] else 0.0
+        if ref_max <= float(weak_reference_fraction) * primary_scale:
+            weak_components.append(component)
+            reference_maxima[component] = ref_max
+            maxima[component] = float(np.max(np.abs(numerical[:, index] - reference[:, index])) / primary_scale)
+
+    return {
+        "passed": bool(all(value <= float(threshold) for value in maxima.values())),
+        "weak_components": weak_components,
+        "primary_scale": primary_scale,
+        "maxima": maxima,
+        "reference_maxima": reference_maxima,
+    }
 
 
 def _default_component_floor(component: str, max_abs_ref: float) -> float:

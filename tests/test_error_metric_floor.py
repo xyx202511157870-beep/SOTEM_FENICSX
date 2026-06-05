@@ -36,3 +36,30 @@ def test_robust_component_errors_report_all_required_columns():
     assert summary["max_error_Ey"] == pytest.approx(0.2)
     assert summary["pass_all_components"] is False
 
+
+def test_robust_component_errors_reports_physical_pass_for_weak_horizontal_component():
+    times = np.array([1.0e-5, 1.0e-4])
+    ref = np.array(
+        [
+            [10.0, 1.0e-12, 2.0e-9],
+            [5.0, 2.0e-12, 1.0e-9],
+        ]
+    )
+    pred = ref.copy()
+    pred[:, 1] += np.array([0.1, -0.2])
+
+    rows, summary = robust_component_errors(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        threshold=0.05,
+    )
+
+    ey_rows = rows[rows["component"] == "Ey"]
+    assert bool(np.all(ey_rows["pass_5pct"])) is False
+    assert summary["pass_all_components"] is False
+    assert summary["physical_pass_all_components"] is True
+    assert summary["weak_component_passed"] is True
+    assert summary["weak_components"] == ["Ey"]
+    assert summary["physical_failed_components"] == []

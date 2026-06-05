@@ -3103,19 +3103,38 @@ def _biot_savart_cell_current_h_at_receiver(
         currents = _cell_current_density_from_debye_values(e_vals, sigma, delta_values, memory_values)
     else:
         currents = _cell_current_density_from_debye_values(e_vals, sigma)
-    receiver = np.asarray(config.receiver, dtype=float)
-    r = receiver[None, :] - centers
-    norm = np.linalg.norm(r, axis=1)
-    mask = norm > 0.0
-    h = np.zeros(3, dtype=float)
-    if np.any(mask):
-        h = np.sum(
-            volumes[mask, None]
-            * np.cross(currents[mask], r[mask])
-            / (4.0 * np.pi * norm[mask, None] ** 3),
-            axis=0,
-        )
-    return h
+    h_values = []
+    for receiver in _receiver_sampling_points(config):
+        r = np.asarray(receiver, dtype=float)[None, :] - centers
+        norm = np.linalg.norm(r, axis=1)
+        mask = norm > 0.0
+        h = np.zeros(3, dtype=float)
+        if np.any(mask):
+            h = np.sum(
+                volumes[mask, None]
+                * np.cross(currents[mask], r[mask])
+                / (4.0 * np.pi * norm[mask, None] ** 3),
+                axis=0,
+            )
+        h_values.append(h)
+    return np.mean(np.vstack(h_values), axis=0)
+
+
+def _biot_savart_line_h_at_receiver(config: PipelineConfig, *, current: float, n_quad: int = 201):
+    """Return finite-wire H using the same point/average receiver sampling as E/dBdt."""
+
+    import numpy as np
+
+    return np.mean(
+        _biot_savart_line_h(
+            _receiver_sampling_points(config),
+            np.asarray(config.source_start, dtype=float),
+            np.asarray(config.source_end, dtype=float),
+            current=float(current),
+            n_quad=int(n_quad),
+        ),
+        axis=0,
+    )
 
 
 def _biot_savart_total_h_at_receiver(
@@ -3140,12 +3159,10 @@ def _biot_savart_total_h_at_receiver(
         debye=debye,
         memories=memories,
     )
-    h += _biot_savart_line_h(
-        np.asarray(config.receiver, dtype=float).reshape(1, 3),
-        np.asarray(config.source_start, dtype=float),
-        np.asarray(config.source_end, dtype=float),
+    h += _biot_savart_line_h_at_receiver(
+        config,
         current=float(source_current),
-    )[0]
+    )
     return h
 
 
@@ -4142,9 +4159,34 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
         summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{key}"] = float(np.max(peak_values))
         summary[f"floor_{component}"] = floor
+    weak_gate = check_weak_component_error_window(
+        times,
+        pred,
+        ref,
+        components,
+        error_min_time=0.0,
+        tolerance=float(threshold),
+        weak_reference_fraction=0.1,
+    )
+    weak_components = set(weak_gate["weak_components"])
+    physical_failed_components = sorted(
+        component for component in failed_components if component not in weak_components
+    )
+    if not weak_gate["passed"]:
+        physical_failed_components.extend(
+            component for component in weak_gate["weak_components"] if component not in physical_failed_components
+        )
+
     summary["pass_all_components"] = len(failed_components) == 0
     summary["failed_components"] = sorted(failed_components)
     summary["failed_times"] = sorted(failed_times)
+    summary["physical_pass_all_components"] = len(physical_failed_components) == 0
+    summary["physical_failed_components"] = sorted(physical_failed_components)
+    summary["weak_component_passed"] = bool(weak_gate["passed"])
+    summary["weak_components"] = list(weak_gate["weak_components"])
+    summary["weak_component_primary_scale"] = float(weak_gate["primary_scale"])
+    summary["weak_component_scaled_abs_error_max"] = dict(weak_gate["maxima"])
+    summary["weak_component_reference_max"] = dict(weak_gate["reference_maxima"])
     summary["magnetic_quantity"] = magnetic_quantity or ""
     return rows, summary
 
@@ -4213,7 +4255,8 @@ def _write_validation_plots(workdir: Path, times, pred_data, ref_data, rows, com
 
 
 def _automatic_failure_diagnostics(summary: dict[str, Any], *, magnetic_receiver_mode: str) -> dict[str, Any]:
-    failed = not bool(summary.get("pass_all_components", False))
+    strict_failed = not bool(summary.get("pass_all_components", False))
+    failed = not bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
     checks = [
         "time_step_error",
         "mesh_error",
@@ -4225,10 +4268,14 @@ def _automatic_failure_diagnostics(summary: dict[str, Any], *, magnetic_receiver
     ]
     diagnostics = {
         "failed": failed,
+        "strict_failed": strict_failed,
         "failed_components": summary.get("failed_components", []),
+        "physical_failed_components": summary.get("physical_failed_components", summary.get("failed_components", [])),
         "failed_times": summary.get("failed_times", []),
         "recommended_check_order": checks,
         "magnetic_receiver_mode": magnetic_receiver_mode,
+        "weak_component_passed": summary.get("weak_component_passed", True),
+        "weak_components": summary.get("weak_components", []),
     }
     if failed and magnetic_receiver_mode.startswith("biot"):
         diagnostics["magnetic_recovery_note"] = (
@@ -4592,6 +4639,7 @@ def write_validation_artifacts(
         summary,
         magnetic_receiver_mode=str(config.magnetic_receiver_mode),
     )
+    diagnostics["validation_failure"] = dict(diagnostics)
     source_projection = _source_projection_diagnostics_from_info(source_info)
     diagnostics["source_consistency"] = diagnose_source_consistency(
         config,

@@ -65,6 +65,16 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     - `--magnetic-dbdt-mode curl` keeps the original E-form `-curl(E)` output.
     - `--magnetic-dbdt-mode biot_rate` uses the finite-difference rate of the
       Biot-Savart receiver `H` as a diagnostic `dBzdt` path.
+  - Validation summaries now distinguish strict component-wise acceptance from
+    physical acceptance:
+    - `pass_all_components` remains the strict per-component robust-error gate.
+    - `physical_pass_all_components` allows weak horizontal electric components
+      such as near-zero `Ey` to pass by absolute error scaled by
+      `max(|Eh_ref|)`.
+    - `weak_components`, `weak_component_passed`, and
+      `physical_failed_components` are written to `error_summary.json`.
+  - Biot-Savart receiver `Hz` and optional `biot_rate` now use the same
+    point/average receiver sampling points as `Ex/Ey` and curl `dBzdt`.
 
 - `dolfinx/legacy_total_field_baseline.py`
   - Frozen copy of the current total-field baseline implementation.
@@ -137,6 +147,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_time_grid.py`
 - `tests/test_error_metric_floor.py`
 - `tests/test_dolfinx_validation_artifacts.py`
+- `tests/test_dolfinx_biot_receiver.py`
 - `tests/test_prony.py`
 - `tests/test_primary_provider.py`
 - `tests/test_dc_initialization.py`
@@ -209,6 +220,12 @@ Empymod validation helper/CLI tests:
 
 ```bash
 python -m pytest -q tests/test_empymod_validation.py tests/test_empymod_validation_cli.py
+```
+
+Latest P2 receiver/error-summary regression command:
+
+```bash
+python -m pytest -q tests/test_dolfinx_validation_artifacts.py tests/test_dolfinx_partial_forward.py tests/test_dolfinx_model_consistency.py tests/test_dolfinx_analytic_dc.py tests/test_dolfinx_biot_receiver.py tests/test_error_metric_floor.py tests/test_noip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_empymod_validation_cli.py tests/test_empymod_validation.py
 ```
 
 P8 complex-terrain leakage-channel smoke tests:
@@ -657,6 +674,40 @@ Receiver mesh-sensitivity smoke:
   three-component `5%` pass.
 
 - Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_curl_q5001_weakgate_smoke`.
+- Change: same corrected latest model, dense automatic `5001`-point source
+  quadrature, charge-conserving source projection, main receiver
+  `disk_average`, `--magnetic-receiver-mode biot_current`, and
+  `--magnetic-dbdt-mode curl` so `dBzdt` follows the E-form `-curl(E)` path.
+- Runtime: total `114.865 s`, mesh `14.313 s`, setup `11.738 s`, forward solve
+  `83.496 s`, empymod reference `1.474 s`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.023888841807233482`
+  - `max_error_Ey = 3026120491.2908845`
+  - `max_error_Hz_or_dBzdt = 0.02873626890433773`
+  - `weak_component_scaled_abs_error_max(Ey) = 0.03378317518993349`
+  - `pass_all_components = false`
+  - `physical_pass_all_components = true`
+- Interpretation: for the first observation point, the physically meaningful
+  P2 gate passes: `Ex`, curl `dBzdt`, `Hz`, `Eh_vector`, and weak-`Ey` scaled
+  absolute error are all below `5%`. The strict row-wise component gate remains
+  false because ordinary/robust scalar relative error on near-zero `Ey` is
+  ill-conditioned. This is not yet a full `1e-5 s` to `1 s` acceptance result;
+  it is a first-point corrected-model smoke result.
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.
+- Change: same as above, but `--magnetic-dbdt-mode biot_rate`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.023888841807233482`
+  - `max_error_Hz_or_dBzdt = 0.1735791517790405`
+  - `weak_component_scaled_abs_error_max(Ey) = 0.03378317518993349`
+  - `physical_pass_all_components = false`
+- Interpretation: `biot_rate` remains a diagnostic magnetic-rate path and does
+  not pass the first-point `dBzdt` gate. The preferred P2 validation quantity
+  for E-form remains curl `dBzdt`.
+
+- Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_src60_recv20_diskcurl_smoke`.
 - Change: source mesh size `60 m`, source refinement radius `400 m`,
   receiver mesh size `20 m`, main receiver `disk_average`, one output point.
@@ -708,8 +759,8 @@ This implementation round improves time-axis correctness and reporting/diagnosti
   assembly.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
-  verification pipeline. H-form diagnostic output still writes only the main
-  receiver response.
+  verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.
+  H-form diagnostic output still writes only the main receiver response.
 - Faraday-integrated `Hz` recovery is not implemented in this round.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.
@@ -719,7 +770,9 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
-- Full no-IP/IP 5% acceptance is not yet achieved.
+- Full no-IP/IP `1e-5 s` to `1 s` 5% acceptance is not yet achieved. The latest
+  corrected-model no-IP smoke passes only the first output point under the
+  physical weak-component gate.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.

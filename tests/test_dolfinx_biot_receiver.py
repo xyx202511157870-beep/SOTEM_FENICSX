@@ -35,6 +35,31 @@ def test_biot_savart_line_h_matches_finite_wire_midpoint_formula():
     np.testing.assert_allclose(value, [0.0, 0.0, expected_hz], rtol=2.0e-5, atol=1.0e-12)
 
 
+def test_biot_savart_line_h_at_receiver_respects_disk_average_sampling():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        source_start=(-10.0, 0.0, -0.1),
+        source_end=(10.0, 0.0, -0.1),
+        receiver=(0.0, 5.0, -0.1),
+        receiver_type="disk_average",
+        receiver_average_radius=1.0,
+    )
+
+    value = sp._biot_savart_line_h_at_receiver(config, current=2.0, n_quad=401)
+    expected = np.mean(
+        sp._biot_savart_line_h(
+            sp._receiver_sampling_points(config),
+            np.asarray(config.source_start, dtype=float),
+            np.asarray(config.source_end, dtype=float),
+            current=2.0,
+            n_quad=401,
+        ),
+        axis=0,
+    )
+
+    np.testing.assert_allclose(value, expected, rtol=1.0e-12, atol=1.0e-14)
+
+
 def test_debye_cell_current_density_uses_memory_current():
     sp = _load_pipeline_module()
 

@@ -140,6 +140,42 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert diagnostic_rows[1]["candidate_count_max"] == "3"
 
 
+def test_validation_artifacts_report_physical_pass_for_weak_horizontal_component(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5, 1.0e-4])
+    ref = np.array(
+        [
+            [10.0, 1.0e-12, 2.0e-9],
+            [5.0, 2.0e-12, 1.0e-9],
+        ]
+    )
+    pred = ref.copy()
+    pred[:, 1] += np.array([0.1, -0.2])
+
+    summary = sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+    )
+
+    report = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    assert report["pass_all_components"] is False
+    assert report["physical_pass_all_components"] is True
+    assert report["weak_component_passed"] is True
+    assert report["weak_components"] == ["Ey"]
+    assert report["physical_failed_components"] == []
+    assert summary["physical_pass_all_components"] is True
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["validation_failure"]["failed"] is False
+    assert diagnostics["validation_failure"]["strict_failed"] is True
+
+
 def test_manual_line_source_local_projection_diagnostics_summarize_cell_and_endpoint_support():
     sp = _load_pipeline_module()
 
