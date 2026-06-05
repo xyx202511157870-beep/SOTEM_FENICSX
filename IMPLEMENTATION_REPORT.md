@@ -817,6 +817,29 @@ Receiver mesh-sensitivity smoke:
     improvement for source consistency and magnetic early-time response, but
     it does not fix early-time `Ex`. A full `1 s` rerun is not justified until
     the early `Ex` channel is addressed.
+- Ramp-off time-step sensitivity smoke:
+  - Directory:
+    `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_src40_recv20_diskcurl_ramp20_smoke`.
+  - Change relative to the five-output mesh-segment run:
+    `min_steps_during_turnoff=20` and `ramp_solver_t_min=5e-7 s`.
+  - Runtime: total `221.268 s`, mesh `14.343 s`.
+  - Time range: `1.0e-5` to `2.44140625e-5 s`.
+  - Result:
+    - `max_error_Ex = 0.09406775301612384`
+    - `max_error_Hz = 0.004656033383964945`
+    - `max_error_dBzdt = 0.027039912833121443`
+    - weak `Ey` scaled absolute error: `0.015023585990404906`
+    - `physical_pass_all_components = false`
+    - `physical_failed_components = ["Ex"]`
+  - Comparison with ramp10:
+    - ramp10 `max_error_Ex = 0.09418477867481403`
+    - ramp20 `max_error_Ex = 0.09406775301612384`
+    - Difference is negligible relative to the `5%` gate.
+  - Interpretation: doubling the ramp-off internal steps does not fix early
+    `Ex`. The remaining error is unlikely to be dominated by turn-off-history
+    time discretization; next diagnostics should focus on initial DC/source
+    coupling, E receiver extraction near the shallow interface, or total-field
+    source transfer.
 
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.
