@@ -373,6 +373,9 @@ Simultaneous point/disk receiver diagnostic smoke:
   - `diagnostics.json` now includes a `receiver_sampling` summary with
     point/disk component-wise relative differences and
     `receiver_sampling_issue_suspected=true`.
+  - `diagnostics.json` also records source charge-conservation projection
+    residuals: before `5.663467`, after `2.869899e-10`,
+    endpoint norm `1.414214`.
 - Result over the first five output times
   (`1.0e-5` to `2.44140625e-5 s`):
   - `max_error_Ex = 0.27639692569161395`

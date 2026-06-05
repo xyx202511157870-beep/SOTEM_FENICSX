@@ -1578,7 +1578,12 @@ def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=
     ridge_ok = _dolfinx_supports_ridge_integral()
     if requested in {"auto", "line", "manual_line"}:
         source = _build_manual_line_source(msh, spaces, config)
-        source["vector"] = _enforce_source_charge_conservation(msh, spaces, source["vector"], config)
+        source["vector"], source["projection_diagnostics"] = _enforce_source_charge_conservation(
+            msh,
+            spaces,
+            source["vector"],
+            config,
+        )
         return source
     if requested in {"auto", "line"} and ridge_ok:
         raise SystemExit(
@@ -1651,8 +1656,8 @@ def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=
         f"density_scale={density_scale:.6e} 1/m^2; weighted local cells={len(weights)}",
         comm=msh.comm,
     )
-    source_vec = _enforce_source_charge_conservation(msh, spaces, source_vec, config)
-    return {"mode": mode, "coeff": source_coeff, "vector": source_vec}
+    source_vec, projection_diagnostics = _enforce_source_charge_conservation(msh, spaces, source_vec, config)
+    return {"mode": mode, "coeff": source_coeff, "vector": source_vec, "projection_diagnostics": projection_diagnostics}
 
 
 def _build_regularized_current_density(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=None):
@@ -1822,7 +1827,15 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
         current_div.destroy()
         residual.destroy()
         G.destroy()
-        return source_vec
+        return source_vec, {
+            "applied": False,
+            "before_residual": float(residual_norm),
+            "after_residual": float(residual_norm),
+            "endpoint_norm": float(endpoint_norm),
+            "ksp_iterations": 0,
+            "ksp_reason": 0,
+            "ksp_residual": 0.0,
+        }
 
     A = G.transposeMatMult(G)
     A.assemble()
@@ -1865,6 +1878,15 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
         f"before={residual_norm:.6e}, after={corrected_norm:.6e}, endpoint_norm={endpoint_norm:.6e}",
         comm=msh.comm,
     )
+    diagnostics = {
+        "applied": True,
+        "before_residual": float(residual_norm),
+        "after_residual": float(corrected_norm),
+        "endpoint_norm": float(endpoint_norm),
+        "ksp_iterations": int(ksp.getIterationNumber()),
+        "ksp_reason": int(reason),
+        "ksp_residual": float(ksp.getResidualNorm()),
+    }
 
     corrected_div.destroy()
     correction.destroy()
@@ -1874,7 +1896,7 @@ def _enforce_source_charge_conservation(msh, spaces: dict[str, Any], source_vec,
     current_div.destroy()
     residual.destroy()
     G.destroy()
-    return source_vec
+    return source_vec, diagnostics
 
 
 def _build_conductivity_divergence_cleaner(spaces: dict[str, Any], operators, config: PipelineConfig):
@@ -3805,6 +3827,28 @@ def diagnose_source_consistency(config: PipelineConfig, *, source_projection_res
     }
 
 
+def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | None:
+    if not isinstance(source_info, dict):
+        return None
+    diagnostics = source_info.get("projection_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    out: dict[str, Any] = {}
+    for key in ("applied", "before_residual", "after_residual", "endpoint_norm", "ksp_iterations", "ksp_reason", "ksp_residual"):
+        if key not in diagnostics:
+            continue
+        value = diagnostics[key]
+        if isinstance(value, bool):
+            out[key] = bool(value)
+        elif isinstance(value, int):
+            out[key] = int(value)
+        elif value is None:
+            out[key] = None
+        else:
+            out[key] = float(value)
+    return out
+
+
 def write_validation_artifacts(
     times,
     pred_data,
@@ -3814,6 +3858,7 @@ def write_validation_artifacts(
     *,
     case_type: str,
     reference_type: str,
+    source_info=None,
     receiver_diagnostic_rows=None,
 ) -> dict[str, Any]:
     """Write P2 validation CSV/JSON/plot artifacts for a three-component run."""
@@ -3837,7 +3882,13 @@ def write_validation_artifacts(
         summary,
         magnetic_receiver_mode=str(config.magnetic_receiver_mode),
     )
-    diagnostics["source_consistency"] = diagnose_source_consistency(config)
+    source_projection = _source_projection_diagnostics_from_info(source_info)
+    diagnostics["source_consistency"] = diagnose_source_consistency(
+        config,
+        source_projection_residual=source_projection.get("after_residual") if source_projection else None,
+    )
+    if source_projection is not None:
+        diagnostics["source_projection"] = source_projection
     diagnostics["receiver_sampling"] = _receiver_diagnostic_summary(
         receiver_diagnostic_rows,
         threshold=float(config.error_tolerance),
@@ -4133,6 +4184,15 @@ def write_report(
     except ValueError as exc:
         lines.append(f"  model audit: INVALID ({exc})")
     lines.append(f"  source mode: {source_info['mode']}")
+    source_projection = _source_projection_diagnostics_from_info(source_info)
+    if source_projection is not None:
+        lines.append(
+            "  source projection: "
+            f"applied={source_projection.get('applied')}; "
+            f"before={float(source_projection.get('before_residual', math.nan)):.6e}; "
+            f"after={float(source_projection.get('after_residual', math.nan)):.6e}; "
+            f"endpoint_norm={float(source_projection.get('endpoint_norm', math.nan)):.6e}"
+        )
     lines.append(f"  source RHS sign: {config.source_rhs_sign:g}")
     lines.append(f"  source quadrature points: {config.source_quadrature_points if int(config.source_quadrature_points) > 0 else 'auto'}")
     lines.append(f"  source term mode: {config.source_term_mode}")
@@ -4912,6 +4972,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         config,
         case_type="ip" if ref_mode == "cole-cole" else "noip",
         reference_type="empymod",
+        source_info={"mode": f"postprocess_partial/{config.source_mode}"},
         receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
     )
     runtime["postprocess_seconds"] = time.perf_counter() - t_post
@@ -5237,6 +5298,7 @@ def main(argv: list[str] | None = None) -> int:
             config,
             case_type="ip" if ref_mode == "cole-cole" else "noip",
             reference_type="empymod",
+            source_info=source,
             receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
         )
         runtime["postprocess_seconds"] = time.perf_counter() - t0

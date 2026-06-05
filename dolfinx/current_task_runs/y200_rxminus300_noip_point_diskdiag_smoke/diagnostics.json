@@ -67,7 +67,13 @@
     "expected_current_change": -10.0,
     "initial_curl_residual": null,
     "integral_didt_dt": -10.0,
-    "source_endpoint_balance_residual": null,
+    "source_endpoint_balance_residual": 2.869899e-10,
     "waveform_integral_residual": 0.0
+  },
+  "source_projection": {
+    "after_residual": 2.869899e-10,
+    "applied": true,
+    "before_residual": 5.663467,
+    "endpoint_norm": 1.414214
   }
 }

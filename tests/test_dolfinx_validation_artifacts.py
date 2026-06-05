@@ -36,6 +36,15 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
         config,
         case_type="noip",
         reference_type="empymod",
+        source_info={
+            "mode": "manual_line",
+            "projection_diagnostics": {
+                "applied": True,
+                "before_residual": 2.0,
+                "after_residual": 1.0e-9,
+                "endpoint_norm": 1.4,
+            },
+        },
         receiver_diagnostic_rows=[
             {"time_obs": 1.0e-5, "receiver_type": "point", "radius": 0.0, "Ex": 1.0, "Ey": 0.0, "Hz": np.nan, "dBzdt": 2.0},
             {
@@ -84,5 +93,8 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert report["pass_all_components"] is True
     assert summary["pass_all_components"] is True
     diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["source_consistency"]["source_endpoint_balance_residual"] == 1.0e-9
+    assert diagnostics["source_projection"]["before_residual"] == 2.0
+    assert diagnostics["source_projection"]["after_residual"] == 1.0e-9
     assert diagnostics["receiver_sampling"]["enabled"] is True
     assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.5
