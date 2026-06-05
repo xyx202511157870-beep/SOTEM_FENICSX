@@ -143,6 +143,7 @@ class PipelineConfig:
     checkpoint_forward: bool = False
     resume_forward: bool = False
     stop_after_outputs: int = 0
+    source_only: bool = False
     memory_limit_gb: float = 32.0
     memory_safety_fraction: float = 0.95
 
@@ -672,6 +673,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "source_rhs_sign": float(config.source_rhs_sign),
             "source_quadrature_points": source_quadrature_points,
             "source_projection_mode": source_projection_mode,
+            "source_only": bool(config.source_only),
             "nedelec_order": nedelec_order,
             "source_term_mode": source_term_mode,
             "initial_dc_mode": initial_dc_mode,
@@ -1510,6 +1512,20 @@ def _cell_geometry(msh, cell: int):
     return msh.geometry.x[vertices]
 
 
+def _manual_line_source_quadrature_count(length: float, config: PipelineConfig) -> int:
+    """Return Gauss points for the discontinuous cellwise line-source integrand."""
+
+    requested = int(config.source_quadrature_points)
+    if requested > 0:
+        return max(2, requested)
+    length = float(length)
+    if length <= 0.0:
+        raise ValueError("length must be positive")
+    mesh_size = max(float(config.source_mesh_size), 1.0e-12)
+    target_spacing = min(2.0, max(mesh_size / 200.0, length / 20001.0))
+    return max(51, int(math.ceil(length / target_spacing)) + 1)
+
+
 def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfig):
     """Assemble -dI/dt int_Gamma t.v dl by direct Nedelec basis tabulation."""
 
@@ -1529,9 +1545,7 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     if length <= 0.0:
         raise ValueError("source_start and source_end must be distinct")
     tangent = axis / length
-    auto_npts = max(51, int(math.ceil(length / 2.0)) + 1)
-    npts = int(config.source_quadrature_points) if int(config.source_quadrature_points) > 0 else auto_npts
-    npts = max(2, npts)
+    npts = _manual_line_source_quadrature_count(length, config)
     qx, qw = np.polynomial.legendre.leggauss(npts)
     svals = 0.5 * (qx + 1.0)
     weights = 0.5 * length * qw
@@ -4638,6 +4652,76 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_source_only_diagnostics(
+    config: PipelineConfig,
+    env: dict[str, Any],
+    source_info,
+    *,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write source-only diagnostics without running the transient forward solve."""
+
+    runtime = {} if runtime is None else dict(runtime)
+    workdir = Path(config.workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    source_projection = _source_projection_diagnostics_from_info(source_info)
+    source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
+    diagnostics: dict[str, Any] = {
+        "source_only": True,
+        "source_mode": str(source_info.get("mode")) if isinstance(source_info, dict) else None,
+        "source_consistency": diagnose_source_consistency(
+            config,
+            source_projection_residual=source_projection.get("after_residual") if source_projection else None,
+        ),
+        "runtime": {str(key): float(value) for key, value in runtime.items() if isinstance(value, (int, float))},
+    }
+    if source_projection is not None:
+        diagnostics["source_projection"] = source_projection
+    if source_local_projection is not None:
+        diagnostics["source_local_projection"] = source_local_projection
+    (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
+    (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
+
+    lines = ["SOTEM source-only diagnostics", "============================", ""]
+    lines.append(f"python: {env.get('python', sys.executable)}")
+    lines.append(f"source mode: {diagnostics['source_mode']}")
+    lines.append(f"source projection mode: {config.source_projection_mode}")
+    if source_projection is not None:
+        lines.append(
+            "source projection: "
+            f"mode={source_projection.get('projection_mode', config.source_projection_mode)}; "
+            f"applied={source_projection.get('applied')}; "
+            f"before={float(source_projection.get('before_residual', math.nan)):.6e}; "
+            f"after={float(source_projection.get('after_residual', math.nan)):.6e}; "
+            f"endpoint_norm={float(source_projection.get('endpoint_norm', math.nan)):.6e}"
+        )
+        scalar_balance = source_projection.get("scalar_balance")
+        if isinstance(scalar_balance, dict):
+            lines.append(
+                "source scalar balance: "
+                f"residual_active_dofs={int(scalar_balance.get('residual_active_dofs', 0))}; "
+                f"residual_l2/endpoint_l2={float(scalar_balance.get('residual_l2_over_endpoint_l2', math.nan)):.6g}; "
+                f"residual_top_fraction={float(scalar_balance.get('residual_top_abs_fraction', math.nan)):.6g}; "
+                f"current_endpoint_alignment={float(scalar_balance.get('current_div_endpoint_alignment', math.nan)):.6g}"
+            )
+    if source_local_projection is not None:
+        lines.append(
+            "source local projection: "
+            f"quadrature={int(source_local_projection.get('quadrature_points', 0))}; "
+            f"added={int(source_local_projection.get('added_points', 0))}; "
+            f"missed={int(source_local_projection.get('missed_points', 0))}; "
+            f"unique_cells={int(source_local_projection.get('unique_hit_cells', 0))}"
+        )
+    if runtime:
+        lines.append("")
+        lines.append("runtime:")
+        for key, value in sorted(runtime.items()):
+            if isinstance(value, (int, float)):
+                lines.append(f"  {key}: {float(value):.6g} s")
+    (workdir / "source_diagnostics_report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return diagnostics
+
+
 def compute_horizontal_electric_error(fem_data, ref_data, floor_factor: float = 1.0e-6):
     """Compute relative error of the horizontal electric vector (Ex, Ey)."""
 
@@ -5832,6 +5916,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workdir", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--force-mesh", action="store_true")
     parser.add_argument("--mesh-only", action="store_true")
+    parser.add_argument("--source-only", action="store_true", help="Assemble mesh/materials/source diagnostics and exit before time stepping.")
     parser.add_argument("--postprocess-partial", action="store_true", help="Postprocess workdir/forward_partial.npz without rerunning FEM.")
     parser.add_argument("--checkpoint-forward", action="store_true", help="Save forward_checkpoint.npz at each output time for long-run restart.")
     parser.add_argument("--resume-forward", action="store_true", help="Resume E-form forward modelling from workdir/forward_checkpoint.npz.")
@@ -5949,6 +6034,7 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint_forward=args.checkpoint_forward,
         resume_forward=args.resume_forward,
         stop_after_outputs=args.stop_after_outputs,
+        source_only=args.source_only,
         memory_limit_gb=args.memory_limit_gb,
         memory_safety_fraction=args.memory_safety_fraction,
         source_mode=args.source_mode,
@@ -6086,8 +6172,13 @@ def main(argv: list[str] | None = None) -> int:
     source = build_source(msh, spaces, config, cell_tags)
     if config.formulation == "h":
         source["current_density"] = _build_regularized_current_density(msh, spaces, config, cell_tags)
-    times = generate_time_array(config)
     runtime["setup_seconds"] = time.perf_counter() - t0
+    if config.source_only:
+        if msh.comm.rank == 0:
+            runtime["total_seconds"] = time.perf_counter() - run_t0
+            write_source_only_diagnostics(config, env, source, runtime=runtime)
+        return 0
+    times = generate_time_array(config)
     t0 = time.perf_counter()
     if config.formulation == "h":
         fem_result = run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config, times=times)

@@ -615,6 +615,47 @@ Receiver mesh-sensitivity smoke:
   against explicit `G.T @ s` contributions cell-by-cell or switch to a
   DOLFINx-native line/source assembly that preserves the de Rham identity.
 
+- Direct source-only quadrature sweep:
+  - `source_only_y200_rxminus300_src40_recv20_raw_qauto` used the old automatic
+    `501` Gauss points and had source-balance residual `6.561607663609301`.
+  - `source_only_y200_rxminus300_src40_recv20_raw_q2001` used `2001` Gauss
+    points and reduced the residual to `1.6073351550413124`.
+  - `source_only_y200_rxminus300_src40_recv20_raw_q5001` used `5001` Gauss
+    points and reduced the residual to `0.5548956230007095`.
+  - After this diagnostic, the automatic manual-line quadrature rule was
+    changed to resolve the source mesh scale more tightly; for the corrected
+    latest model it now chooses `5001` points without requiring a manual
+    `--source-quadrature-points` override.
+- Interpretation: the large raw-source residual is mainly a line-integration
+  resolution problem across a discontinuous cellwise integrand, not only an
+  orientation/sign issue. Exact cell-segmented integration is still preferable,
+  but dense automatic quadrature sharply reduces the required projection
+  correction while staying within the 32 GB memory budget.
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_src40_recv20_nearest_biotrate_q5001_smoke`.
+- Change: same source40/receiver20/nearest/biot-rate smoke as above, but with
+  dense `5001`-point manual-line quadrature and charge-conserving projection.
+- Source projection diagnostics:
+  - before residual: `0.5548956230007095`.
+  - after residual: `5.351519776153429e-10`.
+  - correction L2/raw: `0.015237824962516272`.
+  - correction L1/raw: `0.02394478572405994`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.03385766465143364`
+  - `max_error_Ey = 1902358644.1520596`
+  - `max_error_Hz_or_dBzdt = 0.1735791517790405`
+  - `pass_all_components = false`
+- Diagnostic receiver comparison from the same solve:
+  - disk-average `Ex` error: `0.023888841807233482`.
+  - disk-average `dBzdt` error: `0.02873626890433773`.
+- Interpretation: dense quadrature plus charge-conserving projection brings
+  first-point `Ex` below the `5%` gate and makes disk-average `Ex/dBzdt`
+  pass. The remaining first-point failure is now mainly the point `dBzdt`
+  recovery (`~17.36%`) and near-zero `Ey`, not the horizontal source electric
+  amplitude. This is a significant P2 improvement, but it is still not a full
+  three-component `5%` pass.
+
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_src60_recv20_diskcurl_smoke`.
 - Change: source mesh size `60 m`, source refinement radius `400 m`,
@@ -660,6 +701,11 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - `source_projection_mode=raw` is implemented only as a diagnostic switch.
   It can improve first-point `Ex`, but it violates endpoint charge
   conservation and must not be used as a final accepted solver mode.
+- Manual-line automatic quadrature was made denser and now fixes the first
+  point `Ex` error for the corrected latest model, but it is still an
+  approximate quadrature over a discontinuous cellwise integrand. Exact
+  cell-segmented line integration remains the better long-term source
+  assembly.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. H-form diagnostic output still writes only the main
@@ -680,11 +726,9 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 
 ## Next Steps
 
-1. Audit manual-line Nedelec source assembly against the DOLFINx
-   discrete-gradient operator cell-by-cell. The raw residual is distributed
-   over `216` scalar DOFs, so first check local dof orientation/transformation
-   and Basix push-forward conventions before attempting an endpoint-local
-   correction.
+1. Replace dense whole-line quadrature with exact cell-segmented line
+   integration or an equivalent DOLFINx-native line-source assembly, using the
+   `5001`-point q5001 smoke as the regression target for first-point `Ex`.
 2. Extend the latest-model point/disk diagnostic run beyond the first five output times after improving the receiver/curl recovery path, so long runs are not spent confirming the same early-time failure.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.

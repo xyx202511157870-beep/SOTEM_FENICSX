@@ -232,6 +232,46 @@ def test_scalar_source_balance_vector_diagnostics_reports_residual_distribution(
     assert diagnostics["current_div_endpoint_alignment"] == pytest.approx(1.2 / (np.linalg.norm([0.8, -0.4, 0.3]) * np.sqrt(2.0)))
 
 
+def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, source_only=True)
+
+    sp.write_source_only_diagnostics(
+        config,
+        env={"python": "test-python"},
+        source_info={
+            "mode": "manual_line",
+            "projection_diagnostics": {
+                "projection_mode": "raw",
+                "applied": False,
+                "before_residual": 6.0,
+                "after_residual": 6.0,
+                "endpoint_norm": 1.0,
+                "scalar_balance": {
+                    "residual_active_dofs": 12,
+                    "residual_l2_over_endpoint_l2": 6.0,
+                    "residual_top_abs_fraction": 0.25,
+                    "current_div_endpoint_alignment": 0.1,
+                },
+            },
+            "local_projection_diagnostics": {
+                "quadrature_points": 101,
+                "missed_points": 0,
+                "unique_hit_cells": 20,
+            },
+        },
+        runtime={"mesh_seconds": 1.0, "setup_seconds": 2.0},
+    )
+
+    diagnostics = json.loads((tmp_path / "source_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["source_mode"] == "manual_line"
+    assert diagnostics["source_projection"]["projection_mode"] == "raw"
+    assert diagnostics["source_projection"]["scalar_balance"]["residual_active_dofs"] == 12
+    assert diagnostics["source_local_projection"]["quadrature_points"] == 101
+    assert (tmp_path / "source_diagnostics_report.txt").is_file()
+    assert (tmp_path / "run_config_resolved.yaml").is_file()
+
+
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():
     sp = _load_pipeline_module()
     times = np.asarray([1.0, 3.0, 6.0])

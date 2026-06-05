@@ -169,6 +169,18 @@ def test_model_consistency_reports_manual_source_quadrature_points():
     assert diagnostics["source_quadrature_points"] == 201
 
 
+def test_manual_line_auto_quadrature_resolves_source_mesh_scale():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        source_start=(-500.0, 200.0, -0.1),
+        source_end=(500.0, 200.0, -0.1),
+        source_mesh_size=40.0,
+    )
+
+    assert sp._manual_line_source_quadrature_count(1000.0, config) >= 5001
+    assert sp._manual_line_source_quadrature_count(1000.0, sp.PipelineConfig(source_quadrature_points=2001)) == 2001
+
+
 def test_transient_source_projection_uses_unit_current_shape():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(source_current=10.0)

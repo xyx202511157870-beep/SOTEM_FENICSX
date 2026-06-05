@@ -1,0 +1,14 @@
+SOTEM source-only diagnostics
+============================
+
+python: /home/paidaxin/miniconda3/envs/fenicsx/bin/python
+source mode: manual_line
+source projection mode: raw
+source projection: mode=raw; applied=False; before=1.607335e+00; after=1.607335e+00; endpoint_norm=1.414214e+00
+source scalar balance: residual_active_dofs=217; residual_l2/endpoint_l2=1.13656; residual_top_fraction=0.0327481; current_endpoint_alignment=0.661185
+source local projection: quadrature=2001; added=2001; missed=0; unique_cells=206
+
+runtime:
+  mesh_seconds: 14.2479 s
+  setup_seconds: 3.28831 s
+  total_seconds: 19.0115 s

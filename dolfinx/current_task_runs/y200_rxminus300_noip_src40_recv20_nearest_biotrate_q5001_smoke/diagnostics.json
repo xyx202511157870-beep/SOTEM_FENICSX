@@ -1,0 +1,241 @@
+{
+  "failed": true,
+  "failed_components": [
+    "Ey",
+    "dBzdt"
+  ],
+  "failed_times": [
+    1e-05
+  ],
+  "magnetic_receiver_mode": "biot_current",
+  "magnetic_recovery": {
+    "enabled": true,
+    "faraday_hz_final": -0.0021963178682062115,
+    "initial_hz": -0.0021963178682062115,
+    "max_absolute_hz_difference": 0.0,
+    "max_relative_hz_difference": 0.0,
+    "method": "faraday_integrated_dBzdt",
+    "rate_consistency": {
+      "enabled": false,
+      "reason": "requires at least two samples"
+    },
+    "reported_hz_final": -0.0021963178682062115,
+    "time_at_max_relative_hz_difference": 1e-05
+  },
+  "magnetic_recovery_note": "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure.",
+  "receiver_sampling": {
+    "baseline_receiver_type": "point",
+    "comparisons": {
+      "disk_average": {
+        "Ex": {
+          "max_absolute_difference": 8.929551148842787e-06,
+          "max_relative_difference": 0.009642355214885,
+          "mean_relative_difference": 0.009642355214885,
+          "sample_count": 1,
+          "time_at_max_relative_difference": 1e-05
+        },
+        "Ey": {
+          "max_absolute_difference": 1.123761847138825e-05,
+          "max_relative_difference": 0.59072028851832,
+          "mean_relative_difference": 0.59072028851832,
+          "sample_count": 1,
+          "time_at_max_relative_difference": 1e-05
+        },
+        "dBzdt": {
+          "max_absolute_difference": 9.076027546484902e-07,
+          "max_relative_difference": 0.172391798522227,
+          "mean_relative_difference": 0.172391798522227,
+          "sample_count": 1,
+          "time_at_max_relative_difference": 1e-05
+        }
+      }
+    },
+    "enabled": true,
+    "receiver_sampling_issue_suspected": true,
+    "receiver_types": [
+      "point",
+      "disk_average"
+    ],
+    "threshold": 0.05,
+    "time_count": 1
+  },
+  "receiver_vs_reference": {
+    "baseline_receiver_type": "point",
+    "comparisons": {
+      "disk_average": {
+        "Ex": {
+          "baseline_max_relative_error": 0.03385766465143364,
+          "candidate_max_relative_error": 0.023888841807233482,
+          "improves_over_baseline": true
+        },
+        "Ey": {
+          "baseline_max_relative_error": 1902358644.1520596,
+          "candidate_max_relative_error": 3026120491.2908845,
+          "improves_over_baseline": false
+        },
+        "dBzdt": {
+          "baseline_max_relative_error": 0.1735791517790405,
+          "candidate_max_relative_error": 0.02873626890433773,
+          "improves_over_baseline": true
+        }
+      }
+    },
+    "enabled": true,
+    "metrics": {
+      "disk_average": {
+        "Ex": {
+          "max_peak_normalized_error": 0.023888841807233482,
+          "max_relative_error": 0.023888841807233482,
+          "mean_relative_error": 0.023888841807233482,
+          "passes_threshold": true,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Ey": {
+          "max_peak_normalized_error": 3026120491.2908845,
+          "max_relative_error": 3026120491.2908845,
+          "mean_relative_error": 3026120491.2908845,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.02873626890433773,
+          "max_relative_error": 0.02873626890433773,
+          "mean_relative_error": 0.02873626890433773,
+          "passes_threshold": true,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        }
+      },
+      "point": {
+        "Ex": {
+          "max_peak_normalized_error": 0.03385766465143364,
+          "max_relative_error": 0.03385766465143364,
+          "mean_relative_error": 0.03385766465143364,
+          "passes_threshold": true,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Ey": {
+          "max_peak_normalized_error": 1902358644.1520596,
+          "max_relative_error": 1902358644.1520596,
+          "mean_relative_error": 1902358644.1520596,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "Hz": {
+          "max_peak_normalized_error": 0.0005918787561013861,
+          "max_relative_error": 0.0005918787561013861,
+          "mean_relative_error": 0.0005918787561013861,
+          "passes_threshold": true,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.1735791517790405,
+          "max_relative_error": 0.1735791517790405,
+          "mean_relative_error": 0.1735791517790405,
+          "passes_threshold": false,
+          "sample_count": 1,
+          "time_at_max_relative_error": 1e-05
+        }
+      }
+    },
+    "receiver_types": [
+      "point",
+      "disk_average"
+    ],
+    "threshold": 0.05
+  },
+  "recommended_check_order": [
+    "time_step_error",
+    "mesh_error",
+    "boundary_error",
+    "source_term_error",
+    "receiver_sampling_error",
+    "magnetic_recovery_error",
+    "ip_memory_error"
+  ],
+  "source_consistency": {
+    "current_final": 0.0,
+    "current_initial": 10.0,
+    "dc_current_conservation_residual": null,
+    "endpoint_source_total_sum": 0.0,
+    "expected_current_change": -10.0,
+    "initial_curl_residual": null,
+    "integral_didt_dt": -10.0,
+    "source_endpoint_balance_residual": 5.351519776153429e-10,
+    "waveform_integral_residual": 0.0
+  },
+  "source_local_projection": {
+    "active_dof_count": 791,
+    "added_points": 5001,
+    "cell_contribution_l1_total": 205.2559068490699,
+    "cell_contribution_top_cell": 84871,
+    "cell_contribution_top_fraction": 0.005731156263665362,
+    "cell_contribution_top_l1": 1.1763536761923612,
+    "cell_hit_count_max": 225,
+    "cell_hit_count_mean": 24.159420289855074,
+    "cell_hit_count_min": 1,
+    "cell_hit_top_fraction": 0.04499100179964007,
+    "cell_sequence_changes": 206,
+    "dof_contribution_l1_total": 205.2559068490689,
+    "dof_contribution_top_dof": 101690,
+    "dof_contribution_top_fraction": 0.008263710337929457,
+    "dof_contribution_top_l1": 1.6961753593497366,
+    "end_window_missed": 0,
+    "end_window_points": 718,
+    "end_window_unique_cells": 10,
+    "endpoint_window_fraction": 0.05,
+    "missed_fraction": 0.0,
+    "missed_points": 0,
+    "mode": "manual_line",
+    "quadrature_points": 5001,
+    "start_window_missed": 0,
+    "start_window_points": 718,
+    "start_window_unique_cells": 10,
+    "unique_hit_cells": 207
+  },
+  "source_projection": {
+    "after_residual": 5.351519776153429e-10,
+    "applied": true,
+    "before_residual": 0.5548956230007095,
+    "correction_l1_norm": 4.875908008352112,
+    "correction_l1_over_raw": 0.02394478572405994,
+    "correction_l2_norm": 0.21637048217547988,
+    "correction_l2_over_raw": 0.015237824962516272,
+    "divergence_residual_reduction": 0.9999999990355809,
+    "endpoint_norm": 1.414213562373099,
+    "ksp_iterations": 7,
+    "ksp_reason": 2,
+    "ksp_residual": 8.009214824019594e-10,
+    "projected_source_l1_norm": 206.8968774135992,
+    "projected_source_l2_norm": 14.197917224366325,
+    "projection_mode": "charge_conserving",
+    "raw_source_l1_norm": 203.63130681318876,
+    "raw_source_l2_norm": 14.199564748101025,
+    "scalar_balance": {
+      "current_div_active_dofs": 218,
+      "current_div_endpoint_alignment": 0.9308124593002713,
+      "current_div_endpoint_dot": 1.9984978991344833,
+      "current_div_l1_norm": 7.3539825577540245,
+      "current_div_l2_norm": 1.5181913419244302,
+      "current_div_l2_over_endpoint_l2": 1.073523393013466,
+      "current_div_linf_norm": 0.9992489495672393,
+      "current_div_top_abs_fraction": 0.13587861294471432,
+      "endpoint_active_dofs": 2,
+      "endpoint_l1_norm": 2.0000000000000275,
+      "endpoint_l2_norm": 1.414213562373099,
+      "endpoint_linf_norm": 1.000000000000014,
+      "endpoint_top_abs_fraction": 0.5000000000000001,
+      "residual_active_dofs": 218,
+      "residual_l1_norm": 5.356986759485082,
+      "residual_l2_norm": 0.5548956230007095,
+      "residual_l2_over_endpoint_l2": 0.39237045787453456,
+      "residual_linf_norm": 0.20726394843088236,
+      "residual_top_abs_fraction": 0.03869039774345172
+    }
+  }
+}
