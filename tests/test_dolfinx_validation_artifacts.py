@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 def _load_pipeline_module():
@@ -125,6 +126,79 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert {"sample_count", "candidate_count_min", "candidate_count_max", "candidate_count_mean"} <= set(diagnostic_rows[0])
     assert diagnostic_rows[0]["sample_count"] == "1"
     assert diagnostic_rows[1]["candidate_count_max"] == "3"
+
+
+def test_manual_line_source_local_projection_diagnostics_summarize_cell_and_endpoint_support():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp._summarize_manual_line_source_local_diagnostics(
+        npts=6,
+        added=5,
+        missed=1,
+        hit_cell_ids=[10, 10, None, 11, 12, 12],
+        svals=[0.02, 0.08, 0.2, 0.55, 0.93, 0.98],
+        cell_l1_contributions={10: 4.0, 11: 2.0, 12: 4.0},
+        dof_l1_contributions={1: 5.0, 2: 3.0, 3: 2.0},
+        endpoint_window_fraction=0.1,
+    )
+
+    assert diagnostics["quadrature_points"] == 6
+    assert diagnostics["added_points"] == 5
+    assert diagnostics["missed_points"] == 1
+    assert diagnostics["missed_fraction"] == pytest.approx(1.0 / 6.0)
+    assert diagnostics["unique_hit_cells"] == 3
+    assert diagnostics["cell_hit_count_min"] == 1
+    assert diagnostics["cell_hit_count_max"] == 2
+    assert diagnostics["cell_hit_count_mean"] == pytest.approx(5.0 / 3.0)
+    assert diagnostics["cell_hit_top_fraction"] == pytest.approx(2.0 / 5.0)
+    assert diagnostics["cell_sequence_changes"] == 2
+    assert diagnostics["cell_contribution_top_fraction"] == pytest.approx(0.4)
+    assert diagnostics["cell_contribution_top_cell"] == 10
+    assert diagnostics["active_dof_count"] == 3
+    assert diagnostics["dof_contribution_top_fraction"] == pytest.approx(0.5)
+    assert diagnostics["start_window_points"] == 2
+    assert diagnostics["start_window_unique_cells"] == 1
+    assert diagnostics["start_window_missed"] == 0
+    assert diagnostics["end_window_points"] == 2
+    assert diagnostics["end_window_unique_cells"] == 1
+    assert diagnostics["end_window_missed"] == 0
+
+
+def test_validation_artifacts_include_source_local_projection_diagnostics(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5])
+    ref = np.array([[1.0, 0.0, 2.0]])
+    pred = np.array([[1.0, 0.0, 2.0]])
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        source_info={
+            "mode": "manual_line",
+            "projection_diagnostics": {
+                "applied": False,
+                "before_residual": 0.0,
+                "after_residual": 0.0,
+                "endpoint_norm": 1.0,
+            },
+            "local_projection_diagnostics": {
+                "quadrature_points": 6,
+                "unique_hit_cells": 3,
+                "cell_contribution_top_fraction": 0.4,
+            },
+        },
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["source_local_projection"]["quadrature_points"] == 6
+    assert diagnostics["source_local_projection"]["unique_hit_cells"] == 3
+    assert diagnostics["source_local_projection"]["cell_contribution_top_fraction"] == pytest.approx(0.4)
 
 
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():

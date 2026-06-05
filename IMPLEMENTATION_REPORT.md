@@ -504,6 +504,33 @@ Receiver mesh-sensitivity smoke:
   mesh a major remaining P2 error channel.
 
 - Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_src40_recv20_nearest_biotrate_localdiag_smoke`.
+- Change: same source40/receiver20/nearest/biot-rate smoke as above, with
+  additional manual-line local source projection diagnostics in
+  `diagnostics.json` and `verification_report.txt`.
+- Source local projection diagnostics:
+  - quadrature points: `501`.
+  - added points: `501`.
+  - missed points: `0`.
+  - unique hit cells: `202`.
+  - max hit-cell fraction: `0.043912175648702596`.
+  - top cell L1 contribution fraction: `0.011818270030426044`.
+  - top DOF L1 contribution fraction: `0.011150985042165202`.
+  - endpoint windows: start/end both have `72` points, `10` unique cells,
+    and `0` missed points.
+- Result at `t_obs=1.0e-5 s` remains unchanged:
+  - `max_error_Ex = 0.11406489203543935`
+  - `max_error_Ey = 5952295267.625508`
+  - `max_error_Hz_or_dBzdt = 0.15683277651412947`
+  - `pass_all_components = false`
+- Interpretation: this rules out an obvious local-projection concentration
+  failure for the source40 manual-line run: the source line is fully hit,
+  distributed over many cells, and no endpoint-window misses occur. The
+  remaining P2 first-point error is more likely in total-field source/DC
+  coupling, shallow-interface transfer, receiver/curl recovery, or boundary
+  treatment than in a single missing or dominant source cell.
+
+- Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_src60_recv20_diskcurl_smoke`.
 - Change: source mesh size `60 m`, source refinement radius `400 m`,
   receiver mesh size `20 m`, main receiver `disk_average`, one output point.
@@ -565,7 +592,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 
 ## Next Steps
 
-1. Add real FEM source residual diagnostics using assembled gradient/divergence/curl operators.
+1. Add real FEM source residual diagnostics using assembled gradient/divergence/curl operators, including a comparison of raw vs charge-conserved source vectors and their effect on the DC initial field.
 2. Extend the latest-model point/disk diagnostic run beyond the first five output times after improving the receiver/curl recovery path, so long runs are not spent confirming the same early-time failure.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.

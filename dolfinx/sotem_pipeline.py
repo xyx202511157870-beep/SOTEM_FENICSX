@@ -1543,12 +1543,17 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     permutations = msh.topology.get_cell_permutation_info()
     added = 0
     missed = 0
+    hit_cell_ids: list[int | None] = []
+    cell_l1_contributions: dict[int, float] = {}
+    dof_l1_contributions: dict[int, float] = {}
     for ip, point in enumerate(points):
         cells = [int(c) for c in colliding.links(ip) if int(c) < local_cells]
         if not cells:
             missed += 1
+            hit_cell_ids.append(None)
             continue
         cell = cells[0]
+        hit_cell_ids.append(cell)
         cell_geom = _cell_geometry(msh, cell)
         X = msh.geometry.cmap.pull_back(point.reshape(1, 3), cell_geom)
         tab = be.tabulate(0, X)[0]
@@ -1565,14 +1570,28 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
         local_dofs = dofmap.cell_dofs(cell)
         global_dofs = index_map.local_to_global(local_dofs).astype(PETSc.IntType)
         source_vec.setValues(global_dofs, local, addv=PETSc.InsertMode.ADD_VALUES)
+        local_l1 = float(np.sum(np.abs(local)))
+        cell_l1_contributions[cell] = cell_l1_contributions.get(cell, 0.0) + local_l1
+        for dof, value in zip(global_dofs, local):
+            key = int(dof)
+            dof_l1_contributions[key] = dof_l1_contributions.get(key, 0.0) + abs(float(value))
         added += 1
     source_vec.assemble()
+    local_diagnostics = _summarize_manual_line_source_local_diagnostics(
+        npts=npts,
+        added=added,
+        missed=missed,
+        hit_cell_ids=hit_cell_ids,
+        svals=svals,
+        cell_l1_contributions=cell_l1_contributions,
+        dof_l1_contributions=dof_l1_contributions,
+    )
     log(
         f"[source] mode=manual_line; quadrature points={npts}; added={added}; missed={missed}; "
         "assembled direct Nedelec line integral int_Gamma t.v dl",
         comm=msh.comm,
     )
-    return {"mode": "manual_line", "coeff": None, "vector": source_vec}
+    return {"mode": "manual_line", "coeff": None, "vector": source_vec, "local_projection_diagnostics": local_diagnostics}
 
 
 def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=None):
@@ -4238,6 +4257,105 @@ def diagnose_source_consistency(config: PipelineConfig, *, source_projection_res
     }
 
 
+def _summarize_manual_line_source_local_diagnostics(
+    *,
+    npts: int,
+    added: int,
+    missed: int,
+    hit_cell_ids,
+    svals,
+    cell_l1_contributions: dict[int, float],
+    dof_l1_contributions: dict[int, float],
+    endpoint_window_fraction: float = 0.05,
+) -> dict[str, Any]:
+    """Summarize local support of the direct Nedelec line-source projection."""
+
+    npts = int(npts)
+    added = int(added)
+    missed = int(missed)
+    endpoint_window_fraction = max(0.0, min(float(endpoint_window_fraction), 0.5))
+    hits = [int(cell) for cell in hit_cell_ids if cell is not None]
+    cell_hit_counts: dict[int, int] = {}
+    for cell in hits:
+        cell_hit_counts[cell] = cell_hit_counts.get(cell, 0) + 1
+    hit_count_values = list(cell_hit_counts.values())
+    cell_changes = 0
+    previous_cell: int | None = None
+    for cell in hit_cell_ids:
+        if cell is None:
+            continue
+        current = int(cell)
+        if previous_cell is not None and current != previous_cell:
+            cell_changes += 1
+        previous_cell = current
+
+    def _top_entry(values: dict[int, float]) -> tuple[int | None, float, float]:
+        positive = {int(key): float(value) for key, value in values.items() if float(value) > 0.0}
+        total = float(sum(positive.values()))
+        if not positive or total <= 0.0:
+            return None, 0.0, 0.0
+        top_key, top_value = sorted(positive.items(), key=lambda item: (-item[1], item[0]))[0]
+        return int(top_key), float(top_value), float(top_value / total)
+
+    top_cell, top_cell_l1, top_cell_fraction = _top_entry(cell_l1_contributions)
+    top_dof, top_dof_l1, top_dof_fraction = _top_entry(dof_l1_contributions)
+
+    s_array = [float(value) for value in svals]
+    start_cells: set[int] = set()
+    end_cells: set[int] = set()
+    start_points = 0
+    end_points = 0
+    start_missed = 0
+    end_missed = 0
+    for s, cell in zip(s_array, hit_cell_ids):
+        in_start = s <= endpoint_window_fraction
+        in_end = s >= 1.0 - endpoint_window_fraction
+        if in_start:
+            start_points += 1
+            if cell is None:
+                start_missed += 1
+            else:
+                start_cells.add(int(cell))
+        if in_end:
+            end_points += 1
+            if cell is None:
+                end_missed += 1
+            else:
+                end_cells.add(int(cell))
+
+    cell_l1_total = float(sum(float(value) for value in cell_l1_contributions.values()))
+    dof_l1_total = float(sum(float(value) for value in dof_l1_contributions.values()))
+    return {
+        "mode": "manual_line",
+        "quadrature_points": npts,
+        "added_points": added,
+        "missed_points": missed,
+        "missed_fraction": float(missed / npts) if npts > 0 else 0.0,
+        "unique_hit_cells": int(len(cell_hit_counts)),
+        "cell_hit_count_min": int(min(hit_count_values)) if hit_count_values else 0,
+        "cell_hit_count_max": int(max(hit_count_values)) if hit_count_values else 0,
+        "cell_hit_count_mean": float(sum(hit_count_values) / len(hit_count_values)) if hit_count_values else 0.0,
+        "cell_hit_top_fraction": float(max(hit_count_values) / added) if hit_count_values and added > 0 else 0.0,
+        "cell_sequence_changes": int(cell_changes),
+        "cell_contribution_l1_total": cell_l1_total,
+        "cell_contribution_top_cell": top_cell,
+        "cell_contribution_top_l1": top_cell_l1,
+        "cell_contribution_top_fraction": top_cell_fraction,
+        "active_dof_count": int(len([value for value in dof_l1_contributions.values() if float(value) > 0.0])),
+        "dof_contribution_l1_total": dof_l1_total,
+        "dof_contribution_top_dof": top_dof,
+        "dof_contribution_top_l1": top_dof_l1,
+        "dof_contribution_top_fraction": top_dof_fraction,
+        "endpoint_window_fraction": endpoint_window_fraction,
+        "start_window_points": int(start_points),
+        "start_window_unique_cells": int(len(start_cells)),
+        "start_window_missed": int(start_missed),
+        "end_window_points": int(end_points),
+        "end_window_unique_cells": int(len(end_cells)),
+        "end_window_missed": int(end_missed),
+    }
+
+
 def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | None:
     if not isinstance(source_info, dict):
         return None
@@ -4258,6 +4376,15 @@ def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | No
         else:
             out[key] = float(value)
     return out
+
+
+def _source_local_projection_diagnostics_from_info(source_info) -> dict[str, Any] | None:
+    if not isinstance(source_info, dict):
+        return None
+    diagnostics = source_info.get("local_projection_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    return json.loads(json.dumps(diagnostics, allow_nan=False, default=float))
 
 
 def write_validation_artifacts(
@@ -4310,6 +4437,9 @@ def write_validation_artifacts(
     )
     if source_projection is not None:
         diagnostics["source_projection"] = source_projection
+    source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
+    if source_local_projection is not None:
+        diagnostics["source_local_projection"] = source_local_projection
     diagnostics["receiver_sampling"] = _receiver_diagnostic_summary(
         receiver_diagnostic_rows,
         threshold=float(config.error_tolerance),
@@ -4622,6 +4752,17 @@ def write_report(
             f"before={float(source_projection.get('before_residual', math.nan)):.6e}; "
             f"after={float(source_projection.get('after_residual', math.nan)):.6e}; "
             f"endpoint_norm={float(source_projection.get('endpoint_norm', math.nan)):.6e}"
+        )
+    source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
+    if source_local_projection is not None:
+        lines.append(
+            "  source local projection: "
+            f"quadrature={int(source_local_projection.get('quadrature_points', 0))}; "
+            f"added={int(source_local_projection.get('added_points', 0))}; "
+            f"missed={int(source_local_projection.get('missed_points', 0))}; "
+            f"unique_cells={int(source_local_projection.get('unique_hit_cells', 0))}; "
+            f"top_cell_fraction={float(source_local_projection.get('cell_contribution_top_fraction', math.nan)):.6g}; "
+            f"top_dof_fraction={float(source_local_projection.get('dof_contribution_top_fraction', math.nan)):.6g}"
         )
     lines.append(f"  source RHS sign: {config.source_rhs_sign:g}")
     lines.append(f"  source quadrature points: {config.source_quadrature_points if int(config.source_quadrature_points) > 0 else 'auto'}")
