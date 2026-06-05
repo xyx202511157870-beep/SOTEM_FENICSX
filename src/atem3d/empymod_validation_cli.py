@@ -8,6 +8,10 @@ from pathlib import Path
 import yaml
 
 from .empymod_validation import run_empymod_validation, run_empymod_validation_sweep
+from .validation_3comp import (
+    ThreeComponentValidationInput,
+    write_three_component_validation_artifacts,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,6 +33,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--time-max", type=float, default=None)
     parser.add_argument("--tolerance", type=float, default=None)
     parser.add_argument("--absolute-tolerance", type=float, default=None)
+    parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=None,
+        help="Optional directory for three-component validation CSV/JSON/PNG artifacts",
+    )
+    parser.add_argument("--case-type", choices=["noip", "ip"], default="noip")
+    parser.add_argument("--magnetic-quantity", default=None)
     parser.add_argument(
         "--sweep-cases",
         type=Path,
@@ -92,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
         return _exit_status(args.require_pass, report)
 
     validation = run_empymod_validation(config, **validation_kwargs)
+    if args.artifact_dir is not None:
+        _write_validation_artifacts(args, config, validation)
     report = validation.to_report()
     print(f"wrote {args.output}")
     print(f"passed={report['passed']}")
@@ -118,6 +132,40 @@ def _load_config(path: Path):
     if not isinstance(payload, dict):
         raise ValueError("configuration root must be a mapping")
     return payload
+
+
+def _write_validation_artifacts(args, config: dict, validation) -> None:
+    magnetic_quantity = (
+        str(args.magnetic_quantity)
+        if args.magnetic_quantity is not None
+        else _default_magnetic_quantity(validation.component_names)
+    )
+    write_three_component_validation_artifacts(
+        ThreeComponentValidationInput(
+            output_dir=args.artifact_dir,
+            times=validation.times,
+            predictions=validation.numerical,
+            reference=validation.reference,
+            component_names=[str(name) for name in validation.component_names],
+            case_type=str(args.case_type),
+            reference_type="empymod",
+            magnetic_quantity=magnetic_quantity,
+            threshold=0.05 if validation.tolerance is None else float(validation.tolerance),
+            diagnostics={
+                "metadata": validation.metadata,
+                "component_diagnostics": validation.diagnostics,
+            },
+            resolved_config=config,
+        )
+    )
+
+
+def _default_magnetic_quantity(component_names: list[str]) -> str:
+    for name in component_names:
+        component = str(name).split("@", 1)[0]
+        if component.startswith(("H", "B", "dB")):
+            return component
+    return str(component_names[-1])
 
 
 def _exit_status(require_pass: bool, report: dict) -> int:

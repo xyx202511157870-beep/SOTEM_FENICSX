@@ -95,6 +95,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `src/atem3d/empymod_validation.py` and `src/atem3d/empymod_validation_cli.py`
   - Lazy-load simulation construction dependencies.
   - Keep empymod validation unit tests runnable with injected runners/reference runners.
+  - `atem3d-validate-empymod --artifact-dir ...` can write P7 three-component validation artifacts from an `EmpymodValidationResult`.
 
 - `pyproject.toml`
   - Adds `tdem-ip-forward = "atem3d.cli:main"` command alias.
@@ -244,6 +245,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
+- `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
 - Full no-IP/IP 5% acceptance is not yet achieved.
 

@@ -83,6 +83,95 @@ def test_empymod_validation_cli_writes_report(tmp_path, monkeypatch):
     assert status == 0
 
 
+def test_empymod_validation_cli_can_write_three_component_artifacts(tmp_path, monkeypatch):
+    config_path = tmp_path / "case.yaml"
+    output_path = tmp_path / "report.json"
+    artifact_dir = tmp_path / "artifacts"
+    config_path.write_text("value: 1\n", encoding="utf-8")
+
+    validation = EmpymodValidationResult(
+        times=np.array([1.0e-5, 1.0e-3, 1.0]),
+        numerical=np.array(
+            [
+                [1.0, 0.5, 1.0e-9],
+                [0.5, 0.25, 5.0e-10],
+                [0.1, 0.05, 1.0e-10],
+            ]
+        ),
+        reference=np.array(
+            [
+                [1.0, 0.5, 1.0e-9],
+                [0.5, 0.25, 5.0e-10],
+                [0.1, 0.05, 1.0e-10],
+            ]
+        ),
+        component_names=["Ex", "Ey", "dBzdt"],
+        components={
+            "Ex": {
+                "relative_l2": 0.0,
+                "relative_linf": 0.0,
+                "absolute_linf": 0.0,
+                "passed": True,
+                "passed_by": "relative",
+            },
+            "Ey": {
+                "relative_l2": 0.0,
+                "relative_linf": 0.0,
+                "absolute_linf": 0.0,
+                "passed": True,
+                "passed_by": "relative",
+            },
+            "dBzdt": {
+                "relative_l2": 0.0,
+                "relative_linf": 0.0,
+                "absolute_linf": 0.0,
+                "passed": True,
+                "passed_by": "relative",
+            },
+        },
+        diagnostics={},
+        metadata={},
+        tolerance=0.05,
+    )
+    monkeypatch.setattr(
+        empymod_validation_cli,
+        "run_empymod_validation",
+        lambda config, **kwargs: validation,
+    )
+
+    status = empymod_validation_cli.main(
+        [
+            str(config_path),
+            "--depths",
+            "0",
+            "--resistivities",
+            "1e8",
+            "100",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--case-type",
+            "noip",
+            "--magnetic-quantity",
+            "dBzdt",
+            "-o",
+            str(output_path),
+        ]
+    )
+
+    assert status == 0
+    for name in [
+        "predictions.csv",
+        "reference_empymod_or_1d.csv",
+        "errors.csv",
+        "error_summary.json",
+        "comparison_3comp.png",
+        "error_curves_3comp.png",
+        "diagnostics.json",
+        "run_config_resolved.yaml",
+    ]:
+        assert (artifact_dir / name).is_file()
+
+
 def test_empymod_validation_cli_require_pass_returns_nonzero_for_failed_case(
     tmp_path, monkeypatch
 ):
