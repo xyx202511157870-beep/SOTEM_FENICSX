@@ -60,6 +60,7 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
     diagnostics.setdefault("case_type", case.case_type)
     diagnostics.setdefault("reference_type", case.reference_type)
     diagnostics.setdefault("components", component_names)
+    diagnostics["validation_failure"] = _automatic_failure_diagnostics(summary)
     (output_dir / "diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -154,6 +155,30 @@ def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict
             }
         )
     return values
+
+
+def _automatic_failure_diagnostics(summary: dict) -> dict:
+    failed = not bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
+    return {
+        "failed": failed,
+        "strict_failed": not bool(summary.get("pass_all_components", False)),
+        "failed_components": list(summary.get("failed_components", [])),
+        "physical_failed_components": list(
+            summary.get("physical_failed_components", summary.get("failed_components", []))
+        ),
+        "failed_times": list(summary.get("failed_times", [])),
+        "recommended_check_order": [
+            "time_step_error",
+            "mesh_error",
+            "boundary_error",
+            "source_term_error",
+            "receiver_sampling_error",
+            "magnetic_recovery_error",
+            "ip_memory_error",
+        ],
+        "weak_component_passed": bool(summary.get("weak_component_passed", True)),
+        "weak_components": list(summary.get("weak_components", [])),
+    }
 
 
 def _write_response_csv(

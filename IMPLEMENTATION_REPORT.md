@@ -150,6 +150,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `run_config_resolved.yaml` resolved validation configuration output.
   - Robust relative error and peak-normalized error output through existing metric code.
   - IP Prony metadata in `error_summary.json`.
+  - `diagnostics.json` now includes `validation_failure` with failed
+    components/times and the task-book diagnostic check order whenever a
+    validation table is written.
 
 - `src/atem3d/cli.py`
   - Keeps legacy simulation run mode.

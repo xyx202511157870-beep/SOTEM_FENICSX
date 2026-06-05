@@ -79,3 +79,36 @@ def test_validation_rejects_time_table_that_does_not_cover_required_window(tmp_p
                 magnetic_quantity="dBzdt",
             )
         )
+
+
+def test_validation_failure_writes_automatic_diagnostic_check_order(tmp_path):
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    reference = np.ones((3, 3))
+    predictions = 2.0 * reference
+
+    write_three_component_validation_artifacts(
+        ThreeComponentValidationInput(
+            output_dir=tmp_path,
+            times=times,
+            predictions=predictions,
+            reference=reference,
+            component_names=["Ex", "Ey", "dBzdt"],
+            case_type="noip",
+            reference_type="empymod",
+            magnetic_quantity="dBzdt",
+        )
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    failure = diagnostics["validation_failure"]
+    assert failure["failed"] is True
+    assert failure["failed_components"] == ["Ex", "Ey", "dBzdt"]
+    assert failure["recommended_check_order"] == [
+        "time_step_error",
+        "mesh_error",
+        "boundary_error",
+        "source_term_error",
+        "receiver_sampling_error",
+        "magnetic_recovery_error",
+        "ip_memory_error",
+    ]
