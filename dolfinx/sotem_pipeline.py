@@ -4844,8 +4844,20 @@ def _divergence_control_summary(solver_log) -> dict[str, Any]:
     }
 
 
-def diagnose_source_consistency(config: PipelineConfig, *, source_projection_residual: float | None = None) -> dict[str, Any]:
+def diagnose_source_consistency(
+    config: PipelineConfig,
+    *,
+    source_projection_residual: float | None = None,
+    source_diagnostic_inputs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return source/waveform consistency diagnostics available without FEM matrices."""
+
+    if source_diagnostic_inputs is not None:
+        from atem3d.source_diagnostics import diagnose_source_consistency as diagnose_core
+
+        diagnostics = diagnose_core(**dict(source_diagnostic_inputs))
+        diagnostics["diagnostic_backend"] = "atem3d.source_diagnostics"
+        return diagnostics
 
     initial = _source_current(0.0, config)
     final = _source_current(float(config.ramp_off_time), config)

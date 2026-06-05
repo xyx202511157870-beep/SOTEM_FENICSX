@@ -70,6 +70,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     - `diagnostics.json`
     - `run_config_resolved.yaml`
   - Added automatic diagnostic scaffolding and source waveform consistency diagnostics.
+  - `diagnose_source_consistency` can now optionally delegate explicit
+    matrix/weak-form diagnostic inputs to the reusable
+    `atem3d.source_diagnostics` core while preserving the old self-contained
+    fallback path.
   - Receiver diagnostics now record sampling/cell-candidate statistics:
     `sample_count`, `candidate_count_min`, `candidate_count_max`, and
     `candidate_count_mean` in `receiver_diagnostics.csv`.

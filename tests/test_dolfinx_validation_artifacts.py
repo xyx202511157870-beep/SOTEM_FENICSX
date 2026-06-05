@@ -268,6 +268,34 @@ def test_scalar_source_balance_vector_diagnostics_reports_residual_distribution(
     assert diagnostics["current_div_endpoint_alignment"] == pytest.approx(1.2 / (np.linalg.norm([0.8, -0.4, 0.3]) * np.sqrt(2.0)))
 
 
+def test_pipeline_source_consistency_can_use_core_matrix_diagnostics(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+
+    diagnostics = sp.diagnose_source_consistency(
+        config,
+        source_diagnostic_inputs={
+            "gradient_transpose": np.eye(2),
+            "source_vector": np.array([1.0, 0.0]),
+            "endpoint_source": np.array([0.0, 0.0]),
+            "divergence_operator": np.eye(2),
+            "conductive_current": np.array([2.0, -1.0]),
+            "initial_electric_field": np.array([1.0, 3.0]),
+            "curl_operator": np.array([[1.0, -1.0]]),
+            "time_intervals": np.array([1.0, 2.0]),
+            "interval_average_didt": np.array([3.0, 4.0]),
+            "current_initial": 1.0,
+            "current_final": 5.0,
+        },
+    )
+
+    assert diagnostics["source_endpoint_balance_residual"] == pytest.approx(1.0)
+    assert diagnostics["dc_current_conservation_residual"] == pytest.approx(np.sqrt(5.0))
+    assert diagnostics["initial_curl_residual"] == pytest.approx(2.0)
+    assert diagnostics["waveform_integral_residual"] == pytest.approx(7.0)
+    assert diagnostics["diagnostic_backend"] == "atem3d.source_diagnostics"
+
+
 def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path, source_only=True)
