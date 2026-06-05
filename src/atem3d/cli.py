@@ -16,6 +16,8 @@ from .validation_3comp import (
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv and argv[0] == "run":
+        return _main_run(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)

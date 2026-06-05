@@ -143,6 +143,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
 - `src/atem3d/cli.py`
   - Keeps legacy simulation run mode.
+  - Adds task-book `run CONFIG.yaml` subcommand dispatch while preserving
+    legacy `CONFIG.yaml` invocation.
   - Adds `validate-noip-3comp CONFIG.yaml`.
   - Adds `validate-ip-3comp CONFIG.yaml`.
   - Uses lazy imports so validation CLI does not require heavy simulation dependencies.
