@@ -276,6 +276,50 @@ endpoint-balance and waveform-integral diagnostics on a coarse smoke mesh. This
 does not validate the transient PDE response or the final `5%` no-IP/IP target.
 WSL was shut down after the run and confirmed `Stopped`.
 
+Latest WSL no-IP transient first-output smoke for the corrected explicit geometry:
+
+```text
+workdir = dolfinx/current_task_runs/y200_rxminus300_noip_first_output_latest_smoke
+source = (-500, 200, -0.1) -> (500, 200, -0.1)
+receiver = (0, -300, -0.1)
+expected_source_length = 1000 m
+expected_parallel_offset = 500 m
+t_obs = 1.0e-5 s
+stop_after_outputs = 1
+```
+
+Runtime:
+
+```text
+total = 16.123 s
+mesh = 1.760 s
+setup = 1.032 s
+forward_solve = 9.651 s
+empymod_reference = 0.591 s
+```
+
+Result at the first output:
+
+```text
+max_error_Ex = 0.5726338805279592
+max_error_Ey = 4134147469.564552
+max_error_dBzdt = 0.3370050078629801
+physical_failed_components = Ex, dBzdt
+weak_components = Ey
+weak_component_passed = true
+source_endpoint_balance_residual = 2.2680708322072504e-14
+waveform_integral_residual = 0.0
+receiver_sampling_issue_suspected = true
+disk_average_improves_Ey_only = true
+```
+
+Interpretation: the transient path runs and writes validation artifacts for the
+latest explicit geometry, but the first output still fails the `5%` physical
+gate for `Ex` and `dBzdt`. The source balance and waveform checks pass, so the
+next diagnostic focus should remain mesh/boundary/receiver/curl recovery and
+the primary-secondary formulation. WSL was shut down after the run and
+confirmed `Stopped`.
+
 Lightweight P0-P2 tests:
 
 ```bash
