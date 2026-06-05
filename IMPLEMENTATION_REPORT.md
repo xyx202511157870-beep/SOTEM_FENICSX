@@ -61,7 +61,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `PrimaryFieldProvider`
   - `ZeroPrimaryProvider`
   - `CachedPrimaryProvider`
-  - `EmpymodPrimaryProvider` skeleton with no import-time dependency on `empymod`.
+  - `EmpymodPrimaryProvider` with no import-time dependency on `empymod`.
+  - Injected-runner receiver `E` and `dBdt` primary sampling via `EmpymodSurvey`.
 
 - `src/atem3d/solvers/dc_secondary.py`
   - `DCSecondaryInitialization`
@@ -225,7 +226,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
 - Average receivers and Faraday-integrated `Hz` recovery are not fully implemented in this round.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
-- P4 currently provides zero/cached primary providers and an empymod skeleton; the actual empymod field sampling implementation remains pending.
+- P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.

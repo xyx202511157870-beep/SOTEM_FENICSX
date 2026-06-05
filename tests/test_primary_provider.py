@@ -105,3 +105,56 @@ def test_empymod_primary_provider_skeleton_does_not_require_empymod(monkeypatch)
 
     with pytest.raises(NotImplementedError, match="EmpymodPrimaryProvider"):
         provider.get_receiver_dBdt(0.1, np.array([[0.0, 0.0, 0.0]]))
+
+
+def test_empymod_primary_provider_get_receiver_E_uses_reference_runner():
+    seen = {}
+
+    def fake_runner(survey, **kwargs):
+        seen["components"] = survey.components
+        seen["receiver_components"] = survey.receiver_components
+        seen["times"] = survey.times.copy()
+        seen["kwargs"] = kwargs
+        return np.array([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]])
+
+    provider = EmpymodPrimaryProvider(
+        config=_empymod_provider_config(),
+        reference_runner=fake_runner,
+        empymod_kwargs={"srcpts": 7},
+    )
+    receivers = np.array([[0.0, 10.0, -0.5], [1.0, 11.0, -0.5]])
+
+    values = provider.get_receiver_E(0.25, receivers)
+
+    np.testing.assert_allclose(values, [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert seen["components"] == ["Ex", "Ey", "Ez"]
+    assert seen["receiver_components"][0] == ((0.0, 10.0, -0.5), "Ex")
+    np.testing.assert_allclose(seen["times"], [0.25])
+    assert seen["kwargs"] == {"srcpts": 7}
+
+
+def test_empymod_primary_provider_get_receiver_dBdt_uses_reference_runner():
+    def fake_runner(survey, **kwargs):
+        assert survey.components == ["dBxdt", "dBydt", "dBzdt"]
+        return np.array([[7.0, 8.0, 9.0]])
+
+    provider = EmpymodPrimaryProvider(
+        config=_empymod_provider_config(),
+        reference_runner=fake_runner,
+    )
+
+    values = provider.get_receiver_dBdt(1.0e-3, np.array([[0.0, 10.0, -0.5]]))
+
+    np.testing.assert_allclose(values, [[7.0, 8.0, 9.0]])
+
+
+def _empymod_provider_config():
+    return {
+        "source_start": [-25.0, 0.0, -0.5],
+        "source_end": [25.0, 0.0, -0.5],
+        "depths": [0.0],
+        "resistivities": [1.0e8, 100.0],
+        "strength": 10.0,
+        "signal": -1,
+        "coordinate_system": "z_up",
+    }
