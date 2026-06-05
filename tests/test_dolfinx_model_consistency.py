@@ -138,6 +138,7 @@ def test_model_consistency_rejects_air_or_interface_electrodes(kwargs):
         ("time_theta", 0.49),
         ("source_mesh_size", 0.0),
         ("receiver_mesh_size", -1.0),
+        ("receiver_anchor_mesh_size", -1.0),
         ("source_rhs_sign", 0.0),
         ("source_quadrature_points", -1),
         ("stop_after_outputs", -1),

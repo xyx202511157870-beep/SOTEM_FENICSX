@@ -23,6 +23,7 @@ def test_receiver_refinement_defaults_are_explicit():
     assert config.source_mesh_size == 5.0
     assert config.source_refinement_radius == 100.0
     assert config.receiver_mesh_size == 10.0
+    assert config.receiver_anchor_mesh_size == 0.0
     assert config.receiver_refinement_radius == 60.0
 
 
@@ -39,6 +40,21 @@ def test_receiver_refinement_cloud_keeps_local_points_in_earth():
     assert (500.0, 50.0, -10.1) in points
 
 
+def test_receiver_anchor_mesh_size_decouples_local_cloud_from_receiver_mesh_size():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver=(500.0, 50.0, -0.1),
+        receiver_mesh_size=200.0,
+        receiver_anchor_mesh_size=10.0,
+    )
+
+    points = sp._receiver_refinement_cloud_points(config)
+
+    assert (510.0, 50.0, -0.1) in points
+    assert (500.0, 50.0, -10.1) in points
+    assert (700.0, 50.0, -0.1) not in points
+
+
 def test_receiver_surface_refinement_cloud_adds_interface_points():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(receiver=(500.0, 50.0, -0.1), receiver_mesh_size=10.0)
@@ -50,6 +66,21 @@ def test_receiver_surface_refinement_cloud_adds_interface_points():
     assert (500.0, 50.0, 0.0) in points
     assert (510.0, 50.0, 0.0) in points
     assert (500.0, 60.0, 0.0) in points
+
+
+def test_receiver_anchor_mesh_size_decouples_surface_cloud_from_receiver_mesh_size():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver=(500.0, 50.0, -0.1),
+        receiver_mesh_size=200.0,
+        receiver_anchor_mesh_size=10.0,
+    )
+
+    points = sp._receiver_surface_refinement_points(config)
+
+    assert (510.0, 50.0, 0.0) in points
+    assert (500.0, 60.0, 0.0) in points
+    assert (700.0, 50.0, 0.0) not in points
 
 
 def test_source_refinement_cloud_adds_points_below_and_crossline():

@@ -438,6 +438,70 @@ improve `Ex` or `dBzdt` against empymod in this smoke. This supports continuing
 with receiver/source-aligned mesh construction and the primary-secondary
 formulation rather than treating averaging as a fix.
 
+Receiver anchor mesh-size control:
+
+- `PipelineConfig.receiver_anchor_mesh_size` and CLI option
+  `--receiver-anchor-mesh-size` were added. A value of `0` preserves the
+  existing behavior and reuses `receiver_mesh_size`.
+- When positive, this anchor size controls the receiver embedded point, receiver
+  cloud, receiver surface cloud, receiver distance field `SizeMin`, receiver
+  ball field `VIn`, and global `MeshSizeMin` lower bound.
+- This allows local receiver anchoring to be tightened without forcing the
+  whole receiver refinement radius or source mesh to use the same small size.
+
+WSL coarse receiver-anchor smoke for the corrected explicit geometry:
+
+```text
+workdir = dolfinx/current_task_runs/y200_rxminus300_receiver_anchor10_diag_smoke
+source_mesh_size = 200 m
+receiver_mesh_size = 200 m
+receiver_anchor_mesh_size = 10 m
+receiver_refinement_radius = 60 m
+receiver_evaluation_mode = nearest_center
+receiver_diagnostic_types = point,disk_average,volume_average
+t_obs = 1.0e-5 s
+stop_after_outputs = 1
+```
+
+Runtime outcome:
+
+```text
+mesh nodes = 5354
+mesh cells reported by DOLFINx = 30353
+Nedelec dofs = 36028
+estimated solver memory = 0.9755205 GB
+WSL wall time = 34.5 s
+WSL shutdown state after run = Ubuntu Stopped
+```
+
+Point receiver geometry improved relative to the previous coarse smoke:
+
+```text
+candidate_count = 32
+candidate_center_distance_min = 3.9535585236594133 m
+candidate_center_distance_max = 6.837442869962425 m
+candidate_center_distance_mean = 5.879788398175545 m
+candidate_center_z_min = -5.074999999999999 m
+candidate_center_z_max = -0.025 m
+selected_center_distance_mean = 3.9535585236594133 m
+selected_center_z_mean = -0.025 m
+```
+
+First-output error summary:
+
+```text
+point Ex robust error = 0.42293716574207946
+point Ey robust error = 7661803478.60315
+point dBzdt robust error = 0.3715145540364427
+```
+
+Interpretation: the anchor option substantially improves local receiver
+geometry and reduces `Ex` and weak-component-scaled `Ey` error compared with
+the previous coarse diagnostic, but it worsens `dBzdt` at this first output.
+Receiver geometry is therefore confirmed as one error source, but not the full
+root cause. The next high-value checks are curl/dBdt recovery consistency,
+source transfer/source-channel alignment, and the primary-secondary solver path.
+
 Lightweight P0-P2 tests:
 
 ```bash

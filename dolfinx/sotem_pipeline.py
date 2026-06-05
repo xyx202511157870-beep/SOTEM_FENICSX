@@ -75,6 +75,7 @@ class PipelineConfig:
     receiver_average_radius: float = 2.0
     receiver_diagnostic_types: tuple[str, ...] | str = ()
     receiver_mesh_size: float = 10.0
+    receiver_anchor_mesh_size: float = 0.0
     receiver_refinement_radius: float = 60.0
     outer_boundary_mode: str = "pec"  # pec, natural, robin
     outer_boundary_robin_scale: float = 1.0
@@ -448,6 +449,12 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         ("memory_limit_gb", config.memory_limit_gb),
     ]:
         require_positive(name, value)
+    receiver_anchor_mesh_size = float(config.receiver_anchor_mesh_size)
+    if not math.isfinite(receiver_anchor_mesh_size) or receiver_anchor_mesh_size < 0.0:
+        raise ValueError(
+            "receiver_anchor_mesh_size must be finite and nonnegative; "
+            f"got {receiver_anchor_mesh_size:.12g}"
+        )
     memory_safety_fraction = float(config.memory_safety_fraction)
     if not math.isfinite(memory_safety_fraction) or memory_safety_fraction <= 0.0 or memory_safety_fraction > 1.0:
         raise ValueError(
@@ -1036,7 +1043,7 @@ def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[floa
     """Return extra embedded points that keep receiver cells locally small."""
 
     x, y, z = (float(v) for v in config.receiver)
-    h = max(float(config.receiver_mesh_size), 1.0e-9)
+    h = _receiver_anchor_mesh_size(config)
     radius = max(h, float(config.receiver_refinement_radius))
     n_layers = max(1, min(4, int(math.ceil(radius / h))))
     raw_points: list[tuple[float, float, float]] = []
@@ -1074,7 +1081,7 @@ def _receiver_surface_refinement_points(config: PipelineConfig) -> list[tuple[fl
     import numpy as np
 
     x, y, _z = (float(v) for v in config.receiver)
-    h = max(float(config.receiver_mesh_size), 1.0e-9)
+    h = _receiver_anchor_mesh_size(config)
     radius = max(h, float(config.receiver_refinement_radius))
     n_layers = max(1, min(4, int(math.ceil(radius / h))))
     raw_points: list[tuple[float, float, float]] = []
@@ -1093,6 +1100,15 @@ def _receiver_surface_refinement_points(config: PipelineConfig) -> list[tuple[fl
         seen.add(key)
         points.append(key)
     return points
+
+
+def _receiver_anchor_mesh_size(config: PipelineConfig) -> float:
+    """Return the local receiver anchoring length scale used for embedded points."""
+
+    anchor = float(config.receiver_anchor_mesh_size)
+    if anchor > 0.0:
+        return max(anchor, 1.0e-9)
+    return max(float(config.receiver_mesh_size), 1.0e-9)
 
 
 def _source_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
@@ -1200,12 +1216,13 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         p1 = occ.addPoint(*config.source_end, 5.0)
         source_line = occ.addLine(p0, p1)
         source_cloud = [occ.addPoint(*point, config.source_mesh_size) for point in _source_refinement_cloud_points(config)]
-        rp = occ.addPoint(*config.receiver, 10.0)
+        receiver_anchor_mesh_size = _receiver_anchor_mesh_size(config)
+        rp = occ.addPoint(*config.receiver, receiver_anchor_mesh_size)
         receiver_cloud = [
-            occ.addPoint(*point, config.receiver_mesh_size) for point in _receiver_refinement_cloud_points(config)
+            occ.addPoint(*point, receiver_anchor_mesh_size) for point in _receiver_refinement_cloud_points(config)
         ]
         receiver_surface_cloud = [
-            occ.addPoint(*point, config.receiver_mesh_size) for point in _receiver_surface_refinement_points(config)
+            occ.addPoint(*point, receiver_anchor_mesh_size) for point in _receiver_surface_refinement_points(config)
         ]
         occ.synchronize()
 
@@ -1287,7 +1304,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.model.mesh.field.setNumbers(f_point, "PointsList", [rp, *receiver_surface_cloud])
         f_receiver = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(f_receiver, "InField", f_point)
-        gmsh.model.mesh.field.setNumber(f_receiver, "SizeMin", config.receiver_mesh_size)
+        gmsh.model.mesh.field.setNumber(f_receiver, "SizeMin", receiver_anchor_mesh_size)
         gmsh.model.mesh.field.setNumber(f_receiver, "SizeMax", 2500.0)
         gmsh.model.mesh.field.setNumber(f_receiver, "DistMin", config.receiver_refinement_radius)
         gmsh.model.mesh.field.setNumber(f_receiver, "DistMax", 3000.0)
@@ -1297,7 +1314,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "YCenter", config.receiver[1])
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "ZCenter", config.receiver[2])
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "Radius", config.receiver_refinement_radius)
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "VIn", config.receiver_mesh_size)
+        gmsh.model.mesh.field.setNumber(f_receiver_ball, "VIn", receiver_anchor_mesh_size)
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "VOut", 2500.0)
 
         diffusion_box = _diffusion_refinement_box(config)
@@ -1316,7 +1333,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         f_min = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", [f_source, f_receiver, f_receiver_ball, f_box])
         gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
-        gmsh.option.setNumber("Mesh.MeshSizeMin", min(5.0, config.source_mesh_size, config.receiver_mesh_size))
+        gmsh.option.setNumber("Mesh.MeshSizeMin", min(5.0, config.source_mesh_size, receiver_anchor_mesh_size))
         gmsh.option.setNumber("Mesh.MeshSizeMax", 3000.0)
         gmsh.option.setNumber("Mesh.Optimize", 1)
         gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
@@ -5275,6 +5292,9 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "source_current": float(config.source_current),
         "source_projection_mode": str(config.source_projection_mode),
         "receiver": list(config.receiver),
+        "receiver_mesh_size": float(config.receiver_mesh_size),
+        "receiver_anchor_mesh_size": float(config.receiver_anchor_mesh_size),
+        "receiver_refinement_radius": float(config.receiver_refinement_radius),
         "ramp_off_time": float(config.ramp_off_time),
         "time_origin": str(config.time_origin),
         "t_min": float(config.t_min),
@@ -5693,6 +5713,11 @@ def write_report(
     lines.append(
         f"  receiver type: {config.receiver_type}; "
         f"average radius={float(config.receiver_average_radius):.6g} m"
+    )
+    lines.append(
+        f"  receiver mesh size: {float(config.receiver_mesh_size):.6g} m; "
+        f"anchor mesh size={_receiver_anchor_mesh_size(config):.6g} m; "
+        f"refinement radius={float(config.receiver_refinement_radius):.6g} m"
     )
     lines.append(f"  receiver evaluation mode: {config.receiver_evaluation_mode}")
     receiver_summary = _receiver_diagnostic_summary(
@@ -7040,6 +7065,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-refinement-radius", type=float, default=100.0)
     parser.add_argument("--source-quadrature-points", type=int, default=0, help="Override manual line-source Gauss points; 0 keeps the automatic rule.")
     parser.add_argument("--receiver-mesh-size", type=float, default=10.0)
+    parser.add_argument(
+        "--receiver-anchor-mesh-size",
+        type=float,
+        default=0.0,
+        help="Optional local receiver anchoring mesh size in metres; 0 reuses --receiver-mesh-size.",
+    )
     parser.add_argument("--receiver-refinement-radius", type=float, default=60.0)
     parser.add_argument("--diffusion-refinement-factor", type=float, default=0.0, help="If >0, expand the 80 m late-diffusion refinement box to factor*sqrt(2*rho_max*t_max/mu).")
     parser.add_argument("--diffusion-refinement-mesh-size", type=float, default=80.0)
@@ -7139,6 +7170,7 @@ def main(argv: list[str] | None = None) -> int:
         source_refinement_radius=args.source_refinement_radius,
         source_quadrature_points=args.source_quadrature_points,
         receiver_mesh_size=args.receiver_mesh_size,
+        receiver_anchor_mesh_size=args.receiver_anchor_mesh_size,
         receiver_refinement_radius=args.receiver_refinement_radius,
         diffusion_refinement_factor=args.diffusion_refinement_factor,
         diffusion_refinement_mesh_size=args.diffusion_refinement_mesh_size,
