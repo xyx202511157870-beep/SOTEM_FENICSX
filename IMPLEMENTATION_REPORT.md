@@ -45,6 +45,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     `--receiver-diagnostic-types` writes simultaneous point/average diagnostic
     receiver rows to `receiver_diagnostics.csv` and automatically plots
     `receiver_diagnostics.png` without changing `predictions.csv`.
+    When empymod/reference data are available, diagnostic receiver responses
+    are also compared against the reference and written to
+    `receiver_reference_errors.csv` and `receiver_reference_error_curves.png`.
   - Added P2 validation artifacts:
     - `predictions.csv`
     - `reference_empymod_or_1d.csv`
@@ -367,6 +370,8 @@ Simultaneous point/disk receiver diagnostic smoke:
 - Artifacts include:
   - `receiver_diagnostics.csv`
   - `receiver_diagnostics.png`
+  - `receiver_reference_errors.csv`
+  - `receiver_reference_error_curves.png`
   - standard `comparison_3comp.png`, `error_curves_3comp.png`,
     `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
     `error_summary.json`, `diagnostics.json`.
@@ -379,9 +384,11 @@ Simultaneous point/disk receiver diagnostic smoke:
   - `diagnostics.json` includes `magnetic_recovery` from a Faraday-integrated
     `dBzdt` receiver trace. Over the first five points, the integrated `Hz`
     differs from reported Biot `Hz` by at most about `0.45%`.
-  - `diagnostics.json` includes `receiver_vs_reference`: `disk_average`
-    improves `dBzdt` max error from about `53.1%` to `38.3%`, but still
-    fails the `5%` target. It does not improve `Ex` or weak `Ey`.
+  - `diagnostics.json` includes `receiver_vs_reference`, and the same
+    diagnostic receiver/reference errors are now emitted as the automatic CSV
+    and PNG artifacts listed above. `disk_average` improves `dBzdt` max error
+    from about `53.1%` to `38.3%`, but still fails the `5%` target. It does
+    not improve `Ex` or weak `Ey`.
 - Result over the first five output times
   (`1.0e-5` to `2.44140625e-5 s`):
   - `max_error_Ex = 0.27639692569161395`

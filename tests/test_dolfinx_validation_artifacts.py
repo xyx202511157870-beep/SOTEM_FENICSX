@@ -100,6 +100,11 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.8
     assert diagnostics["receiver_vs_reference"]["enabled"] is True
     assert diagnostics["receiver_vs_reference"]["comparisons"]["disk_average"]["dBzdt"]["improves_over_baseline"] is True
+    assert (tmp_path / "receiver_reference_errors.csv").is_file()
+    assert (tmp_path / "receiver_reference_error_curves.png").is_file()
+    receiver_rows = list(csv.DictReader((tmp_path / "receiver_reference_errors.csv").open("r", encoding="utf-8", newline="")))
+    assert receiver_rows[0]["receiver_type"] == "point"
+    assert {"time_obs", "receiver_type", "component", "pred", "ref", "relative_error_with_floor", "pass_5pct"} <= set(receiver_rows[0])
 
 
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():

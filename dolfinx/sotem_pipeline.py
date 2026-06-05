@@ -2481,6 +2481,131 @@ def _receiver_reference_summary(receiver_diagnostic_rows, times, ref_data, compo
     }
 
 
+def _receiver_reference_error_rows(receiver_diagnostic_rows, times, ref_data, components, *, threshold: float = 0.05) -> list[dict[str, Any]]:
+    import numpy as np
+
+    rows = list(receiver_diagnostic_rows or [])
+    if not rows:
+        return []
+    component_names = [str(component) for component in components]
+    t = np.asarray(times, dtype=float)
+    ref = np.asarray(ref_data, dtype=float)
+    if ref.ndim != 2 or ref.shape[0] != t.size or ref.shape[1] != len(component_names):
+        return []
+    time_to_index = {float(time): i for i, time in enumerate(t)}
+    out = []
+    for row in rows:
+        receiver_type = str(row.get("receiver_type", ""))
+        time_obs = float(row.get("time_obs", math.nan))
+        idx = time_to_index.get(time_obs)
+        if not receiver_type or idx is None:
+            continue
+        for col, component in enumerate(component_names):
+            pred_value = float(row.get(component, math.nan))
+            if not math.isfinite(pred_value):
+                continue
+            ref_value = float(ref[idx, col])
+            floor = _validation_floor(component, ref[:, col])
+            max_abs_ref = float(np.max(np.abs(ref[:, col]))) if ref.shape[0] else 0.0
+            abs_error = abs(pred_value - ref_value)
+            ordinary = abs_error / abs(ref_value) if ref_value != 0.0 else float("inf")
+            robust = abs_error / max(abs(ref_value), floor)
+            peak = abs_error / max(max_abs_ref, floor)
+            out.append(
+                {
+                    "time_obs": time_obs,
+                    "receiver_type": receiver_type,
+                    "component": component,
+                    "pred": pred_value,
+                    "ref": ref_value,
+                    "abs_error": float(abs_error),
+                    "ordinary_relative_error": float(ordinary),
+                    "relative_error_with_floor": float(robust),
+                    "peak_normalized_error": float(peak),
+                    "pass_5pct": bool(robust <= float(threshold) and peak <= float(threshold)),
+                }
+            )
+    return out
+
+
+def _write_receiver_reference_error_artifacts(workdir: Path, receiver_rows: list[dict[str, Any]]) -> None:
+    csv_path = workdir / "receiver_reference_errors.csv"
+    png_path = workdir / "receiver_reference_error_curves.png"
+    if not receiver_rows:
+        for path in (csv_path, png_path):
+            if path.exists():
+                path.unlink()
+        return
+    fields = [
+        "time_obs",
+        "receiver_type",
+        "component",
+        "pred",
+        "ref",
+        "abs_error",
+        "ordinary_relative_error",
+        "relative_error_with_floor",
+        "peak_normalized_error",
+        "pass_5pct",
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in receiver_rows:
+            writer.writerow(row)
+
+    import numpy as np
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    components = []
+    receiver_types = []
+    for row in receiver_rows:
+        component = str(row["component"])
+        receiver_type = str(row["receiver_type"])
+        if component not in components:
+            components.append(component)
+        if receiver_type not in receiver_types:
+            receiver_types.append(receiver_type)
+    fig, axes = plt.subplots(len(components), 1, figsize=(7.2, 2.6 * len(components) + 1.0), sharex=True)
+    axes_arr = np.atleast_1d(axes)
+    markers = ["o", "s", "^", "d", "x"]
+    for ax, component in zip(axes_arr, components):
+        for i, receiver_type in enumerate(receiver_types):
+            subset = [
+                row for row in receiver_rows
+                if str(row["component"]) == component and str(row["receiver_type"]) == receiver_type
+            ]
+            subset.sort(key=lambda row: float(row["time_obs"]))
+            if not subset:
+                continue
+            ax.semilogx(
+                [float(row["time_obs"]) for row in subset],
+                [float(row["relative_error_with_floor"]) for row in subset],
+                marker=markers[i % len(markers)],
+                label=f"{receiver_type} robust",
+            )
+            ax.semilogx(
+                [float(row["time_obs"]) for row in subset],
+                [float(row["peak_normalized_error"]) for row in subset],
+                linestyle="--",
+                marker=markers[i % len(markers)],
+                alpha=0.75,
+                label=f"{receiver_type} peak",
+            )
+        ax.axhline(0.05, color="black", linestyle=":", linewidth=1.2, label="5%")
+        ax.set_ylabel(component)
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(loc="best")
+    axes_arr[-1].set_xlabel("t_obs (s)")
+    fig.suptitle("Receiver diagnostics vs reference")
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    fig.savefig(png_path, dpi=180)
+    plt.close(fig)
+
+
 def _forward_components(config: PipelineConfig) -> list[str]:
     components = ["Ex", "Ey"]
     magnetic_mode = str(config.magnetic_receiver_mode).strip().lower()
@@ -4020,6 +4145,14 @@ def write_validation_artifacts(
     _write_component_csv(workdir / "predictions.csv", times, pred_data, components)
     _write_component_csv(workdir / "reference_empymod_or_1d.csv", times, ref_data, components)
     _write_errors_csv(workdir / "errors.csv", rows)
+    receiver_reference_rows = _receiver_reference_error_rows(
+        receiver_diagnostic_rows,
+        times,
+        ref_data,
+        components,
+        threshold=threshold,
+    )
+    _write_receiver_reference_error_artifacts(workdir, receiver_reference_rows)
     (workdir / "error_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     diagnostics = _automatic_failure_diagnostics(
         summary,
