@@ -145,3 +145,19 @@ def test_validation_artifacts_include_faraday_magnetic_recovery_summary(tmp_path
     assert diagnostics["magnetic_recovery"]["enabled"] is True
     assert diagnostics["magnetic_recovery"]["method"] == "faraday_integrated_dBzdt"
     assert diagnostics["magnetic_recovery"]["max_absolute_hz_difference"] > 0.0
+
+
+def test_magnetic_recovery_summary_checks_hz_rate_against_dbdt():
+    sp = _load_pipeline_module()
+    mu0 = 1.2566370614359173e-6
+    times = np.asarray([0.0, 1.0, 2.0])
+    dbzdt = np.asarray([2.0, 4.0, 8.0])
+    hz = np.asarray([0.0, 3.0 / mu0, 9.0 / mu0])
+    pred = np.column_stack([np.ones_like(times), np.zeros_like(times), hz, dbzdt])
+
+    summary = sp._magnetic_recovery_summary(times, pred, ["Ex", "Ey", "Hz", "dBzdt"])
+
+    assert summary["rate_consistency"]["enabled"] is True
+    assert summary["rate_consistency"]["method"] == "mu_dHzdt_vs_trapezoid_dBzdt"
+    assert summary["rate_consistency"]["sample_count"] == 2
+    assert summary["rate_consistency"]["max_relative_difference"] < 1.0e-12

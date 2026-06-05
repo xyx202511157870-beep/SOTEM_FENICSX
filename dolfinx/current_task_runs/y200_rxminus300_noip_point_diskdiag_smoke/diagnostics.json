@@ -20,6 +20,16 @@
     "max_absolute_hz_difference": 9.389844327258989e-06,
     "max_relative_hz_difference": 0.004537837520810436,
     "method": "faraday_integrated_dBzdt",
+    "rate_consistency": {
+      "dbzdt_average_at_max_relative_difference": 2.2252953732704476e-06,
+      "enabled": true,
+      "hz_rate_at_max_relative_difference": 3.1637678168696926e-06,
+      "max_absolute_difference": 9.38472443599245e-07,
+      "max_relative_difference": 0.42172938247743763,
+      "method": "mu_dHzdt_vs_trapezoid_dBzdt",
+      "sample_count": 4,
+      "time_mid_at_max_relative_difference": 1.125e-05
+    },
     "reported_hz_final": -0.002069233260159127,
     "time_at_max_relative_hz_difference": 2.44140625e-05
   },

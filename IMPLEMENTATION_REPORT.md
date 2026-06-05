@@ -384,6 +384,11 @@ Simultaneous point/disk receiver diagnostic smoke:
   - `diagnostics.json` includes `magnetic_recovery` from a Faraday-integrated
     `dBzdt` receiver trace. Over the first five points, the integrated `Hz`
     differs from reported Biot `Hz` by at most about `0.45%`.
+  - `magnetic_recovery.rate_consistency` now compares `mu0*dHz/dt` against
+    the trapezoid-averaged `dBzdt` over each output interval. For this smoke
+    run the maximum interval relative difference is about `42.2%` at
+    `t_mid=1.125e-5 s`, showing that the short-window integrated-Hz diagnostic
+    can hide a substantial derivative-level inconsistency.
   - `diagnostics.json` includes `receiver_vs_reference`, and the same
     diagnostic receiver/reference errors are now emitted as the automatic CSV
     and PNG artifacts listed above. `disk_average` improves `dBzdt` max error

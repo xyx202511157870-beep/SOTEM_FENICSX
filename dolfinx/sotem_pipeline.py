@@ -4041,6 +4041,48 @@ def _faraday_integrated_hz_trace(times, dbzdt, *, initial_hz: float, mu: float =
     return hz
 
 
+def _faraday_rate_consistency_summary(
+    times,
+    hz,
+    dbzdt,
+    *,
+    mu: float = 1.2566370614359173e-6,
+) -> dict[str, Any]:
+    import numpy as np
+
+    t = np.asarray(times, dtype=float)
+    h = np.asarray(hz, dtype=float)
+    rate = np.asarray(dbzdt, dtype=float)
+    if t.ndim != 1 or h.ndim != 1 or rate.ndim != 1 or not (t.size == h.size == rate.size):
+        return {"enabled": False, "reason": "times, Hz, and dBzdt must be matching one-dimensional arrays"}
+    if t.size < 2:
+        return {"enabled": False, "reason": "requires at least two samples"}
+    dt = np.diff(t)
+    valid = dt > 0.0
+    if not np.any(valid):
+        return {"enabled": False, "reason": "requires at least one positive time interval"}
+    mu_value = float(mu)
+    if not math.isfinite(mu_value) or mu_value <= 0.0:
+        return {"enabled": False, "reason": "mu must be positive"}
+    hz_rate = mu_value * np.diff(h)[valid] / dt[valid]
+    dbdt_avg = 0.5 * (rate[:-1][valid] + rate[1:][valid])
+    abs_diff = np.abs(hz_rate - dbdt_avg)
+    floor = max(float(np.max(np.abs(dbdt_avg))) * 1.0e-6, 1.0e-18) if dbdt_avg.size else 1.0e-18
+    rel = abs_diff / np.maximum(np.abs(dbdt_avg), floor)
+    max_index = int(np.argmax(rel)) if rel.size else 0
+    t_mid = 0.5 * (t[:-1][valid] + t[1:][valid])
+    return {
+        "enabled": True,
+        "method": "mu_dHzdt_vs_trapezoid_dBzdt",
+        "sample_count": int(rel.size),
+        "max_absolute_difference": float(abs_diff[max_index]) if abs_diff.size else 0.0,
+        "max_relative_difference": float(rel[max_index]) if rel.size else 0.0,
+        "time_mid_at_max_relative_difference": float(t_mid[max_index]) if t_mid.size else float("nan"),
+        "hz_rate_at_max_relative_difference": float(hz_rate[max_index]) if hz_rate.size else float("nan"),
+        "dbzdt_average_at_max_relative_difference": float(dbdt_avg[max_index]) if dbdt_avg.size else float("nan"),
+    }
+
+
 def _magnetic_recovery_summary(times, pred_data, components) -> dict[str, Any]:
     import numpy as np
 
@@ -4058,6 +4100,7 @@ def _magnetic_recovery_summary(times, pred_data, components) -> dict[str, Any]:
     if not (np.all(np.isfinite(hz)) and np.all(np.isfinite(dbzdt))):
         return {"enabled": False, "reason": "non-finite Hz or dBzdt values"}
     faraday_hz = _faraday_integrated_hz_trace(t, dbzdt, initial_hz=float(hz[0]))
+    rate_consistency = _faraday_rate_consistency_summary(t, hz, dbzdt)
     diff = faraday_hz - hz
     abs_diff = np.abs(diff)
     denom = np.maximum(np.abs(hz), max(float(np.max(np.abs(hz))) * 1.0e-6, 1.0e-16))
@@ -4072,6 +4115,7 @@ def _magnetic_recovery_summary(times, pred_data, components) -> dict[str, Any]:
         "time_at_max_relative_hz_difference": float(t[max_index]) if t.size else float("nan"),
         "faraday_hz_final": float(faraday_hz[-1]) if faraday_hz.size else float("nan"),
         "reported_hz_final": float(hz[-1]) if hz.size else float("nan"),
+        "rate_consistency": rate_consistency,
     }
 
 
