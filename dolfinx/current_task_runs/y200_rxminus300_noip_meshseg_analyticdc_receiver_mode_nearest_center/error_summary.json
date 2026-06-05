@@ -1,0 +1,47 @@
+{
+  "case_type": "noip",
+  "failed_components": [
+    "Ex",
+    "Ey",
+    "Hz",
+    "dBzdt"
+  ],
+  "failed_times": [
+    1e-05,
+    2e-05
+  ],
+  "floor_Ex": 8.969776590346563e-10,
+  "floor_Ey": 1e-14,
+  "floor_Hz": 2.198871400199019e-09,
+  "floor_dBzdt": 4.501031458810629e-12,
+  "magnetic_quantity": "dBzdt",
+  "max_error_Ex": 0.6730921029135742,
+  "max_error_Ey": 1173305194.03505,
+  "max_error_Hz_or_dBzdt": 0.43791540283748703,
+  "max_peak_normalized_error_Ex": 0.6723799270634969,
+  "max_peak_normalized_error_Ey": 1173305194.03505,
+  "max_peak_normalized_error_Hz_or_dBzdt": 0.43771200333239396,
+  "pass_all_components": false,
+  "physical_failed_components": [
+    "Ex",
+    "Hz",
+    "dBzdt"
+  ],
+  "physical_pass_all_components": false,
+  "reference_type": "empymod",
+  "relative_error_threshold": 0.05,
+  "rms_error_Ex": 0.5767886894783683,
+  "rms_error_Ey": 1145012104.676565,
+  "rms_error_Hz_or_dBzdt": 0.3756829016681899,
+  "weak_component_passed": true,
+  "weak_component_primary_scale": 0.0008969776590346564,
+  "weak_component_reference_max": {
+    "Ey": 8.600401742342899e-22
+  },
+  "weak_component_scaled_abs_error_max": {
+    "Ey": 0.013080651253876068
+  },
+  "weak_components": [
+    "Ey"
+  ]
+}

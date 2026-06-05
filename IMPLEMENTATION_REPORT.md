@@ -1271,6 +1271,41 @@ weak divergence damping. The next useful P2 work should focus on source/receiver
 consistency and the primary-secondary path instead of continuing to tune this
 variational penalty.
 
+## P2 Receiver Evaluation Mode Audit
+
+I ran a controlled receiver sampling audit on the same corrected latest model
+and short-window coarse mesh. The audit keeps the source, mesh, time stepping,
+boundary, and no-IP physics fixed and changes only:
+
+```text
+--receiver-evaluation-mode first_cell|mean|median|nearest_center|shallowest
+```
+
+Summary artifacts:
+
+```text
+dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_receiver_mode_audit_summary
+```
+
+The peak-normalized error table is:
+
+```text
+receiver_mode   Ex error      dBzdt error
+median          0.6724526431  0.6486769606
+mean            0.6786600536  0.5908231256
+nearest_center  0.6723799271  0.4377120033
+shallowest      0.6723799271  0.4377120033
+first_cell      0.6725253592  0.4411768325
+```
+
+Interpretation: receiver cell-candidate selection materially changes dBzdt,
+reducing the short-window dBzdt error from about 65% to about 44% for
+`nearest_center`/`shallowest`. However, Ex remains near 67% for all receiver
+modes. Therefore receiver sampling is part of the magnetic-derivative issue,
+but it is not the dominant source of the early electric-field disagreement.
+The remaining Ex error points back to source loading, primary/background
+field consistency, or the total-field formulation.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
@@ -1289,6 +1324,10 @@ variational penalty.
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.
   H-form diagnostic output still writes only the main receiver response.
+- Receiver point cell-candidate selection affects short-window `dBzdt`
+  substantially on the corrected latest model, but all tested selection modes
+  leave `Ex` near 67% peak-normalized error, so receiver sampling alone does
+  not fix the early no-IP validation failure.
 - Faraday-integrated `Hz` recovery is not implemented in this round.
 - Late-diffusion diagnostics now report finite-domain coverage separately from
   the local refinement box. Existing artifacts generated before this fix may
@@ -1337,9 +1376,10 @@ variational penalty.
    path. Simple per-step strength scaling and delayed post-step cleaning have
    both been shown to be insufficient.
    The new divergence-control path now has dimensionless `lhs` scaling; the
-   short-window sweep did not improve the early error, so the next step should
-   shift to source/receiver consistency audits and the primary-secondary path
-   before any full fine-grid run.
+   short-window sweep did not improve the early error. Receiver sampling mode
+   audits improved dBzdt but not Ex, so the next step should shift to source
+   loading/DC-primary consistency and the primary-secondary path before any full
+   fine-grid run.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.
