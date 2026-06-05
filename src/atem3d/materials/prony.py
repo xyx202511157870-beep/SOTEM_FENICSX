@@ -122,6 +122,51 @@ class PronyConductivity:
             current = current - term.delta_sigma * np.asarray(memory, dtype=float)
         return current
 
+    def lhs_effective_current_density(
+        self,
+        e_new: np.ndarray | float,
+        dt: float,
+    ) -> np.ndarray:
+        """Return the matrix-side BE current term sigma_eff E_new."""
+
+        return self.sigma_eff(dt) * np.asarray(e_new, dtype=float)
+
+    def rhs_history_current_density(
+        self,
+        e_old: np.ndarray | float,
+        chi_old: list[np.ndarray],
+        dt: float,
+    ) -> np.ndarray:
+        """Return the BE total-field RHS history current.
+
+        Starting from
+        ``J_new = sigma_eff E_new - sum(delta_sigma_k alpha_k chi_old_k)``,
+        the total-field system moves the old-memory part to the RHS:
+        ``sigma_eff E_new - [J_old + sum(delta_sigma_k alpha_k chi_old_k)]``.
+        """
+
+        self._validate_memory_count(chi_old)
+        history = self.current_density(e_old, chi_old)
+        alpha = self.alpha(dt)
+        for term, memory, alpha_i in zip(self.terms, chi_old, alpha):
+            history = history + term.delta_sigma * alpha_i * np.asarray(memory, dtype=float)
+        return history
+
+    def eliminated_current_density(
+        self,
+        e_new: np.ndarray | float,
+        chi_old: list[np.ndarray],
+        dt: float,
+    ) -> np.ndarray:
+        """Return J_new after eliminating chi_new with backward Euler."""
+
+        self._validate_memory_count(chi_old)
+        current = self.lhs_effective_current_density(e_new, dt)
+        alpha = self.alpha(dt)
+        for term, memory, alpha_i in zip(self.terms, chi_old, alpha):
+            current = current - term.delta_sigma * alpha_i * np.asarray(memory, dtype=float)
+        return current
+
     def to_debye_ip_model(self):
         """Convert to the existing array-capable `atem3d.ip.DebyeIPModel`."""
 

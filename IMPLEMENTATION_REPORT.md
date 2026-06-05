@@ -48,6 +48,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Backward-Euler `alpha`, `beta`, and `sigma_eff`.
   - `chi_k` memory initialization/update helpers.
   - `J = sigma_inf E - sum(delta_sigma_k chi_k)` current-density helper.
+  - Total-field BE elimination helpers for `sigma_eff E_new`, RHS history current, and eliminated `J_new`.
   - Conversion to/from the existing `atem3d.ip.DebyeIPModel` for solver migration.
 
 ## Tests Added

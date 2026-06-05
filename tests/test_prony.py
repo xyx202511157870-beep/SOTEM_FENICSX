@@ -42,6 +42,34 @@ def test_prony_memory_and_current_density_are_backward_euler_consistent():
     )
 
 
+def test_prony_eliminated_total_field_current_matches_explicit_memory_update():
+    model = PronyConductivity(
+        sigma_inf=3.0,
+        terms=[
+            DebyeTerm(delta_sigma=0.4, tau=0.25),
+            DebyeTerm(delta_sigma=0.2, tau=0.75),
+        ],
+    )
+    e_old = np.array([1.0, -2.0])
+    e_new = np.array([4.0, 3.0])
+    chi_old = [np.array([0.5, -1.0]), np.array([2.0, 0.25])]
+    dt = 0.5
+
+    chi_new = model.update_memory(chi_old, e_new, dt)
+    explicit_j_old = model.current_density(e_old, chi_old)
+    explicit_j_new = model.current_density(e_new, chi_new)
+
+    rhs_history = model.rhs_history_current_density(e_old, chi_old, dt)
+    lhs_effective = model.lhs_effective_current_density(e_new, dt)
+    eliminated_j_new = model.eliminated_current_density(e_new, chi_old, dt)
+
+    np.testing.assert_allclose(eliminated_j_new, explicit_j_new)
+    np.testing.assert_allclose(
+        (lhs_effective - rhs_history) / dt,
+        (explicit_j_new - explicit_j_old) / dt,
+    )
+
+
 def test_zero_delta_sigma_exactly_matches_no_ip():
     noip = PronyConductivity(sigma_inf=0.01, terms=[])
     zero_delta = PronyConductivity(
@@ -54,6 +82,38 @@ def test_zero_delta_sigma_exactly_matches_no_ip():
     assert noip.sigma0 == pytest.approx(zero_delta.sigma0)
     assert noip.sigma_eff(0.3) == pytest.approx(zero_delta.sigma_eff(0.3))
     np.testing.assert_allclose(noip.current_density(e, []), zero_delta.current_density(e, chi))
+    np.testing.assert_allclose(
+        noip.rhs_history_current_density(e, [], dt=0.3),
+        zero_delta.rhs_history_current_density(e, chi, dt=0.3),
+    )
+    np.testing.assert_allclose(
+        noip.lhs_effective_current_density(e, dt=0.3),
+        zero_delta.lhs_effective_current_density(e, dt=0.3),
+    )
+    np.testing.assert_allclose(
+        noip.eliminated_current_density(e, [], dt=0.3),
+        zero_delta.eliminated_current_density(e, chi, dt=0.3),
+    )
+
+
+def test_no_ip_eliminated_current_is_ohmic_for_total_field_equation():
+    model = PronyConductivity.no_ip(0.02)
+    e_old = np.array([1.0, -2.0, 4.0])
+    e_new = np.array([3.0, 5.0, -7.0])
+
+    np.testing.assert_allclose(
+        model.rhs_history_current_density(e_old, [], dt=0.25),
+        0.02 * e_old,
+    )
+    np.testing.assert_allclose(
+        model.lhs_effective_current_density(e_new, dt=0.25),
+        0.02 * e_new,
+    )
+    np.testing.assert_allclose(
+        model.eliminated_current_density(e_new, [], dt=0.25),
+        0.02 * e_new,
+    )
+
 
 
 def test_prony_converts_to_and_from_existing_debye_ip_model():
