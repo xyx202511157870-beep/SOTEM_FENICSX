@@ -34,6 +34,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Added `min_steps_during_turnoff`.
   - Added `min_steps_before_first_observation` for after-ramp internal
     substeps between ramp-off end and the first observation output.
+  - Added `divergence_cleaning_strength` to scale the conductivity
+    divergence-cleaning correction for diagnostics.
   - Replaced point-value source derivative with interval-average `dI/dt`.
   - Updated after-ramp internal schedule to include turn-off history before observation times.
   - Added receiver sampling modes:
@@ -956,6 +958,39 @@ Receiver mesh-sensitivity smoke:
       solution should control that residual without removing physically needed
       inductive response.
 
+- Half-strength conductivity divergence-cleaning diagnostic:
+  - Directory:
+    `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_substep4_divclean05_growth2_diag`.
+  - Code change: `--divergence-cleaning-strength` now scales the
+    conductivity cleaning correction. Default `1.0` preserves the previous
+    full projection.
+  - Diagnostic change relative to the full-strength coarse run:
+    `--divergence-cleaning-strength 0.5`.
+  - Execution:
+    - First WSL segment reached `t_obs=0.32768 s` and then hit KSP
+      `reason=-3` at the next step despite a small residual; resume with
+      `--max-it 10000` completed to `t_obs=1.0 s`.
+    - WSL was shut down after both segments.
+  - Result:
+    - `pass_all_components = false`
+    - `physical_pass_all_components = false`
+    - `physical_failed_components = ["Ex", "Hz", "dBzdt"]`
+    - `weak_component_passed = true`
+    - `weak_component_scaled_abs_error_max(Ey) = 0.023853142889896116`
+    - `max_error_Ex = 0.9496837918444295` at `t_obs=0.04096 s`
+    - `max_peak_normalized_error_Ex = 0.1263291999451112`
+    - `max_error_dBzdt = 3.6630024137970363` at `t_obs=0.04096 s`
+    - `max_peak_normalized_error_dBzdt = 0.0863076672288047`
+  - Interpretation:
+    - Half-strength repeated every post-ramp step behaves almost the same as
+      full-strength cleaning over this coarse time grid. It still removes the
+      late static offset, but does not recover the mid-time `Ex/dBzdt`
+      amplitude.
+    - Simple per-step scaling is therefore not the right final control
+      mechanism. The next diagnostic should test delayed/thresholded cleaning
+      or a variational divergence-control term that damps static residuals
+      without repeatedly projecting away the inductive response.
+
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.
 - Change: same as above, but `--magnetic-dbdt-mode biot_rate`.
@@ -1050,6 +1085,10 @@ This implementation round improves time-axis correctness and reporting/diagnosti
   offset in a coarse diagnostic run, but the current projection changes the
   mid-time amplitude and does not meet the `5%` gate. It is evidence for the
   root cause, not a final accepted solver mode.
+- `divergence_cleaning_strength` is currently a diagnostic scaling factor.
+  Applying a half correction at every post-ramp step behaves nearly like full
+  cleaning over the coarse full-window run, so it does not solve the P2
+  full-window error.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
@@ -1057,10 +1096,10 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 ## Next Steps
 
 1. Replace the current all-or-nothing post-ramp conductivity divergence
-   projection with a controlled consistency treatment: quantify
-   `G^T M_sigma E`, `curl(E)`, receiver amplitude, and reference error before
-   and after cleaning, then apply the smallest correction that removes the
-   static residual without suppressing mid-time inductive response.
+   projection with a controlled consistency treatment. The next useful
+   experiments are delayed/thresholded cleaning and a variational divergence
+   control term; simple per-step strength scaling has already been shown to be
+   ineffective.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.

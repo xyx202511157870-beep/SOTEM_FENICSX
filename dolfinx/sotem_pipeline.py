@@ -117,6 +117,7 @@ class PipelineConfig:
     magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
     divergence_cleaning: str = "none"  # none, conductivity
+    divergence_cleaning_strength: float = 1.0
     polarization: str = "none"  # none, cole-cole
     cole_rho0: float = 100.0
     cole_m: float = 0.2
@@ -514,6 +515,16 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     divergence_cleaning = str(config.divergence_cleaning).strip().lower()
     if divergence_cleaning not in {"none", "conductivity"}:
         raise ValueError("divergence_cleaning must be 'none' or 'conductivity'")
+    divergence_cleaning_strength = float(config.divergence_cleaning_strength)
+    if (
+        not math.isfinite(divergence_cleaning_strength)
+        or divergence_cleaning_strength < 0.0
+        or divergence_cleaning_strength > 1.0
+    ):
+        raise ValueError(
+            "divergence_cleaning_strength must be finite and in [0, 1]; "
+            f"got {divergence_cleaning_strength:.12g}"
+        )
     initial_dc_mode = str(config.initial_dc_mode).strip().lower()
     if initial_dc_mode not in {"fem", "analytic_halfspace"}:
         raise ValueError("initial_dc_mode must be 'analytic_halfspace' or 'fem'")
@@ -699,6 +710,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "receiver_average_radius": receiver_average_radius,
             "receiver_diagnostic_types": receiver_diagnostic_types,
             "divergence_cleaning": divergence_cleaning,
+            "divergence_cleaning_strength": divergence_cleaning_strength,
             "diffusion_refinement": _diffusion_refinement_audit(config),
             "sponge": sponge,
             "time_method": time_method,
@@ -2265,7 +2277,8 @@ def _apply_conductivity_divergence_cleaning(cleaner, E, operators, config: Pipel
 
     correction = E.x.petsc_vec.duplicate()
     cleaner["G"].mult(phi.x.petsc_vec, correction)
-    E.x.petsc_vec.axpy(-1.0, correction)
+    strength = float(config.divergence_cleaning_strength)
+    E.x.petsc_vec.axpy(-strength, correction)
     E.x.petsc_vec.assemble()
     E.x.scatter_forward()
 
@@ -2275,12 +2288,15 @@ def _apply_conductivity_divergence_cleaning(cleaner, E, operators, config: Pipel
     rhs.assemble()
     after = float(rhs.norm())
     correction_norm = float(correction.norm())
+    applied_correction_norm = float(abs(strength) * correction_norm)
     correction.destroy()
     mass_e.destroy()
     return {
         "before": before,
         "after": after,
         "correction_norm": correction_norm,
+        "applied_correction_norm": applied_correction_norm,
+        "strength": strength,
         "its": its,
         "reason": reason,
         "residual": residual,
@@ -3712,7 +3728,9 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             if clean_stats is not None:
                 log(
                     f"[div-clean] step={step:04d} before={clean_stats['before']:.6e} "
-                    f"after={clean_stats['after']:.6e} correction={clean_stats['correction_norm']:.6e} "
+                    f"after={clean_stats['after']:.6e} strength={clean_stats['strength']:.6g} "
+                    f"correction={clean_stats['correction_norm']:.6e} "
+                    f"applied={clean_stats['applied_correction_norm']:.6e} "
                     f"its={clean_stats['its']} residual={clean_stats['residual']:.3e}",
                     comm=msh.comm,
                 )
@@ -4856,6 +4874,8 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
         "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
         "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
+        "divergence_cleaning": str(config.divergence_cleaning),
+        "divergence_cleaning_strength": float(config.divergence_cleaning_strength),
         "polarization": str(config.polarization),
     }
     lines = []
@@ -5268,7 +5288,10 @@ def write_report(
             f"time_count={receiver_summary['time_count']}; "
             f"sampling_issue_suspected={receiver_summary['receiver_sampling_issue_suspected']}"
         )
-    lines.append(f"  divergence cleaning: {config.divergence_cleaning}")
+    lines.append(
+        f"  divergence cleaning: {config.divergence_cleaning}; "
+        f"strength={float(config.divergence_cleaning_strength):.6g}"
+    )
     lines.append(
         f"  checkpoint forward: {bool(config.checkpoint_forward)}; resume forward: {bool(config.resume_forward)}; "
         f"stop after outputs: {int(config.stop_after_outputs)}"
@@ -6186,6 +6209,12 @@ def main(argv: list[str] | None = None) -> int:
         default="median",
     )
     parser.add_argument("--divergence-cleaning", choices=["none", "conductivity"], default="none")
+    parser.add_argument(
+        "--divergence-cleaning-strength",
+        type=float,
+        default=1.0,
+        help="Fraction of the conductivity divergence-cleaning correction to apply; 1 keeps the existing full projection.",
+    )
     parser.add_argument("--polarization", choices=["none", "cole-cole"], default="none")
     parser.add_argument("--cole-layer-top", type=float, default=0.0, help="Top depth of the polarizable Cole-Cole interval in meters.")
     parser.add_argument(
@@ -6291,6 +6320,7 @@ def main(argv: list[str] | None = None) -> int:
         receiver_diagnostic_types=_parse_string_csv(args.receiver_diagnostic_types),
         receiver_evaluation_mode=args.receiver_evaluation_mode,
         divergence_cleaning=args.divergence_cleaning,
+        divergence_cleaning_strength=args.divergence_cleaning_strength,
         polarization=args.polarization,
         cole_layer_top=args.cole_layer_top,
         cole_layer_bottom=args.cole_layer_bottom,

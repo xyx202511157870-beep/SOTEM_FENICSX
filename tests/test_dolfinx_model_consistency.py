@@ -154,6 +154,25 @@ def test_model_consistency_rejects_nonpositive_runtime_parameters(field, value):
         sp.validate_model_consistency(sp.PipelineConfig(**kwargs))
 
 
+@pytest.mark.parametrize("value", [-0.1, 1.1])
+def test_model_consistency_rejects_invalid_divergence_cleaning_strength(value):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="divergence_cleaning_strength"):
+        sp.validate_model_consistency(sp.PipelineConfig(divergence_cleaning_strength=value))
+
+
+def test_model_consistency_reports_divergence_cleaning_strength():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(
+        sp.PipelineConfig(divergence_cleaning="conductivity", divergence_cleaning_strength=0.25)
+    )
+
+    assert diagnostics["divergence_cleaning"] == "conductivity"
+    assert diagnostics["divergence_cleaning_strength"] == pytest.approx(0.25)
+
+
 def test_model_consistency_accepts_positive_source_rhs_sign_for_diagnostics():
     sp = _load_pipeline_module()
 

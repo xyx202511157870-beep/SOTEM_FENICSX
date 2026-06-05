@@ -202,3 +202,36 @@ def test_write_report_records_manual_line_mesh_segment_integration(tmp_path):
     text = config.output_report().read_text(encoding="utf-8")
     assert "source line integration: mode=mesh_segments; segments=200; segment_length_total=1000 m" in text
     assert "quadrature_per_segment[min/mean/max]=26/26/26" in text
+
+
+def test_write_report_records_divergence_cleaning_strength(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        workdir=tmp_path,
+        t_min=1.0e-6,
+        t_max=2.0e-6,
+        time_growth=2.0,
+        divergence_cleaning="conductivity",
+        divergence_cleaning_strength=0.25,
+    )
+    times = np.asarray([1.0e-6])
+    data = np.asarray([[1.0, 0.0, 2.0]], dtype=float)
+    fem_result = {
+        "times": times,
+        "data": data,
+        "components": ["Ex", "Ey", "dBzdt"],
+        "solver_log": [],
+    }
+    ref_result = {"times": times, "data": data, "components": ["Ex", "Ey", "dBzdt"]}
+
+    sp.write_report(
+        config,
+        env={},
+        fem_result=fem_result,
+        ref_result=ref_result,
+        errors=_error_metrics(),
+        source_info={"mode": "manual_line"},
+    )
+
+    text = config.output_report().read_text(encoding="utf-8")
+    assert "divergence cleaning: conductivity; strength=0.25" in text
