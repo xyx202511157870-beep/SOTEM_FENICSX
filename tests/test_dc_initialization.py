@@ -1,7 +1,8 @@
 import numpy as np
 
 from atem3d.materials.prony import DebyeTerm, PronyConductivity
-from atem3d.solvers.dc_secondary import initialize_dc_secondary
+from atem3d.primary import CachedPrimaryProvider, PrimaryFEMInterpolator
+from atem3d.solvers.dc_secondary import initialize_dc_secondary, initialize_dc_secondary_from_primary
 
 
 def test_dc_secondary_zero_contrast_returns_zero_secondary_field():
@@ -65,3 +66,42 @@ def test_dc_secondary_passes_contrast_current_to_injected_solver():
     np.testing.assert_allclose(captured["rhs"], (0.02 - 0.01) * Ep0)
     np.testing.assert_allclose(result.Es0, np.array([[0.1, 0.2, 0.3]]))
     np.testing.assert_allclose(result.deltaJ0, 0.02 * result.Etotal0 - 0.01 * Ep0)
+
+
+def test_dc_secondary_from_primary_interpolator_uses_dc_primary_samples():
+    points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    receivers = np.array([[0.0, 0.0, 0.0]])
+    Ep0 = np.array([[2.0, 0.0, 0.0], [3.0, 1.0, 0.0]])
+    provider = CachedPrimaryProvider(
+        times=np.array([0.0]),
+        points=points,
+        receivers=receivers,
+        Ep_on_V=np.zeros((1, 2, 3)),
+        receiver_E=np.zeros((1, 1, 3)),
+        receiver_dBdt=np.zeros((1, 1, 3)),
+        Ep_dc_on_V=Ep0,
+    )
+    primary = PrimaryFEMInterpolator(provider=provider, points=points)
+    material = PronyConductivity.no_ip(0.02)
+    captured = {}
+
+    def fake_solver(rhs):
+        captured["rhs"] = rhs.copy()
+        return np.array([0.0]), np.zeros_like(rhs)
+
+    result = initialize_dc_secondary_from_primary(
+        primary=primary,
+        sigma0=0.02,
+        sigma_background=0.01,
+        material=material,
+        secondary_field_solver=fake_solver,
+    )
+
+    np.testing.assert_allclose(result.Ep0, Ep0)
+    np.testing.assert_allclose(captured["rhs"], 0.01 * Ep0)
+
+
+def test_dc_secondary_from_primary_is_exported_from_solvers_package():
+    from atem3d.solvers import initialize_dc_secondary_from_primary as exported
+
+    assert exported is initialize_dc_secondary_from_primary

@@ -83,6 +83,29 @@ def initialize_dc_secondary(
     )
 
 
+def initialize_dc_secondary_from_primary(
+    *,
+    primary,
+    sigma0: float,
+    sigma_background: float,
+    material: PronyConductivity,
+    secondary_field_solver: SecondaryFieldSolver | None = None,
+    contrast_atol: float = 0.0,
+) -> DCSecondaryInitialization:
+    """Initialize DC secondary state from a primary FEM interpolator."""
+
+    if not hasattr(primary, "sample_Ep_dc"):
+        raise TypeError("primary must provide sample_Ep_dc()")
+    return initialize_dc_secondary(
+        Ep0=primary.sample_Ep_dc(),
+        sigma0=sigma0,
+        sigma_background=sigma_background,
+        material=material,
+        secondary_field_solver=secondary_field_solver,
+        contrast_atol=contrast_atol,
+    )
+
+
 def _as_vector_field(values, name: str) -> np.ndarray:
     array = np.asarray(values, dtype=float)
     if array.ndim != 2 or array.shape[1] != 3:
