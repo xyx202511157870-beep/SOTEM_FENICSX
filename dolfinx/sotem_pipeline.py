@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import csv
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import importlib
 import json
 import math
@@ -73,6 +73,7 @@ class PipelineConfig:
     receiver: tuple[float, float, float] = (500.0, 50.0, -0.1)
     receiver_type: str = "point"  # point, volume_average, disk_average
     receiver_average_radius: float = 2.0
+    receiver_diagnostic_types: tuple[str, ...] | str = ()
     receiver_mesh_size: float = 10.0
     receiver_refinement_radius: float = 60.0
     outer_boundary_mode: str = "pec"  # pec, natural, robin
@@ -157,6 +158,9 @@ class PipelineConfig:
 
     def forward_checkpoint_npz(self) -> Path:
         return self.workdir / "forward_checkpoint.npz"
+
+    def receiver_diagnostics_csv(self) -> Path:
+        return self.workdir / "receiver_diagnostics.csv"
 
     def output_report(self) -> Path:
         return self.workdir / "verification_report.txt"
@@ -479,6 +483,11 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     receiver_average_radius = float(config.receiver_average_radius)
     if receiver_type != "point" and (not math.isfinite(receiver_average_radius) or receiver_average_radius <= 0.0):
         raise ValueError("receiver_average_radius must be positive for average receiver types")
+    receiver_diagnostic_types = _parse_receiver_diagnostic_types(config)
+    if any(item != "point" for item in receiver_diagnostic_types) and (
+        not math.isfinite(receiver_average_radius) or receiver_average_radius <= 0.0
+    ):
+        raise ValueError("receiver_average_radius must be positive when receiver diagnostics include average types")
     divergence_cleaning = str(config.divergence_cleaning).strip().lower()
     if divergence_cleaning not in {"none", "conductivity"}:
         raise ValueError("divergence_cleaning must be 'none' or 'conductivity'")
@@ -656,6 +665,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "receiver_evaluation_mode": receiver_evaluation_mode,
             "receiver_type": receiver_type,
             "receiver_average_radius": receiver_average_radius,
+            "receiver_diagnostic_types": receiver_diagnostic_types,
             "divergence_cleaning": divergence_cleaning,
             "diffusion_refinement": _diffusion_refinement_audit(config),
             "sponge": sponge,
@@ -2185,6 +2195,28 @@ def _receiver_sampling_points(config: PipelineConfig):
     return center + offsets
 
 
+def _parse_receiver_diagnostic_types(config: PipelineConfig) -> tuple[str, ...]:
+    raw = config.receiver_diagnostic_types
+    if isinstance(raw, str):
+        items = [item.strip().lower() for item in raw.split(",")]
+    else:
+        items = [str(item).strip().lower() for item in raw]
+    allowed = {"point", "volume_average", "disk_average"}
+    out: list[str] = []
+    for item in items:
+        if not item:
+            continue
+        if item not in allowed:
+            raise ValueError("receiver_diagnostic_types may contain only point, volume_average, or disk_average")
+        if item not in out:
+            out.append(item)
+    return tuple(out)
+
+
+def _receiver_config_for_type(config: PipelineConfig, receiver_type: str) -> PipelineConfig:
+    return replace(config, receiver_type=receiver_type)
+
+
 def _collapse_receiver_cell_candidates(values, mode: str):
     import numpy as np
 
@@ -2244,6 +2276,30 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     e_val = _aggregate_receiver_sample_values(e_samples, mode)
     dbdt_val = _aggregate_receiver_sample_values(dbdt_samples, mode)
     return {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
+
+
+def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time_obs: float, main_record=None):
+    import numpy as np
+
+    rows = []
+    for receiver_type in _parse_receiver_diagnostic_types(config):
+        diag_config = _receiver_config_for_type(config, receiver_type)
+        if main_record is not None and receiver_type == str(config.receiver_type).strip().lower():
+            rec = dict(main_record)
+        else:
+            rec = evaluate_receivers(E, dbdt, msh, diag_config)
+        rows.append(
+            {
+                "time_obs": float(time_obs),
+                "receiver_type": receiver_type,
+                "radius": 0.0 if receiver_type == "point" else float(config.receiver_average_radius),
+                "Ex": float(rec.get("Ex", np.nan)),
+                "Ey": float(rec.get("Ey", np.nan)),
+                "Hz": float(rec.get("Hz", np.nan)),
+                "dBzdt": float(rec.get("dBzdt", np.nan)),
+            }
+        )
+    return rows
 
 
 def _forward_components(config: PipelineConfig) -> list[str]:
@@ -2751,6 +2807,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         H_old_receiver = _biot_savart_cell_current_h_at_receiver(E_old, msh, materials, config)
 
     rows = []
+    receiver_diagnostic_rows = []
     solver_log = []
     components = _forward_components(config)
     previous_time = 0.0
@@ -2775,6 +2832,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             memory.x.array[:] = values
             memory.x.scatter_forward()
         rows = checkpoint["rows"].tolist()
+        receiver_diagnostic_rows = list(checkpoint["receiver_diagnostic_rows"])
         solver_log = list(checkpoint["solver_log"])
         previous_time = float(checkpoint["previous_time"])
         start_step = int(checkpoint["completed_step"]) + 1
@@ -2896,6 +2954,16 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
                 _assign_biot_receiver_hz(rec, H_new_receiver)
             rows.append([rec[name] for name in components])
+            receiver_diagnostic_rows.extend(
+                _evaluate_receiver_diagnostics(
+                    E_new,
+                    dbdt,
+                    msh,
+                    config,
+                    time_obs=observation_time_by_step[step],
+                    main_record=rec,
+                )
+            )
 
         if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
             H_old_receiver = H_new_receiver
@@ -2918,7 +2986,14 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             log_item["divergence_clean_after"] = float(clean_stats["after"])
         solver_log.append(log_item)
         if is_output and msh.comm.rank == 0:
-            _save_forward_partial(config, return_times, rows, components, solver_log)
+            _save_forward_partial(
+                config,
+                return_times,
+                rows,
+                components,
+                solver_log,
+                receiver_diagnostic_rows=receiver_diagnostic_rows,
+            )
         if is_output:
             hz_text = f" Hz={rec['Hz']:.6e}" if "Hz" in rec else ""
             log(
@@ -2961,6 +3036,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
                 components=components,
                 solver_log=solver_log,
                 h_old_receiver=H_old_receiver,
+                receiver_diagnostic_rows=receiver_diagnostic_rows,
             )
         should_stop = is_output and stop_after_outputs > 0 and (len(rows) - initial_rows_count) >= stop_after_outputs
         b.destroy()
@@ -2976,7 +3052,13 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             break
 
     completed_times = _completed_return_times(return_times, rows)
-    return {"times": completed_times, "data": np.asarray(rows), "components": components, "solver_log": solver_log}
+    return {
+        "times": completed_times,
+        "data": np.asarray(rows),
+        "components": components,
+        "solver_log": solver_log,
+        "receiver_diagnostic_rows": receiver_diagnostic_rows,
+    }
 
 
 def assemble_h_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], facet_tags):
@@ -4317,7 +4399,87 @@ def _save_npz(config: PipelineConfig, fem_result, ref_result, errors) -> None:
     print(f"[data] saved {config.output_npz()}", flush=True)
 
 
-def _save_forward_partial(config: PipelineConfig, times, rows, components, solver_log) -> None:
+def _receiver_diagnostic_payload(receiver_diagnostic_rows):
+    import numpy as np
+
+    rows = list(receiver_diagnostic_rows or [])
+    if not rows:
+        return {
+            "receiver_diagnostic_times": np.empty(0, dtype=float),
+            "receiver_diagnostic_types": np.asarray([], dtype="<U1"),
+            "receiver_diagnostic_radii": np.empty(0, dtype=float),
+            "receiver_diagnostic_values": np.empty((0, 4), dtype=float),
+        }
+    return {
+        "receiver_diagnostic_times": np.asarray([float(row["time_obs"]) for row in rows], dtype=float),
+        "receiver_diagnostic_types": np.asarray([str(row["receiver_type"]) for row in rows]),
+        "receiver_diagnostic_radii": np.asarray([float(row.get("radius", np.nan)) for row in rows], dtype=float),
+        "receiver_diagnostic_values": np.asarray(
+            [
+                [
+                    float(row.get("Ex", np.nan)),
+                    float(row.get("Ey", np.nan)),
+                    float(row.get("Hz", np.nan)),
+                    float(row.get("dBzdt", np.nan)),
+                ]
+                for row in rows
+            ],
+            dtype=float,
+        ),
+    }
+
+
+def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
+    import numpy as np
+
+    if "receiver_diagnostic_times" not in payload.files:
+        return []
+    times = np.asarray(payload["receiver_diagnostic_times"], dtype=float)
+    types = [str(item) for item in np.asarray(payload["receiver_diagnostic_types"]).tolist()]
+    radii = np.asarray(payload["receiver_diagnostic_radii"], dtype=float)
+    values = np.asarray(payload["receiver_diagnostic_values"], dtype=float)
+    rows = []
+    for i, time_obs in enumerate(times):
+        rows.append(
+            {
+                "time_obs": float(time_obs),
+                "receiver_type": types[i] if i < len(types) else "",
+                "radius": float(radii[i]) if i < radii.size else float("nan"),
+                "Ex": float(values[i, 0]) if i < values.shape[0] else float("nan"),
+                "Ey": float(values[i, 1]) if i < values.shape[0] else float("nan"),
+                "Hz": float(values[i, 2]) if i < values.shape[0] else float("nan"),
+                "dBzdt": float(values[i, 3]) if i < values.shape[0] else float("nan"),
+            }
+        )
+    return rows
+
+
+def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_rows) -> None:
+    rows = list(receiver_diagnostic_rows or [])
+    path = config.receiver_diagnostics_csv()
+    if not rows:
+        if path.exists():
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["time_obs", "receiver_type", "radius", "Ex", "Ey", "Hz", "dBzdt"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "time_obs": float(row.get("time_obs", math.nan)),
+                    "receiver_type": str(row.get("receiver_type", "")),
+                    "radius": float(row.get("radius", math.nan)),
+                    "Ex": float(row.get("Ex", math.nan)),
+                    "Ey": float(row.get("Ey", math.nan)),
+                    "Hz": float(row.get("Hz", math.nan)),
+                    "dBzdt": float(row.get("dBzdt", math.nan)),
+                }
+            )
+
+
+def _save_forward_partial(config: PipelineConfig, times, rows, components, solver_log, receiver_diagnostic_rows=None) -> None:
     import numpy as np
 
     path = config.forward_partial_npz()
@@ -4338,10 +4500,13 @@ def _save_forward_partial(config: PipelineConfig, times, rows, components, solve
         "solver_residuals": np.asarray([float(item.get("residual", np.nan)) for item in output_logs], dtype=float),
         "solver_reasons": np.asarray([int(item.get("reason", 0)) for item in output_logs], dtype=int),
     }
+    if receiver_diagnostic_rows:
+        payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with tmp_path.open("wb") as handle:
         np.savez(handle, **payload)
     tmp_path.replace(path)
+    _write_receiver_diagnostics_csv(config, receiver_diagnostic_rows)
 
 
 def _completed_return_times(return_times, rows):
@@ -4437,6 +4602,7 @@ def _save_forward_checkpoint(
     components,
     solver_log,
     h_old_receiver=None,
+    receiver_diagnostic_rows=None,
 ) -> None:
     import numpy as np
 
@@ -4461,6 +4627,8 @@ def _save_forward_checkpoint(
         if h_old_receiver is not None
         else np.full(3, np.nan, dtype=float),
     }
+    if receiver_diagnostic_rows:
+        payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
     payload.update(_solver_log_to_arrays(solver_log))
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with tmp_path.open("wb") as handle:
@@ -4490,6 +4658,7 @@ def _load_forward_checkpoint(config: PipelineConfig):
         "h_old_receiver": np.asarray(payload["h_old_receiver"], dtype=float)
         if "h_old_receiver" in payload.files
         else np.full(3, np.nan, dtype=float),
+        "receiver_diagnostic_rows": _receiver_diagnostic_rows_from_payload(payload),
     }
 
 
@@ -4541,7 +4710,13 @@ def _load_forward_partial(config: PipelineConfig):
                 "is_output": True,
             }
         )
-    return {"times": times, "data": data, "components": components, "solver_log": solver_log}
+    return {
+        "times": times,
+        "data": data,
+        "components": components,
+        "solver_log": solver_log,
+        "receiver_diagnostic_rows": _receiver_diagnostic_rows_from_payload(payload),
+    }
 
 
 def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, ref_mode: str = "noip", runtime=None):
@@ -4644,6 +4819,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outer-boundary-robin-scale", type=float, default=1.0)
     parser.add_argument("--receiver-type", choices=["point", "volume_average", "disk_average"], default="point")
     parser.add_argument("--receiver-average-radius", type=float, default=2.0)
+    parser.add_argument(
+        "--receiver-diagnostic-types",
+        default="",
+        help="Comma-separated receiver diagnostics to write separately, e.g. point,disk_average.",
+    )
     parser.add_argument("--receiver-evaluation-mode", choices=["first_cell", "mean", "median"], default="median")
     parser.add_argument("--divergence-cleaning", choices=["none", "conductivity"], default="none")
     parser.add_argument("--polarization", choices=["none", "cole-cole"], default="none")
@@ -4739,6 +4919,7 @@ def main(argv: list[str] | None = None) -> int:
         outer_boundary_robin_scale=args.outer_boundary_robin_scale,
         receiver_type=args.receiver_type,
         receiver_average_radius=args.receiver_average_radius,
+        receiver_diagnostic_types=_parse_string_csv(args.receiver_diagnostic_types),
         receiver_evaluation_mode=args.receiver_evaluation_mode,
         divergence_cleaning=args.divergence_cleaning,
         polarization=args.polarization,

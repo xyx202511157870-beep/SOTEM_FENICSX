@@ -39,8 +39,12 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     - `--receiver-type volume_average`
     - `--receiver-type disk_average`
     - `--receiver-average-radius R`
+    - `--receiver-diagnostic-types point,disk_average`
     Average receiver modes evaluate deterministic diagnostic sample points and
     average the per-point collapsed cell candidates.
+    `--receiver-diagnostic-types` writes simultaneous point/average diagnostic
+    receiver rows to `receiver_diagnostics.csv` without changing
+    `predictions.csv`.
   - Added P2 validation artifacts:
     - `predictions.csv`
     - `reference_empymod_or_1d.csv`
@@ -224,6 +228,8 @@ python dolfinx/sotem_pipeline.py \
   --outer-boundary-robin-scale 0.1 \
   --magnetic-receiver-mode biot_current \
   --receiver-evaluation-mode median \
+  --receiver-diagnostic-types point,disk_average \
+  --receiver-average-radius 2 \
   --rho-air 1e6 \
   --rho-earth 100 \
   --layer-depths 350,650 \
@@ -335,16 +341,19 @@ Receiver averaging smoke:
 - Runtime: total `77.323 s`, forward solve `63.619 s` in the WSL `fenicsx`
   environment.
 - Interpretation: average receiver sampling is now a working diagnostic path,
-  but the task-book requirement to output point and average receiver curves
-  simultaneously remains open.
+  and the pipeline can now output simultaneous point/average diagnostic curves
+  through `receiver_diagnostics.csv`. A new WSL validation run is still needed
+  to populate those simultaneous diagnostic rows for the latest large-domain
+  model.
 
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
-- Average receiver sampling is implemented for the DOLFINx verification
-  pipeline, but simultaneous point/average artifact output is still pending.
+- Average receiver sampling and simultaneous point/average diagnostic artifact
+  output are implemented for the E-form DOLFINx verification pipeline. H-form
+  diagnostic output still writes only the main receiver response.
 - Faraday-integrated `Hz` recovery is not implemented in this round.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers and receiver-side empymod primary sampling through an injected/reference runner; FEM-space primary field interpolation remains pending.
@@ -362,7 +371,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 ## Next Steps
 
 1. Add real FEM source residual diagnostics using assembled gradient/divergence/curl operators.
-2. Extend validation artifacts to output point and average receiver curves in the same run.
+2. Run a latest-model WSL diagnostic segment with `--receiver-diagnostic-types point,disk_average` to compare point and averaged receiver rows from the same field solve.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 5. Continue P4 by implementing real `EmpymodPrimaryProvider` sampling or a 1D reference backend.

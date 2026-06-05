@@ -41,6 +41,58 @@ def test_save_forward_partial_writes_completed_output_rows(tmp_path):
     assert data["solver_iterations"].tolist() == [10, 11]
 
 
+def test_parse_receiver_diagnostic_types_accepts_comma_string():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(receiver_diagnostic_types="point,disk_average")
+
+    assert sp._parse_receiver_diagnostic_types(config) == ("point", "disk_average")
+
+
+def test_save_forward_partial_writes_receiver_diagnostics(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.asarray([1.0e-5], dtype=float)
+    rows = [[1.0, 2.0, 3.0]]
+    diagnostics = [
+        {
+            "time_obs": 1.0e-5,
+            "receiver_type": "point",
+            "radius": 0.0,
+            "Ex": 1.0,
+            "Ey": 2.0,
+            "Hz": np.nan,
+            "dBzdt": 3.0,
+        },
+        {
+            "time_obs": 1.0e-5,
+            "receiver_type": "disk_average",
+            "radius": 2.0,
+            "Ex": 1.1,
+            "Ey": 2.1,
+            "Hz": np.nan,
+            "dBzdt": 3.1,
+        },
+    ]
+
+    sp._save_forward_partial(
+        config,
+        times,
+        rows,
+        ["Ex", "Ey", "dBzdt"],
+        [],
+        receiver_diagnostic_rows=diagnostics,
+    )
+
+    data = np.load(config.forward_partial_npz(), allow_pickle=False)
+    assert [str(item) for item in data["receiver_diagnostic_types"]] == ["point", "disk_average"]
+    np.testing.assert_allclose(data["receiver_diagnostic_times"], np.asarray([1.0e-5, 1.0e-5]))
+    np.testing.assert_allclose(data["receiver_diagnostic_values"][:, [0, 1, 3]], np.asarray([[1.0, 2.0, 3.0], [1.1, 2.1, 3.1]]))
+
+    csv_text = config.receiver_diagnostics_csv().read_text(encoding="utf-8")
+    assert "time_obs,receiver_type,radius,Ex,Ey,Hz,dBzdt" in csv_text
+    assert "disk_average" in csv_text
+
+
 def test_completed_return_times_follow_completed_rows_only():
     sp = _load_pipeline_module()
     return_times = np.asarray([1.0e-5, 2.0e-5, 4.0e-5], dtype=float)
@@ -83,6 +135,17 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
             "time_theta": 1.0,
         }
     ]
+    receiver_diagnostics = [
+        {
+            "time_obs": 1.0e-5,
+            "receiver_type": "volume_average",
+            "radius": 2.0,
+            "Ex": 1.0,
+            "Ey": 2.0,
+            "Hz": np.nan,
+            "dBzdt": 3.0,
+        }
+    ]
 
     sp._save_forward_checkpoint(
         config,
@@ -94,6 +157,7 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
         components=["Ex", "Ey", "dBzdt"],
         solver_log=solver_log,
         h_old_receiver=np.asarray([10.0, 11.0, 12.0]),
+        receiver_diagnostic_rows=receiver_diagnostics,
     )
 
     loaded = sp._load_forward_checkpoint(config)
@@ -107,3 +171,5 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
     assert loaded["solver_log"][0]["step"] == 4
     assert loaded["solver_log"][0]["is_output"] is True
     np.testing.assert_allclose(loaded["h_old_receiver"], np.asarray([10.0, 11.0, 12.0]))
+    assert loaded["receiver_diagnostic_rows"][0]["receiver_type"] == "volume_average"
+    assert loaded["receiver_diagnostic_rows"][0]["dBzdt"] == 3.0
