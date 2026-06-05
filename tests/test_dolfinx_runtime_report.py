@@ -235,3 +235,49 @@ def test_write_report_records_divergence_cleaning_strength(tmp_path):
 
     text = config.output_report().read_text(encoding="utf-8")
     assert "divergence cleaning: conductivity; strength=0.25" in text
+
+
+def test_write_report_records_divergence_cleaning_solver_stats(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, t_min=1.0e-6, t_max=2.0e-6, time_growth=2.0)
+    times = np.asarray([1.0e-6])
+    data = np.asarray([[1.0, 0.0, 2.0]], dtype=float)
+    fem_result = {
+        "times": times,
+        "data": data,
+        "components": ["Ex", "Ey", "dBzdt"],
+        "solver_log": [
+            {
+                "step": 4,
+                "time": 2.0e-6,
+                "observation_time": 1.0e-6,
+                "dt": 1.0e-6,
+                "its": 12,
+                "residual": 3.0e-9,
+                "reason": 2,
+                "is_output": True,
+                "divergence_clean_before": 8.0,
+                "divergence_clean_after": 1.0e-9,
+                "divergence_clean_correction_norm": 0.25,
+                "divergence_clean_applied_correction_norm": 0.125,
+                "divergence_clean_strength": 0.5,
+            }
+        ],
+    }
+    ref_result = {"times": times, "data": data, "components": ["Ex", "Ey", "dBzdt"]}
+
+    sp.write_report(
+        config,
+        env={},
+        fem_result=fem_result,
+        ref_result=ref_result,
+        errors=_error_metrics(),
+        source_info={"mode": "manual_line"},
+    )
+
+    text = config.output_report().read_text(encoding="utf-8")
+    assert "div_clean_before=8.000000e+00" in text
+    assert "div_clean_after=1.000000e-09" in text
+    assert "div_clean_correction=2.500000e-01" in text
+    assert "div_clean_applied=1.250000e-01" in text
+    assert "div_clean_strength=0.5" in text

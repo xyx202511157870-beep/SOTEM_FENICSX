@@ -3707,6 +3707,9 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         if clean_stats is not None:
             log_item["divergence_clean_before"] = float(clean_stats["before"])
             log_item["divergence_clean_after"] = float(clean_stats["after"])
+            log_item["divergence_clean_correction_norm"] = float(clean_stats["correction_norm"])
+            log_item["divergence_clean_applied_correction_norm"] = float(clean_stats["applied_correction_norm"])
+            log_item["divergence_clean_strength"] = float(clean_stats["strength"])
         solver_log.append(log_item)
         if is_output and msh.comm.rank == 0:
             _save_forward_partial(
@@ -5524,16 +5527,25 @@ def write_report(
     lines.append("")
     lines.append("solver log:")
     for item in fem_result["solver_log"]:
+        div_clean_text = ""
+        if "divergence_clean_before" in item:
+            div_clean_text = (
+                f" div_clean_before={float(item['divergence_clean_before']):.6e}"
+                f" div_clean_after={float(item.get('divergence_clean_after', math.nan)):.6e}"
+                f" div_clean_correction={float(item.get('divergence_clean_correction_norm', math.nan)):.6e}"
+                f" div_clean_applied={float(item.get('divergence_clean_applied_correction_norm', math.nan)):.6e}"
+                f" div_clean_strength={float(item.get('divergence_clean_strength', math.nan)):.6g}"
+            )
         if item.get("is_output", True):
             lines.append(
                 f"  step={item['step']:04d} t_internal={item['time']:.6e} "
                 f"t_obs={item.get('observation_time', item['time']):.6e} dt={item['dt']:.6e} "
-                f"its={item['its']} residual={item['residual']:.6e} reason={item['reason']}"
+                f"its={item['its']} residual={item['residual']:.6e} reason={item['reason']}{div_clean_text}"
             )
         else:
             lines.append(
                 f"  step={item['step']:04d} t_internal={item['time']:.6e} dt={item['dt']:.6e} "
-                f"its={item['its']} residual={item['residual']:.6e} reason={item['reason']}"
+                f"its={item['its']} residual={item['residual']:.6e} reason={item['reason']}{div_clean_text}"
             )
 
     if max_error > config.error_tolerance:
@@ -5867,6 +5879,26 @@ def _save_forward_partial(config: PipelineConfig, times, rows, components, solve
         "solver_iterations": np.asarray([int(item.get("its", -1)) for item in output_logs], dtype=int),
         "solver_residuals": np.asarray([float(item.get("residual", np.nan)) for item in output_logs], dtype=float),
         "solver_reasons": np.asarray([int(item.get("reason", 0)) for item in output_logs], dtype=int),
+        "solver_divergence_clean_before": np.asarray(
+            [float(item.get("divergence_clean_before", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_clean_after": np.asarray(
+            [float(item.get("divergence_clean_after", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_clean_correction_norm": np.asarray(
+            [float(item.get("divergence_clean_correction_norm", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_clean_applied_correction_norm": np.asarray(
+            [float(item.get("divergence_clean_applied_correction_norm", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_clean_strength": np.asarray(
+            [float(item.get("divergence_clean_strength", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
     }
     if receiver_diagnostic_rows:
         payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
@@ -5905,6 +5937,26 @@ def _solver_log_to_arrays(solver_log):
         "solver_reasons": np.asarray([int(item.get("reason", 0)) for item in solver_log], dtype=int),
         "solver_is_output": np.asarray([bool(item.get("is_output", False)) for item in solver_log], dtype=bool),
         "solver_time_theta": np.asarray([float(item.get("time_theta", np.nan)) for item in solver_log], dtype=float),
+        "solver_divergence_clean_before": np.asarray(
+            [float(item.get("divergence_clean_before", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_clean_after": np.asarray(
+            [float(item.get("divergence_clean_after", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_clean_correction_norm": np.asarray(
+            [float(item.get("divergence_clean_correction_norm", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_clean_applied_correction_norm": np.asarray(
+            [float(item.get("divergence_clean_applied_correction_norm", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_clean_strength": np.asarray(
+            [float(item.get("divergence_clean_strength", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
     }
 
 
@@ -5942,6 +5994,31 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
         if "solver_time_theta" in payload.files
         else np.full(steps.size, np.nan)
     )
+    div_before = (
+        np.asarray(payload["solver_divergence_clean_before"], dtype=float)
+        if "solver_divergence_clean_before" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_after = (
+        np.asarray(payload["solver_divergence_clean_after"], dtype=float)
+        if "solver_divergence_clean_after" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_correction = (
+        np.asarray(payload["solver_divergence_clean_correction_norm"], dtype=float)
+        if "solver_divergence_clean_correction_norm" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_applied = (
+        np.asarray(payload["solver_divergence_clean_applied_correction_norm"], dtype=float)
+        if "solver_divergence_clean_applied_correction_norm" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_strength = (
+        np.asarray(payload["solver_divergence_clean_strength"], dtype=float)
+        if "solver_divergence_clean_strength" in payload.files
+        else np.full(steps.size, np.nan)
+    )
     out: list[dict[str, Any]] = []
     for i, step in enumerate(steps):
         item = {
@@ -5956,6 +6033,16 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
         }
         if i < observation_times.size and np.isfinite(observation_times[i]):
             item["observation_time"] = float(observation_times[i])
+        if i < div_before.size and np.isfinite(div_before[i]):
+            item["divergence_clean_before"] = float(div_before[i])
+        if i < div_after.size and np.isfinite(div_after[i]):
+            item["divergence_clean_after"] = float(div_after[i])
+        if i < div_correction.size and np.isfinite(div_correction[i]):
+            item["divergence_clean_correction_norm"] = float(div_correction[i])
+        if i < div_applied.size and np.isfinite(div_applied[i]):
+            item["divergence_clean_applied_correction_norm"] = float(div_applied[i])
+        if i < div_strength.size and np.isfinite(div_strength[i]):
+            item["divergence_clean_strength"] = float(div_strength[i])
         out.append(item)
     return out
 
@@ -6066,19 +6153,53 @@ def _load_forward_partial(config: PipelineConfig):
         else np.full(times.size, np.nan)
     )
     reasons = np.asarray(payload["solver_reasons"], dtype=int) if "solver_reasons" in payload.files else np.zeros(times.size, dtype=int)
+    div_before = (
+        np.asarray(payload["solver_divergence_clean_before"], dtype=float)
+        if "solver_divergence_clean_before" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_after = (
+        np.asarray(payload["solver_divergence_clean_after"], dtype=float)
+        if "solver_divergence_clean_after" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_correction = (
+        np.asarray(payload["solver_divergence_clean_correction_norm"], dtype=float)
+        if "solver_divergence_clean_correction_norm" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_applied = (
+        np.asarray(payload["solver_divergence_clean_applied_correction_norm"], dtype=float)
+        if "solver_divergence_clean_applied_correction_norm" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_strength = (
+        np.asarray(payload["solver_divergence_clean_strength"], dtype=float)
+        if "solver_divergence_clean_strength" in payload.files
+        else np.full(times.size, np.nan)
+    )
     for i, t in enumerate(times):
-        solver_log.append(
-            {
-                "step": int(steps[i]) if i < steps.size else -1,
-                "time": float(t),
-                "observation_time": float(t),
-                "dt": float("nan"),
-                "its": int(iterations[i]) if i < iterations.size else -1,
-                "residual": float(residuals[i]) if i < residuals.size else float("nan"),
-                "reason": int(reasons[i]) if i < reasons.size else 0,
-                "is_output": True,
-            }
-        )
+        item = {
+            "step": int(steps[i]) if i < steps.size else -1,
+            "time": float(t),
+            "observation_time": float(t),
+            "dt": float("nan"),
+            "its": int(iterations[i]) if i < iterations.size else -1,
+            "residual": float(residuals[i]) if i < residuals.size else float("nan"),
+            "reason": int(reasons[i]) if i < reasons.size else 0,
+            "is_output": True,
+        }
+        if i < div_before.size and np.isfinite(div_before[i]):
+            item["divergence_clean_before"] = float(div_before[i])
+        if i < div_after.size and np.isfinite(div_after[i]):
+            item["divergence_clean_after"] = float(div_after[i])
+        if i < div_correction.size and np.isfinite(div_correction[i]):
+            item["divergence_clean_correction_norm"] = float(div_correction[i])
+        if i < div_applied.size and np.isfinite(div_applied[i]):
+            item["divergence_clean_applied_correction_norm"] = float(div_applied[i])
+        if i < div_strength.size and np.isfinite(div_strength[i]):
+            item["divergence_clean_strength"] = float(div_strength[i])
+        solver_log.append(item)
     return {
         "times": times,
         "data": data,

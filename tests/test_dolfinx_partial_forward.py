@@ -41,6 +41,40 @@ def test_save_forward_partial_writes_completed_output_rows(tmp_path):
     assert data["solver_iterations"].tolist() == [10, 11]
 
 
+def test_save_forward_partial_round_trips_divergence_cleaning_output_stats(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.asarray([1.0e-5], dtype=float)
+    rows = [[1.0, 2.0, 3.0]]
+    solver_log = [
+        {
+            "step": 4,
+            "time": 2.0e-5,
+            "observation_time": 1.0e-5,
+            "dt": 5.0e-6,
+            "its": 12,
+            "residual": 3.0e-9,
+            "reason": 2,
+            "is_output": True,
+            "divergence_clean_before": 8.0,
+            "divergence_clean_after": 1.0e-9,
+            "divergence_clean_correction_norm": 0.25,
+            "divergence_clean_applied_correction_norm": 0.125,
+            "divergence_clean_strength": 0.5,
+        }
+    ]
+
+    sp._save_forward_partial(config, times, rows, ["Ex", "Ey", "dBzdt"], solver_log)
+    loaded = sp._load_forward_partial(config)
+
+    item = loaded["solver_log"][0]
+    assert item["divergence_clean_before"] == 8.0
+    assert item["divergence_clean_after"] == 1.0e-9
+    assert item["divergence_clean_correction_norm"] == 0.25
+    assert item["divergence_clean_applied_correction_norm"] == 0.125
+    assert item["divergence_clean_strength"] == 0.5
+
+
 def test_parse_receiver_diagnostic_types_accepts_comma_string():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(receiver_diagnostic_types="point,disk_average")
@@ -195,3 +229,46 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
     np.testing.assert_allclose(loaded["h_old_receiver"], np.asarray([10.0, 11.0, 12.0]))
     assert loaded["receiver_diagnostic_rows"][0]["receiver_type"] == "volume_average"
     assert loaded["receiver_diagnostic_rows"][0]["dBzdt"] == 3.0
+
+
+def test_forward_checkpoint_round_trips_divergence_cleaning_stats(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    e_old = _FakeFunction([1.0, 2.0, 3.0])
+    solver_log = [
+        {
+            "step": 4,
+            "time": 2.0e-5,
+            "observation_time": 1.0e-5,
+            "dt": 1.0e-5,
+            "its": 12,
+            "residual": 3.0e-9,
+            "reason": 2,
+            "is_output": True,
+            "time_theta": 1.0,
+            "divergence_clean_before": 8.0,
+            "divergence_clean_after": 1.0e-9,
+            "divergence_clean_correction_norm": 0.25,
+            "divergence_clean_applied_correction_norm": 0.125,
+            "divergence_clean_strength": 0.5,
+        }
+    ]
+
+    sp._save_forward_checkpoint(
+        config,
+        completed_step=4,
+        previous_time=2.0e-5,
+        E_old=e_old,
+        memories=[],
+        rows=[[7.0, 8.0, 9.0]],
+        components=["Ex", "Ey", "dBzdt"],
+        solver_log=solver_log,
+    )
+
+    loaded = sp._load_forward_checkpoint(config)
+    item = loaded["solver_log"][0]
+    assert item["divergence_clean_before"] == 8.0
+    assert item["divergence_clean_after"] == 1.0e-9
+    assert item["divergence_clean_correction_norm"] == 0.25
+    assert item["divergence_clean_applied_correction_norm"] == 0.125
+    assert item["divergence_clean_strength"] == 0.5
