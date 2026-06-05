@@ -3509,20 +3509,30 @@ def _biot_receiver_dbdt_from_h(h_new, h_old, *, dt: float, mu: float = 1.2566370
 def _interpolate_analytic_initial_dc_field(msh, spaces, config: PipelineConfig):
     """Interpolate analytic halfspace DC E into the Nedelec space."""
 
-    from dolfinx import fem
-
-    V = spaces["V"]
-    E0 = fem.Function(V, name="E_initial_dc_analytic_halfspace")
-
     def field(x):
         pts = x.T
         values = _analytic_halfspace_dc_electric_field(pts, config)
         return values.T
 
-    E0.interpolate(field)
-    E0.x.scatter_forward()
+    E0 = _interpolate_vector_callable_to_nedelec_function(
+        spaces,
+        name="E_initial_dc_analytic_halfspace",
+        field_callable=field,
+    )
     log("[initial] interpolated analytic halfspace DC electric field.", comm=msh.comm)
     return E0
+
+
+def _interpolate_vector_callable_to_nedelec_function(spaces, *, name: str, field_callable):
+    """Interpolate a vector callable into the configured Nedelec function space."""
+
+    from dolfinx import fem
+
+    V = spaces["V"]
+    function = fem.Function(V, name=name)
+    function.interpolate(field_callable)
+    function.x.scatter_forward()
+    return function
 
 
 def _solve_initial_dc_field(msh, spaces, materials, facet_tags, config: PipelineConfig):

@@ -83,6 +83,11 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `dolfinx/legacy_total_field_baseline.py`
   - Frozen copy of the current total-field baseline implementation.
 
+- `dolfinx/sotem_pipeline.py`
+  - `_interpolate_vector_callable_to_nedelec_function` centralizes interpolation
+    of vector callables into the Nedelec `V` space.
+  - The analytic halfspace DC initializer now uses this shared helper.
+
 - `src/atem3d/materials/prony.py`
   - `DebyeTerm`
   - `PronyConductivity`
@@ -226,6 +231,11 @@ Current P4 status:
   adapter for tabulated primary samples. It maps queried interpolation points
   back to the sampled table and returns component-major values suitable for
   `Function.interpolate`.
+- `dolfinx/sotem_pipeline.py` now has a shared
+  `_interpolate_vector_callable_to_nedelec_function` helper for inserting vector
+  callables into the Nedelec function space. The analytic halfspace DC initial
+  field uses this helper, giving the primary-secondary path a concrete DOLFINx
+  insertion point to reuse.
 
 P5 DC secondary initialization tests:
 
@@ -1365,7 +1375,7 @@ field consistency, or the total-field formulation.
   still show the old ambiguous `actual radius/depth` wording until
   regenerated with `--postprocess-partial`.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
-- P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a uniform-halfspace analytic grounded-wire DC backend, a provider-to-FEM-point interpolation adapter, and a DOLFINx-style tabulated callable assembler; wiring this callable into the real DOLFINx Function/vector path remains pending.
+- P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a uniform-halfspace analytic grounded-wire DC backend, a provider-to-FEM-point interpolation adapter, a DOLFINx-style tabulated callable assembler, and a shared DOLFINx Nedelec callable interpolation helper; wiring primary provider outputs into the full primary-secondary solver remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
@@ -1416,7 +1426,7 @@ field consistency, or the total-field formulation.
    it with any DOLFINx-native source assembly.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
-5. Continue P4 by wiring the `PrimaryFEMInterpolator`/`TabulatedVectorField` adapter into the real DOLFINx Function/vector path.
+5. Continue P4/P5 by wiring the `PrimaryFEMInterpolator`/`TabulatedVectorField` adapter through `_interpolate_vector_callable_to_nedelec_function` for primary-secondary DC initialization and time stepping.
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
 7. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
 8. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.

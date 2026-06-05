@@ -2,6 +2,7 @@
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +68,44 @@ def test_initial_dc_mode_defaults_to_fem():
     sp = _load_pipeline_module()
 
     assert sp.PipelineConfig().initial_dc_mode == "fem"
+
+
+def test_interpolate_vector_callable_to_nedelec_function_uses_dolfinx_function(monkeypatch):
+    sp = _load_pipeline_module()
+    calls = {}
+
+    class FakeX:
+        def __init__(self):
+            self.scatter_count = 0
+
+        def scatter_forward(self):
+            self.scatter_count += 1
+
+    class FakeFunction:
+        def __init__(self, function_space, name):
+            calls["space"] = function_space
+            calls["name"] = name
+            self.x = FakeX()
+
+        def interpolate(self, field_callable):
+            x = np.array([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])
+            calls["interpolated"] = field_callable(x)
+
+    fake_fem = types.SimpleNamespace(Function=FakeFunction)
+    monkeypatch.setitem(sys.modules, "dolfinx", types.SimpleNamespace(fem=fake_fem))
+    V = object()
+    spaces = {"V": V}
+
+    function = sp._interpolate_vector_callable_to_nedelec_function(
+        spaces,
+        name="E_primary_test",
+        field_callable=lambda x: x + 10.0,
+    )
+
+    assert calls["space"] is V
+    assert calls["name"] == "E_primary_test"
+    np.testing.assert_allclose(calls["interpolated"], [[10.0, 11.0], [12.0, 13.0], [14.0, 15.0]])
+    assert function.x.scatter_count == 1
 
 
 def test_ramp_average_is_applied_to_dbdt_reference_component():
