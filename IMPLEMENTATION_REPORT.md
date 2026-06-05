@@ -1,4 +1,4 @@
-# P0-P4 Implementation Report
+# P0-P5 Implementation Report
 
 ## Scope
 
@@ -9,6 +9,7 @@ This report covers the implementation rounds currently committed or staged from 
 - P2: add no-IP three-component validation artifacts and diagnostics.
 - P3 partial: add a Debye/Prony material conductivity API and pure-Python memory tests.
 - P4 partial: add primary-field provider interfaces with zero and cached providers.
+- P5 partial: add a DC secondary initialization core with zero-contrast tests.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
@@ -58,6 +59,13 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `CachedPrimaryProvider`
   - `EmpymodPrimaryProvider` skeleton with no import-time dependency on `empymod`.
 
+- `src/atem3d/solvers/dc_secondary.py`
+  - `DCSecondaryInitialization`
+  - `initialize_dc_secondary`
+  - Zero-contrast exact `Es0=0` path.
+  - IP memory initialization `chi0 = Ep0 + Es0`.
+  - Initial secondary current contrast `deltaJ0`.
+
 ## Tests Added
 
 - `tests/test_waveform.py`
@@ -66,6 +74,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_dolfinx_validation_artifacts.py`
 - `tests/test_prony.py`
 - `tests/test_primary_provider.py`
+- `tests/test_dc_initialization.py`
 
 ## Validation Command
 
@@ -85,6 +94,12 @@ P4 primary-provider tests:
 
 ```bash
 python -m pytest -q tests/test_primary_provider.py
+```
+
+P5 DC secondary initialization tests:
+
+```bash
+python -m pytest -q tests/test_dc_initialization.py
 ```
 
 ## Running No-IP Three-Component Validation
@@ -132,7 +147,8 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - Average receivers and Faraday-integrated `Hz` recovery are not fully implemented in this round.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers and an empymod skeleton; the actual empymod field sampling implementation remains pending.
-- Primary-secondary solvers remain for P5+.
+- P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
+- Full primary-secondary time stepping remains for P6+.
 - Full no-IP/IP 5% acceptance is not yet achieved.
 
 ## Next Steps
@@ -142,4 +158,5 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 5. Continue P4 by implementing real `EmpymodPrimaryProvider` sampling or a 1D reference backend.
-6. Continue to P5: DC secondary initialization.
+6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
+7. Continue to P6: TDEM secondary time stepping.
