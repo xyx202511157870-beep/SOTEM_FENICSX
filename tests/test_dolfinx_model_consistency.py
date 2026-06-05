@@ -143,6 +143,7 @@ def test_model_consistency_rejects_air_or_interface_electrodes(kwargs):
         ("stop_after_outputs", -1),
         ("memory_limit_gb", -1.0),
         ("memory_safety_fraction", 0.0),
+        ("min_steps_before_first_observation", 0),
     ],
 )
 def test_model_consistency_rejects_nonpositive_runtime_parameters(field, value):
@@ -606,6 +607,27 @@ def test_after_ramp_observation_schedule_uses_ramp_solver_t_min_before_later_obs
     assert schedule["step_times"][:10].tolist() == pytest.approx(np.linspace(1.0e-6, 1.0e-5, 10))
     assert schedule["step_times"][-2:].tolist() == pytest.approx([1.2e-5, 1.4e-5])
     assert schedule["output_step_indices"] == [10, 11]
+
+
+def test_after_ramp_observation_schedule_substeps_before_first_observation():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        ramp_off_time=1.0e-5,
+        time_origin="after_ramp",
+        ramp_solver_t_min=1.0e-6,
+        min_steps_during_turnoff=10,
+        min_steps_before_first_observation=4,
+    )
+    observation_times = [1.0e-5, 1.25e-5]
+
+    schedule = sp._forward_observation_schedule(observation_times, config)
+
+    assert np.any(np.isclose(schedule["step_times"], 1.25e-5))
+    assert np.any(np.isclose(schedule["step_times"], 1.50e-5))
+    assert np.any(np.isclose(schedule["step_times"], 1.75e-5))
+    assert schedule["output_internal_times"].tolist() == pytest.approx([2.0e-5, 2.25e-5])
+    assert schedule["return_times"].tolist() == pytest.approx(observation_times)
+    assert schedule["output_step_indices"] == [13, 14]
 
 
 def test_ramp_start_observation_schedule_is_identity():

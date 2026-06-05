@@ -32,6 +32,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
 - `dolfinx/sotem_pipeline.py`
   - Added `min_steps_during_turnoff`.
+  - Added `min_steps_before_first_observation` for after-ramp internal
+    substeps between ramp-off end and the first observation output.
   - Replaced point-value source derivative with interval-average `dI/dt`.
   - Updated after-ramp internal schedule to include turn-off history before observation times.
   - Added receiver sampling modes:
@@ -841,6 +843,54 @@ Receiver mesh-sensitivity smoke:
     coupling, E receiver extraction near the shallow interface, or total-field
     source transfer.
 
+- Analytic DC initial-field smoke:
+  - Directory:
+    `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_src40_recv20_diskcurl_analyticdc_smoke`.
+  - Change relative to the five-output mesh-segment run:
+    `--initial-dc-mode analytic_halfspace`.
+  - Result over the first five output times:
+    - `max_error_Ex = 0.06799536786261284`
+    - `max_error_Hz = 0.009233751670207124`
+    - `max_error_dBzdt = 0.02749341398150946`
+    - weak `Ey` scaled absolute error: `0.033933136602542754`
+    - `physical_pass_all_components = false`
+    - `physical_failed_components = ["Ex"]`
+  - Interpretation: analytic halfspace DC improves `Ex` compared with the FEM
+    DC initialization, and points 2-5 pass the physical gate, but the first
+    after-ramp output still fails. This isolates the remaining early `Ex`
+    issue to either the first after-ramp time step or source/DC coupling at
+    the turn-off transition.
+
+- After-ramp first-observation substep smoke:
+  - Directory:
+    `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_src40_recv20_diskcurl_analyticdc_substep4_smoke`.
+  - Change relative to the analytic DC smoke:
+    `--min-steps-before-first-observation 4`, which inserts internal solve
+    times `1.25e-5`, `1.50e-5`, and `1.75e-5 s` between `t_off=1.0e-5 s`
+    and the first output at `t_internal=2.0e-5 s`.
+  - Runtime: total `166.687 s`.
+  - Result over the first five output times:
+    - `max_error_Ex = 0.02917101885961845`
+    - `max_error_Hz = 0.009205488588706368`
+    - `max_error_dBzdt = 0.03013405182182564`
+    - `max_error_Hz_or_dBzdt = 0.03013405182182564`
+    - weak `Ey` scaled absolute error: `0.03382239075406781`
+    - `physical_pass_all_components = true`
+    - `physical_failed_components = []`
+  - Receiver/reference diagnostic:
+    - main disk-average `Ex` passes with max error `2.92%`.
+    - main disk-average curl `dBzdt` passes with max error `3.01%`.
+    - point receiver `Ex` also passes with max error `2.10%`, while point
+      `dBzdt` is just above the gate at `5.16%`.
+    - `Ey` remains a symmetry-near-zero component; strict scalar relative
+      error is not meaningful, but the weak-component scaled absolute gate
+      passes.
+  - Interpretation: the first post-ramp internal step was a real early-time
+    error channel. With analytic DC plus four internal steps before the first
+    observation, the corrected latest no-IP total-field model passes the
+    physical gate for the first five output times. This is still only an early
+    smoke result, not a full `1e-5 s` to `1 s` acceptance result.
+
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.
 - Change: same as above, but `--magnetic-dbdt-mode biot_rate`.
@@ -924,18 +974,28 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
 - Full no-IP/IP `1e-5 s` to `1 s` 5% acceptance is not yet achieved. The latest
-  corrected-model no-IP run covers the full window, but the physical gate still
-  fails for `Ex`, `Hz`, and `dBzdt`; only the weak `Ey` gate passes.
+  full-window corrected-model no-IP run covers the full window, but that run
+  did not include the later `min_steps_before_first_observation=4` fix and the
+  physical gate still failed for `Ex`, `Hz`, and `dBzdt`; only the weak `Ey`
+  gate passed.
+- The latest analytic-DC plus first-observation-substep smoke passes the
+  physical no-IP gate over the first five output times only. A complete
+  `t_obs=1e-5 s` to `1 s` rerun is still required before claiming P2
+  full-window acceptance.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
 
 ## Next Steps
 
-1. Replace dense whole-line quadrature with exact cell-segmented line
-   integration or an equivalent DOLFINx-native line-source assembly, using the
-   `5001`-point q5001 smoke as the regression target for first-point `Ex`.
-2. Extend the latest-model point/disk diagnostic run beyond the first five output times after improving the receiver/curl recovery path, so long runs are not spent confirming the same early-time failure.
+1. Resume or rerun the corrected latest no-IP model with
+   `--initial-dc-mode analytic_halfspace` and
+   `--min-steps-before-first-observation 4` through `t_obs=1 s`, using
+   `--max-it 3000` if the late-time solver again reaches the default
+   iteration cap.
+2. Keep mesh-segment line-source integration as the current source baseline,
+   and add an explicit de Rham/source-edge orientation audit before replacing
+   it with any DOLFINx-native source assembly.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 5. Continue P4 by implementing real `EmpymodPrimaryProvider` sampling or a 1D reference backend.

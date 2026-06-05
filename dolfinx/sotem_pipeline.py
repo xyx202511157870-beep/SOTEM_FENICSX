@@ -105,6 +105,7 @@ class PipelineConfig:
     time_origin: str = "after_ramp"  # after_ramp, ramp_start
     ramp_solver_t_min: float = 1.0e-6
     min_steps_during_turnoff: int = 10
+    min_steps_before_first_observation: int = 1
 
     source_mode: str = "auto"  # auto, line, manual_line, regularized
     source_projection_mode: str = "charge_conserving"  # charge_conserving, raw
@@ -538,6 +539,12 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     min_steps_during_turnoff = int(config.min_steps_during_turnoff)
     if min_steps_during_turnoff <= 0:
         raise ValueError(f"min_steps_during_turnoff must be positive; got {min_steps_during_turnoff}")
+    min_steps_before_first_observation = int(config.min_steps_before_first_observation)
+    if min_steps_before_first_observation <= 0:
+        raise ValueError(
+            "min_steps_before_first_observation must be positive; "
+            f"got {min_steps_before_first_observation}"
+        )
     if not math.isfinite(float(config.error_min_time)) or float(config.error_min_time) < 0.0:
         raise ValueError(f"error_min_time must be finite and nonnegative; got {float(config.error_min_time):.12g}")
     weak_fraction = float(config.weak_component_reference_fraction)
@@ -701,6 +708,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "ramp_off_time": float(config.ramp_off_time),
             "ramp_solver_t_min": float(config.ramp_solver_t_min),
             "min_steps_during_turnoff": min_steps_during_turnoff,
+            "min_steps_before_first_observation": min_steps_before_first_observation,
             "empymod_srcpts": empymod_srcpts,
             "empymod_ht": empymod_ht,
             "empymod_ft": empymod_ft,
@@ -869,7 +877,9 @@ def _forward_observation_schedule(times, config: PipelineConfig):
         ramp_start = min(float(config.ramp_solver_t_min), ramp_time / min_steps)
         ramp_steps = np.linspace(ramp_start, ramp_time, min_steps)
         output_internal_times = ramp_time + observation_times
-        step_times = np.unique(np.r_[ramp_steps, output_internal_times])
+        first_obs_steps = int(config.min_steps_before_first_observation)
+        first_obs_internal_steps = np.linspace(ramp_time, output_internal_times[0], first_obs_steps + 1)[1:]
+        step_times = np.unique(np.r_[ramp_steps, first_obs_internal_steps, output_internal_times])
     else:
         raise ValueError("time_origin must be 'after_ramp' or 'ramp_start'")
 
@@ -4840,6 +4850,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "t_max": float(config.t_max),
         "time_growth": float(config.time_growth),
         "min_steps_during_turnoff": int(config.min_steps_during_turnoff),
+        "min_steps_before_first_observation": int(config.min_steps_before_first_observation),
         "components": "runtime",
         "outer_boundary_mode": str(config.outer_boundary_mode),
         "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
@@ -5296,7 +5307,8 @@ def write_report(
     lines.append(
         f"  time samples: t_min={config.t_min:g} s; t_max={config.t_max:g} s; "
         f"ramp_solver_t_min={config.ramp_solver_t_min:g} s; "
-        f"min_steps_during_turnoff={config.min_steps_during_turnoff}"
+        f"min_steps_during_turnoff={config.min_steps_during_turnoff}; "
+        f"min_steps_before_first_observation={config.min_steps_before_first_observation}"
     )
     lines.append(f"  empymod srcpts: {config.empymod_srcpts}; ht={config.empymod_ht}; ft={config.empymod_ft}")
     if int(config.reference_audit_srcpts) > 0:
@@ -6241,6 +6253,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--t-max", type=float, default=1.0)
     parser.add_argument("--ramp-solver-t-min", type=float, default=1.0e-6)
     parser.add_argument("--min-steps-during-turnoff", type=int, default=10)
+    parser.add_argument(
+        "--min-steps-before-first-observation",
+        type=int,
+        default=1,
+        help="Internal solve steps from ramp-off end to the first after-ramp observation; 1 keeps only the output step.",
+    )
     parser.add_argument("--x-extent", type=float, default=25_000.0)
     parser.add_argument("--y-extent", type=float, default=25_000.0)
     parser.add_argument("--air-height", type=float, default=10_000.0)
@@ -6312,6 +6330,7 @@ def main(argv: list[str] | None = None) -> int:
         time_theta=args.time_theta,
         time_origin=args.time_origin,
         min_steps_during_turnoff=args.min_steps_during_turnoff,
+        min_steps_before_first_observation=args.min_steps_before_first_observation,
         empymod_srcpts=args.empymod_srcpts,
         empymod_ht=args.empymod_ht,
         empymod_ft=args.empymod_ft,
