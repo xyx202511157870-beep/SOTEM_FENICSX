@@ -95,6 +95,7 @@ def _validation_case_from_config(config: dict, *, case_type: str) -> ThreeCompon
         magnetic_quantity=str(validation.get("magnetic_quantity", component_names[-1])),
         threshold=float(validation.get("relative_error_threshold", 0.05)),
         diagnostics=dict(validation.get("diagnostics", {})),
+        resolved_config=config,
         material=material,
     )
 

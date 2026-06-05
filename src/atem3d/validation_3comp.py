@@ -27,6 +27,7 @@ class ThreeComponentValidationInput:
     magnetic_quantity: str
     threshold: float = 0.05
     diagnostics: dict = field(default_factory=dict)
+    resolved_config: dict = field(default_factory=dict)
     material: PronyConductivity | None = None
 
 
@@ -60,6 +61,10 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
         json.dumps(diagnostics, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    (output_dir / "run_config_resolved.yaml").write_text(
+        json.dumps(_resolved_config(case, component_names), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     _plot_comparison(
         output_dir / "comparison_3comp.png",
         times,
@@ -74,6 +79,29 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
         threshold=case.threshold,
     )
     return summary
+
+
+def _resolved_config(case: ThreeComponentValidationInput, component_names: list[str]) -> dict:
+    values = dict(case.resolved_config)
+    values.update(
+        {
+            "case_type": case.case_type,
+            "reference_type": case.reference_type,
+            "magnetic_quantity": case.magnetic_quantity,
+            "component_names": component_names,
+            "relative_error_threshold": float(case.threshold),
+        }
+    )
+    if case.material is not None:
+        values["material"] = {
+            "sigma_inf": float(case.material.sigma_inf),
+            "sigma0": float(case.material.sigma0),
+            "terms": [
+                {"delta_sigma": float(term.delta_sigma), "tau": float(term.tau)}
+                for term in case.material.terms
+            ],
+        }
+    return values
 
 
 def _validated_arrays(

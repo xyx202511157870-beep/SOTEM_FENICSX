@@ -81,6 +81,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `ThreeComponentValidationInput`
   - `write_three_component_validation_artifacts`
   - Required no-IP/IP validation CSV/JSON/PNG output names.
+  - `run_config_resolved.yaml` resolved validation configuration output.
   - Robust relative error and peak-normalized error output through existing metric code.
   - IP Prony metadata in `error_summary.json`.
 

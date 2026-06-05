@@ -34,6 +34,7 @@ def test_cli_validate_noip_3comp_writes_artifacts_from_csv(tmp_path):
     assert (output_dir / "reference_empymod_or_1d.csv").is_file()
     assert (output_dir / "errors.csv").is_file()
     assert (output_dir / "error_summary.json").is_file()
+    assert (output_dir / "run_config_resolved.yaml").is_file()
 
 
 def test_cli_validate_ip_3comp_reads_prony_material_metadata(tmp_path):

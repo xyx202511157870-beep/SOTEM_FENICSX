@@ -41,6 +41,7 @@ def test_noip_3comp_validation_smoke_writes_required_artifacts(tmp_path):
         "comparison_3comp.png",
         "error_curves_3comp.png",
         "diagnostics.json",
+        "run_config_resolved.yaml",
     ]:
         assert (tmp_path / name).is_file()
 
@@ -55,3 +56,6 @@ def test_noip_3comp_validation_smoke_writes_required_artifacts(tmp_path):
         "time_obs,component,pred,ref,abs_error,ordinary_relative_error,"
         "relative_error_with_floor,peak_normalized_error,pass_5pct"
     )
+    resolved = json.loads((tmp_path / "run_config_resolved.yaml").read_text(encoding="utf-8"))
+    assert resolved["case_type"] == "noip"
+    assert resolved["component_names"] == ["Ex", "Ey", "dBzdt"]
