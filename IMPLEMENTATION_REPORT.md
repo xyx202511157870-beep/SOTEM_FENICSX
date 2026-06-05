@@ -891,6 +891,71 @@ Receiver mesh-sensitivity smoke:
     physical gate for the first five output times. This is still only an early
     smoke result, not a full `1e-5 s` to `1 s` acceptance result.
 
+- Full-window analytic DC plus first-observation-substep run:
+  - Directory:
+    `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_src40_recv20_diskcurl_analyticdc_substep4_full`.
+  - Configuration: same as the five-output substep smoke, but run to
+    `t_obs=1.0 s`.
+  - Execution:
+    - First WSL segment with `--max-it 3000` reached step `50`
+      (`t_obs=0.03851859888774471 s`) and then failed at step `51`
+      (`t_internal=4.815825e-02 s`) with KSP `reason=-3`.
+    - Resume with `--max-it 6000` completed to `t_obs=1.0 s`.
+    - WSL was shut down after both segments.
+  - Full-window result:
+    - `pass_all_components = false`
+    - `physical_pass_all_components = false`
+    - `physical_failed_components = ["Ex", "Ey", "Hz", "dBzdt"]`
+    - `weak_component_passed = false`
+    - `weak_component_scaled_abs_error_max(Ey) = 0.0869621825168415`
+    - `max_error_Ex = 5501.311526120881` at `t_obs=1.0 s`
+    - `max_peak_normalized_error_Ex = 0.129011302486824`
+    - `max_error_Hz = 2.8210700979882883` at `t_obs=1.0 s`
+    - `max_error_dBzdt = 0.7984781792920356` at
+      `t_obs=0.019721522630525293 s`
+    - `max_peak_normalized_error_dBzdt = 0.03155282305894918`
+  - Diagnostic observation:
+    - The early five-output window still passes the physical gate.
+    - After about `0.02-0.05 s`, the predicted electric field develops a
+      persistent static-like offset. At `t_obs=1.0 s`, predicted `Ex` is
+      `-1.1588946989865485e-4 V/m` while empymod reference `Ex` is
+      `2.1069619302160945e-8 V/m`.
+    - This failure is therefore not the same early first-step error fixed by
+      `min_steps_before_first_observation`; it is a later total-field
+      gradient/static residual problem.
+
+- Conductivity divergence-cleaning diagnostic:
+  - Directory:
+    `dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_substep4_divclean_growth2_diag`.
+  - Change relative to the full-window substep run:
+    `--divergence-cleaning conductivity` and a coarse diagnostic
+    `--time-growth 2.0`.
+  - Execution:
+    - First segment timed out after 30 minutes at `t_obs=0.16384 s`; WSL was
+      then manually shut down.
+    - Resume completed to `t_obs=1.0 s`; WSL was shut down afterwards.
+  - Result:
+    - `pass_all_components = false`
+    - `physical_pass_all_components = false`
+    - `physical_failed_components = ["Ex", "Hz", "dBzdt"]`
+    - `weak_component_passed = true`
+    - `weak_component_scaled_abs_error_max(Ey) = 0.02375229937232657`
+    - `max_error_Ex = 0.9497349158671408` at `t_obs=0.04096 s`
+    - `max_peak_normalized_error_Ex = 0.12733470951899298`
+    - `max_error_dBzdt = 3.6629916640217104` at `t_obs=0.04096 s`
+    - `max_peak_normalized_error_dBzdt = 0.08630761754389761`
+  - Diagnostic observation:
+    - The cleaner removes the late static offset: at `t_obs=1.0 s`, predicted
+      `Ex` drops to `2.9826907527504154e-8 V/m`, close in absolute scale to
+      the empymod reference `2.1069619302160945e-8 V/m`.
+    - It is not a valid final fix as currently applied: it over-amplifies or
+      distorts the mid-time relative response around `0.02-0.04 s`, especially
+      `dBzdt`.
+    - Root-cause direction is now clearer: the total-field E-form solve is
+      carrying a post-ramp conductivity-divergence/gradient residual. A final
+      solution should control that residual without removing physically needed
+      inductive response.
+
 - Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_diskavg_biotrate_q5001_weakgate_smoke`.
 - Change: same as above, but `--magnetic-dbdt-mode biot_rate`.
@@ -974,25 +1039,28 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
 - Full no-IP/IP `1e-5 s` to `1 s` 5% acceptance is not yet achieved. The latest
-  full-window corrected-model no-IP run covers the full window, but that run
-  did not include the later `min_steps_before_first_observation=4` fix and the
-  physical gate still failed for `Ex`, `Hz`, and `dBzdt`; only the weak `Ey`
-  gate passed.
+  full-window corrected-model no-IP run with analytic DC and
+  `min_steps_before_first_observation=4` covers the full window, but the
+  physical gate still fails for `Ex`, `Ey`, `Hz`, and `dBzdt`.
 - The latest analytic-DC plus first-observation-substep smoke passes the
-  physical no-IP gate over the first five output times only. A complete
-  `t_obs=1e-5 s` to `1 s` rerun is still required before claiming P2
-  full-window acceptance.
+  physical no-IP gate over the first five output times only. Full-window
+  results show a later post-ramp static/gradient residual in the total-field
+  E-form solve.
+- Conductivity divergence cleaning removes the late static electric-field
+  offset in a coarse diagnostic run, but the current projection changes the
+  mid-time amplitude and does not meet the `5%` gate. It is evidence for the
+  root cause, not a final accepted solver mode.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
 
 ## Next Steps
 
-1. Resume or rerun the corrected latest no-IP model with
-   `--initial-dc-mode analytic_halfspace` and
-   `--min-steps-before-first-observation 4` through `t_obs=1 s`, using
-   `--max-it 3000` if the late-time solver again reaches the default
-   iteration cap.
+1. Replace the current all-or-nothing post-ramp conductivity divergence
+   projection with a controlled consistency treatment: quantify
+   `G^T M_sigma E`, `curl(E)`, receiver amplitude, and reference error before
+   and after cleaning, then apply the smallest correction that removes the
+   static residual without suppressing mid-time inductive response.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.

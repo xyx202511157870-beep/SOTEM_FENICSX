@@ -1,0 +1,407 @@
+{
+  "failed": true,
+  "failed_components": [
+    "Ex",
+    "Ey",
+    "Hz",
+    "dBzdt"
+  ],
+  "failed_times": [
+    1e-05,
+    1.25e-05,
+    1.5625e-05,
+    1.953125e-05,
+    2.44140625e-05,
+    3.0517578125e-05,
+    3.814697265625e-05,
+    4.76837158203125e-05,
+    5.9604644775390625e-05,
+    7.450580596923828e-05,
+    9.313225746154785e-05,
+    0.00011641532182693481,
+    0.00014551915228366852,
+    0.00018189894035458565,
+    0.00022737367544323206,
+    0.0002842170943040401,
+    0.0003552713678800501,
+    0.0004440892098500626,
+    0.0005551115123125783,
+    0.0006938893903907228,
+    0.0008673617379884035,
+    0.0010842021724855044,
+    0.0013552527156068805,
+    0.0016940658945086007,
+    0.002117582368135751,
+    0.0026469779601696886,
+    0.0033087224502121107,
+    0.004135903062765138,
+    0.0051698788284564225,
+    0.006462348535570529,
+    0.00807793566946316,
+    0.01009741958682895,
+    0.012621774483536187,
+    0.015777218104420235,
+    0.019721522630525293,
+    0.024651903288156616,
+    0.03081487911019577,
+    0.03851859888774471,
+    0.048148248609680894,
+    0.06018531076210112,
+    0.0752316384526264,
+    0.09403954806578299,
+    0.11754943508222873,
+    0.1469367938527859,
+    0.18367099231598238,
+    0.22958874039497798,
+    0.2869859254937225,
+    0.35873240686715313,
+    0.4484155085839414,
+    0.5605193857299268,
+    0.7006492321624085,
+    0.8758115402030107,
+    1.0
+  ],
+  "magnetic_receiver_mode": "biot_current",
+  "magnetic_recovery": {
+    "enabled": true,
+    "faraday_hz_final": 0.0001358863809969644,
+    "initial_hz": -0.002193461897462184,
+    "max_absolute_hz_difference": 0.00013582496034401082,
+    "max_relative_hz_difference": 22357.780151413554,
+    "method": "faraday_integrated_dBzdt",
+    "rate_consistency": {
+      "dbzdt_average_at_max_relative_difference": 8.354608295906212e-09,
+      "enabled": true,
+      "hz_rate_at_max_relative_difference": 5.5223727569191204e-09,
+      "max_absolute_difference": 2.832235538987092e-09,
+      "max_relative_difference": 0.3390027920728369,
+      "method": "mu_dHzdt_vs_trapezoid_dBzdt",
+      "sample_count": 52,
+      "time_mid_at_max_relative_difference": 0.009087677628146055
+    },
+    "reported_hz_final": 3.837856456412631e-08,
+    "time_at_max_relative_hz_difference": 0.5605193857299268
+  },
+  "magnetic_recovery_note": "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure.",
+  "physical_failed_components": [
+    "Ex",
+    "Ey",
+    "Hz",
+    "dBzdt"
+  ],
+  "receiver_sampling": {
+    "baseline_receiver_type": "point",
+    "comparisons": {
+      "disk_average": {
+        "Ex": {
+          "max_absolute_difference": 7.287503533959998e-06,
+          "max_relative_difference": 0.008312713324163,
+          "mean_relative_difference": 0.002121490388691,
+          "sample_count": 53,
+          "time_at_max_relative_difference": 1e-05
+        },
+        "Ey": {
+          "max_absolute_difference": 1.0387342064462744e-05,
+          "max_relative_difference": 0.271873056529235,
+          "mean_relative_difference": 0.164291732662962,
+          "sample_count": 53,
+          "time_at_max_relative_difference": 1.5625e-05
+        },
+        "dBzdt": {
+          "max_absolute_difference": 2.6969481543923877e-13,
+          "max_relative_difference": 2.404927786641609,
+          "mean_relative_difference": 0.145122209510088,
+          "sample_count": 53,
+          "time_at_max_relative_difference": 0.8758115402030107
+        }
+      }
+    },
+    "enabled": true,
+    "receiver_sampling_issue_suspected": true,
+    "receiver_types": [
+      "point",
+      "disk_average"
+    ],
+    "threshold": 0.05,
+    "time_count": 53
+  },
+  "receiver_vs_reference": {
+    "baseline_receiver_type": "point",
+    "comparisons": {
+      "disk_average": {
+        "Ex": {
+          "baseline_max_relative_error": 5494.65764770627,
+          "candidate_max_relative_error": 5501.311526120881,
+          "improves_over_baseline": false
+        },
+        "Ey": {
+          "baseline_max_relative_error": 9192990540.743647,
+          "candidate_max_relative_error": 7813139855.878602,
+          "improves_over_baseline": true
+        },
+        "dBzdt": {
+          "baseline_max_relative_error": 0.8040683991770969,
+          "candidate_max_relative_error": 0.7984781792920356,
+          "improves_over_baseline": true
+        }
+      }
+    },
+    "enabled": true,
+    "metrics": {
+      "disk_average": {
+        "Ex": {
+          "max_peak_normalized_error": 0.129011302486824,
+          "max_relative_error": 5501.311526120881,
+          "mean_relative_error": 403.1502259807069,
+          "passes_threshold": false,
+          "sample_count": 53,
+          "time_at_max_relative_error": 1.0
+        },
+        "Ey": {
+          "max_peak_normalized_error": 7813139855.878602,
+          "max_relative_error": 7813139855.878602,
+          "mean_relative_error": 4420668600.837503,
+          "passes_threshold": false,
+          "sample_count": 53,
+          "time_at_max_relative_error": 0.00018189894035458565
+        },
+        "Hz": {
+          "max_peak_normalized_error": 0.05778752493914836,
+          "max_relative_error": 2.8210700979882883,
+          "mean_relative_error": 0.2513980128178174,
+          "passes_threshold": false,
+          "sample_count": 53,
+          "time_at_max_relative_error": 1.0
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.03155282305894918,
+          "max_relative_error": 0.7984781792920356,
+          "mean_relative_error": 0.21065743267218104,
+          "passes_threshold": false,
+          "sample_count": 53,
+          "time_at_max_relative_error": 0.019721522630525293
+        }
+      },
+      "point": {
+        "Ex": {
+          "max_peak_normalized_error": 0.12885526232862135,
+          "max_relative_error": 5494.65764770627,
+          "mean_relative_error": 402.6625327427845,
+          "passes_threshold": false,
+          "sample_count": 53,
+          "time_at_max_relative_error": 1.0
+        },
+        "Ey": {
+          "max_peak_normalized_error": 9192990540.743647,
+          "max_relative_error": 9192990540.743647,
+          "mean_relative_error": 4461447580.026028,
+          "passes_threshold": false,
+          "sample_count": 53,
+          "time_at_max_relative_error": 0.00018189894035458565
+        },
+        "dBzdt": {
+          "max_peak_normalized_error": 0.05366304861325682,
+          "max_relative_error": 0.8040683991770969,
+          "mean_relative_error": 0.23406802457131995,
+          "passes_threshold": false,
+          "sample_count": 53,
+          "time_at_max_relative_error": 0.019721522630525293
+        }
+      }
+    },
+    "receiver_types": [
+      "point",
+      "disk_average"
+    ],
+    "threshold": 0.05
+  },
+  "recommended_check_order": [
+    "time_step_error",
+    "mesh_error",
+    "boundary_error",
+    "source_term_error",
+    "receiver_sampling_error",
+    "magnetic_recovery_error",
+    "ip_memory_error"
+  ],
+  "source_consistency": {
+    "current_final": 0.0,
+    "current_initial": 10.0,
+    "dc_current_conservation_residual": null,
+    "endpoint_source_total_sum": 0.0,
+    "expected_current_change": -10.0,
+    "initial_curl_residual": null,
+    "integral_didt_dt": -10.0,
+    "source_endpoint_balance_residual": 2.1986488109902626e-10,
+    "waveform_integral_residual": 0.0
+  },
+  "source_local_projection": {
+    "active_dof_count": 788,
+    "added_points": 5200,
+    "cell_contribution_l1_total": 205.2715158169321,
+    "cell_contribution_top_cell": 62667,
+    "cell_contribution_top_fraction": 0.005310961600149497,
+    "cell_contribution_top_l1": 1.0901891381082065,
+    "cell_hit_count_max": 26,
+    "cell_hit_count_mean": 25.24271844660194,
+    "cell_hit_count_min": 6,
+    "cell_hit_top_fraction": 0.005,
+    "cell_sequence_changes": 205,
+    "dof_contribution_l1_total": 205.27151581693155,
+    "dof_contribution_top_dof": 101690,
+    "dof_contribution_top_fraction": 0.008000760339183266,
+    "dof_contribution_top_l1": 1.6423282025121364,
+    "end_window_missed": 0,
+    "end_window_points": 260,
+    "end_window_unique_cells": 10,
+    "endpoint_window_fraction": 0.05,
+    "integration_mode": "mesh_segments",
+    "missed_fraction": 0.0,
+    "missed_points": 0,
+    "mode": "manual_line",
+    "quadrature_points": 5200,
+    "quadrature_points_per_segment_max": 26,
+    "quadrature_points_per_segment_mean": 26.0,
+    "quadrature_points_per_segment_min": 26,
+    "segment_count": 200,
+    "segment_max_length": 5.0,
+    "segment_mean_length": 5.0,
+    "segment_min_length": 5.0,
+    "segment_total_length": 1000.0,
+    "start_window_missed": 0,
+    "start_window_points": 260,
+    "start_window_unique_cells": 10,
+    "unique_hit_cells": 206
+  },
+  "source_projection": {
+    "after_residual": 2.1986488109902626e-10,
+    "applied": true,
+    "before_residual": 0.15869511184790644,
+    "correction_l1_norm": 0.9197595222313176,
+    "correction_l1_over_raw": 0.004516530672161857,
+    "correction_l2_norm": 0.07528561975404618,
+    "correction_l2_over_raw": 0.005301231424409309,
+    "divergence_residual_reduction": 0.9999999986145454,
+    "endpoint_norm": 1.414213562373099,
+    "ksp_iterations": 7,
+    "ksp_reason": 2,
+    "ksp_residual": 3.3318332568283124e-10,
+    "projected_source_l1_norm": 204.21067512842586,
+    "projected_source_l2_norm": 14.201326661865593,
+    "projection_mode": "charge_conserving",
+    "raw_source_l1_norm": 203.6429261734806,
+    "raw_source_l2_norm": 14.201534271338645,
+    "scalar_balance": {
+      "current_div_active_dofs": 27,
+      "current_div_endpoint_alignment": 0.9937628083067229,
+      "current_div_endpoint_dot": 2.0000000000000053,
+      "current_div_l1_norm": 2.493185899789292,
+      "current_div_l2_norm": 1.4230896452874706,
+      "current_div_l2_over_endpoint_l2": 1.0062763384191262,
+      "current_div_linf_norm": 1.0,
+      "current_div_top_abs_fraction": 0.4010932358010342,
+      "endpoint_active_dofs": 2,
+      "endpoint_l1_norm": 2.0000000000000275,
+      "endpoint_l2_norm": 1.414213562373099,
+      "endpoint_linf_norm": 1.000000000000014,
+      "endpoint_top_abs_fraction": 0.5000000000000001,
+      "residual_active_dofs": 25,
+      "residual_l1_norm": 0.4931858997893364,
+      "residual_l2_norm": 0.15869511184790644,
+      "residual_l2_over_endpoint_l2": 0.11221438972881195,
+      "residual_linf_norm": 0.09018913810820438,
+      "residual_top_abs_fraction": 0.1828704716552694
+    }
+  },
+  "strict_failed": true,
+  "validation_failure": {
+    "failed": true,
+    "failed_components": [
+      "Ex",
+      "Ey",
+      "Hz",
+      "dBzdt"
+    ],
+    "failed_times": [
+      1e-05,
+      1.25e-05,
+      1.5625e-05,
+      1.953125e-05,
+      2.44140625e-05,
+      3.0517578125e-05,
+      3.814697265625e-05,
+      4.76837158203125e-05,
+      5.9604644775390625e-05,
+      7.450580596923828e-05,
+      9.313225746154785e-05,
+      0.00011641532182693481,
+      0.00014551915228366852,
+      0.00018189894035458565,
+      0.00022737367544323206,
+      0.0002842170943040401,
+      0.0003552713678800501,
+      0.0004440892098500626,
+      0.0005551115123125783,
+      0.0006938893903907228,
+      0.0008673617379884035,
+      0.0010842021724855044,
+      0.0013552527156068805,
+      0.0016940658945086007,
+      0.002117582368135751,
+      0.0026469779601696886,
+      0.0033087224502121107,
+      0.004135903062765138,
+      0.0051698788284564225,
+      0.006462348535570529,
+      0.00807793566946316,
+      0.01009741958682895,
+      0.012621774483536187,
+      0.015777218104420235,
+      0.019721522630525293,
+      0.024651903288156616,
+      0.03081487911019577,
+      0.03851859888774471,
+      0.048148248609680894,
+      0.06018531076210112,
+      0.0752316384526264,
+      0.09403954806578299,
+      0.11754943508222873,
+      0.1469367938527859,
+      0.18367099231598238,
+      0.22958874039497798,
+      0.2869859254937225,
+      0.35873240686715313,
+      0.4484155085839414,
+      0.5605193857299268,
+      0.7006492321624085,
+      0.8758115402030107,
+      1.0
+    ],
+    "magnetic_receiver_mode": "biot_current",
+    "magnetic_recovery_note": "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure.",
+    "physical_failed_components": [
+      "Ex",
+      "Ey",
+      "Hz",
+      "dBzdt"
+    ],
+    "recommended_check_order": [
+      "time_step_error",
+      "mesh_error",
+      "boundary_error",
+      "source_term_error",
+      "receiver_sampling_error",
+      "magnetic_recovery_error",
+      "ip_memory_error"
+    ],
+    "strict_failed": true,
+    "weak_component_passed": false,
+    "weak_components": [
+      "Ey"
+    ]
+  },
+  "weak_component_passed": false,
+  "weak_components": [
+    "Ey"
+  ]
+}
