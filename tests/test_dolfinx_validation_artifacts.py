@@ -296,6 +296,47 @@ def test_pipeline_source_consistency_can_use_core_matrix_diagnostics(tmp_path):
     assert diagnostics["diagnostic_backend"] == "atem3d.source_diagnostics"
 
 
+def test_validation_artifacts_use_source_consistency_inputs_from_source_info(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5, 1.0e-4])
+    pred = np.array([[1.0, 0.0, 2.0], [1.0, 0.0, 2.0]])
+    ref = pred.copy()
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        source_info={
+            "mode": "manual_line",
+            "consistency_diagnostic_inputs": {
+                "gradient_transpose": np.eye(2),
+                "source_vector": np.array([1.0, 0.0]),
+                "endpoint_source": np.array([0.0, 0.0]),
+                "divergence_operator": np.eye(2),
+                "conductive_current": np.array([2.0, -1.0]),
+                "initial_electric_field": np.array([1.0, 3.0]),
+                "curl_operator": np.array([[1.0, -1.0]]),
+                "time_intervals": np.array([1.0, 2.0]),
+                "interval_average_didt": np.array([3.0, 4.0]),
+                "current_initial": 1.0,
+                "current_final": 5.0,
+            },
+        },
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    source = diagnostics["source_consistency"]
+    assert source["source_endpoint_balance_residual"] == pytest.approx(1.0)
+    assert source["dc_current_conservation_residual"] == pytest.approx(np.sqrt(5.0))
+    assert source["initial_curl_residual"] == pytest.approx(2.0)
+    assert source["waveform_integral_residual"] == pytest.approx(7.0)
+
+
 def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path, source_only=True)

@@ -5069,6 +5069,15 @@ def _source_local_projection_diagnostics_from_info(source_info) -> dict[str, Any
     return json.loads(json.dumps(diagnostics, allow_nan=False, default=float))
 
 
+def _source_consistency_inputs_from_info(source_info) -> dict[str, Any] | None:
+    if not isinstance(source_info, dict):
+        return None
+    diagnostics = source_info.get("consistency_diagnostic_inputs")
+    if not isinstance(diagnostics, dict):
+        return None
+    return dict(diagnostics)
+
+
 def write_validation_artifacts(
     times,
     pred_data,
@@ -5115,9 +5124,11 @@ def write_validation_artifacts(
     )
     diagnostics["validation_failure"] = dict(diagnostics)
     source_projection = _source_projection_diagnostics_from_info(source_info)
+    source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
     diagnostics["source_consistency"] = diagnose_source_consistency(
         config,
         source_projection_residual=source_projection.get("after_residual") if source_projection else None,
+        source_diagnostic_inputs=source_consistency_inputs,
     )
     if source_projection is not None:
         diagnostics["source_projection"] = source_projection
@@ -5197,12 +5208,14 @@ def write_source_only_diagnostics(
     workdir.mkdir(parents=True, exist_ok=True)
     source_projection = _source_projection_diagnostics_from_info(source_info)
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
+    source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
     diagnostics: dict[str, Any] = {
         "source_only": True,
         "source_mode": str(source_info.get("mode")) if isinstance(source_info, dict) else None,
         "source_consistency": diagnose_source_consistency(
             config,
             source_projection_residual=source_projection.get("after_residual") if source_projection else None,
+            source_diagnostic_inputs=source_consistency_inputs,
         ),
         "runtime": {str(key): float(value) for key, value in runtime.items() if isinstance(value, (int, float))},
     }

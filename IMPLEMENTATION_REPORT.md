@@ -74,6 +74,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     matrix/weak-form diagnostic inputs to the reusable
     `atem3d.source_diagnostics` core while preserving the old self-contained
     fallback path.
+  - `write_validation_artifacts` and `write_source_only_diagnostics` now read
+    `source_info["consistency_diagnostic_inputs"]` and write those computed
+    residuals into `diagnostics.json`.
   - Receiver diagnostics now record sampling/cell-candidate statistics:
     `sample_count`, `candidate_count_min`, `candidate_count_max`, and
     `candidate_count_mean` in `receiver_diagnostics.csv`.
