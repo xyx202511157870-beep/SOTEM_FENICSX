@@ -1,12 +1,13 @@
-# P0-P2 Implementation Report
+# P0-P3 Implementation Report
 
 ## Scope
 
-This report covers the first implementation round requested in the task book:
+This report covers the implementation rounds currently committed or staged from the task book:
 
 - P0: freeze the current total-field baseline.
 - P1: add waveform interfaces, full turn-off time grid, and interval-average `dI/dt`.
 - P2: add no-IP three-component validation artifacts and diagnostics.
+- P3 partial: add a Debye/Prony material conductivity API and pure-Python memory tests.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
@@ -41,12 +42,21 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `dolfinx/legacy_total_field_baseline.py`
   - Frozen copy of the current total-field baseline implementation.
 
+- `src/atem3d/materials/prony.py`
+  - `DebyeTerm`
+  - `PronyConductivity`
+  - Backward-Euler `alpha`, `beta`, and `sigma_eff`.
+  - `chi_k` memory initialization/update helpers.
+  - `J = sigma_inf E - sum(delta_sigma_k chi_k)` current-density helper.
+  - Conversion to/from the existing `atem3d.ip.DebyeIPModel` for solver migration.
+
 ## Tests Added
 
 - `tests/test_waveform.py`
 - `tests/test_time_grid.py`
 - `tests/test_error_metric_floor.py`
 - `tests/test_dolfinx_validation_artifacts.py`
+- `tests/test_prony.py`
 
 ## Validation Command
 
@@ -54,6 +64,12 @@ Lightweight P0-P2 tests:
 
 ```bash
 python -m pytest -q tests/test_waveform.py tests/test_time_grid.py tests/test_error_metric_floor.py tests/test_dolfinx_validation_artifacts.py tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_solves_through_ramp_then_returns_observation_times tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_keeps_ramp_grid_when_observations_end_before_ramp tests/test_dolfinx_model_consistency.py::test_after_ramp_observation_schedule_uses_ramp_solver_t_min_before_later_observation_start
+```
+
+P3 material-interface tests:
+
+```bash
+python -m pytest -q tests/test_prony.py tests/test_ip_model.py tests/test_debye_fit.py
 ```
 
 ## Running No-IP Three-Component Validation
@@ -99,7 +115,8 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
 - Average receivers and Faraday-integrated `Hz` recovery are not fully implemented in this round.
-- IP total-field and primary-secondary solvers remain for P3+.
+- P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
+- Primary-secondary solvers remain for P4+.
 - Full no-IP/IP 5% acceptance is not yet achieved.
 
 ## Next Steps
@@ -107,5 +124,5 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 1. Add real FEM source residual diagnostics using assembled gradient/divergence/curl operators.
 2. Add `point`, `volume_average`, and `disk_average` receiver modes in DOLFINx.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`.
-4. Continue to P3: Debye/Prony IP total-field with `delta_sigma=0` exactly matching no-IP.
-
+4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
+5. Continue to P4: `PrimaryFieldProvider` abstraction.
