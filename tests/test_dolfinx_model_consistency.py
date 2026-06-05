@@ -205,6 +205,18 @@ def test_forward_components_include_hz_for_biot_magnetic_receiver():
     ]
 
 
+def test_model_consistency_rejects_biot_rate_dbdt_without_biot_h_receiver():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="biot_rate"):
+        sp.validate_model_consistency(sp.PipelineConfig(magnetic_receiver_mode="curl", magnetic_dbdt_mode="biot_rate"))
+
+    diagnostics = sp.validate_model_consistency(
+        sp.PipelineConfig(magnetic_receiver_mode="biot_current", magnetic_dbdt_mode="biot_rate")
+    )
+    assert diagnostics["magnetic_dbdt_mode"] == "biot_rate"
+
+
 def test_model_consistency_reports_nedelec_order():
     sp = _load_pipeline_module()
 

@@ -58,6 +58,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     - `diagnostics.json`
     - `run_config_resolved.yaml`
   - Added automatic diagnostic scaffolding and source waveform consistency diagnostics.
+  - Added optional receiver magnetic-rate mode:
+    - `--magnetic-dbdt-mode curl` keeps the original E-form `-curl(E)` output.
+    - `--magnetic-dbdt-mode biot_rate` uses the finite-difference rate of the
+      Biot-Savart receiver `H` as a diagnostic `dBzdt` path.
 
 - `dolfinx/legacy_total_field_baseline.py`
   - Frozen copy of the current total-field baseline implementation.
@@ -413,6 +417,24 @@ Simultaneous point/disk receiver diagnostic smoke:
   magnetic-response error. The Faraday-integrated `Hz` diagnostic is close to
   the Biot `Hz` trace over this short window, so the current evidence points
   more strongly at `dBzdt`/curl recovery than at Biot `Hz` recovery.
+
+Biot-rate dBdt diagnostic smoke:
+
+- Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_biotrate_smoke`.
+- Command used the same corrected latest-model geometry and mesh settings as
+  the point/disk smoke, but added `--magnetic-dbdt-mode biot_rate`.
+- The run completed one output point in WSL and WSL was shut down afterwards.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.2765931106438829`
+  - `max_error_Ey = 5150102111.510694`
+  - `max_error_Hz_or_dBzdt = 0.3754687533711432`
+  - `pass_all_components = false`
+- Interpretation: deriving `dBzdt` from the Biot-Savart receiver `Hz` rate
+  improves the first point relative to point curl recovery
+  (`~53.1% -> ~37.5%`) and is comparable to disk-average curl recovery
+  (`~38.3%`). This confirms that receiver/curl recovery is a major error
+  channel, but this branch still does not meet the `5%` gate.
 
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 

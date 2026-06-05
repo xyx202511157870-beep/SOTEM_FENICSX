@@ -112,6 +112,7 @@ class PipelineConfig:
     formulation: str = "e"  # e, h
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
     magnetic_receiver_mode: str = "curl"  # curl, biot_current, biot_ohmic
+    magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median
     divergence_cleaning: str = "none"  # none, conductivity
     polarization: str = "none"  # none, cole-cole
@@ -469,6 +470,11 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     magnetic_receiver_mode = str(config.magnetic_receiver_mode).strip().lower()
     if magnetic_receiver_mode not in {"curl", "biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_receiver_mode must be 'curl', 'biot_current', or 'biot_ohmic'")
+    magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
+    if magnetic_dbdt_mode not in {"curl", "biot_rate"}:
+        raise ValueError("magnetic_dbdt_mode must be 'curl' or 'biot_rate'")
+    if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
+        raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     outer_boundary_mode = str(config.outer_boundary_mode).strip().lower()
     if outer_boundary_mode not in {"pec", "natural", "robin"}:
         raise ValueError("outer_boundary_mode must be 'pec', 'natural', or 'robin'")
@@ -663,6 +669,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "source_term_mode": source_term_mode,
             "initial_dc_mode": initial_dc_mode,
             "magnetic_receiver_mode": magnetic_receiver_mode,
+            "magnetic_dbdt_mode": magnetic_dbdt_mode,
             "outer_boundary_mode": outer_boundary_mode,
             "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
             "receiver_evaluation_mode": receiver_evaluation_mode,
@@ -2965,6 +2972,24 @@ def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> N
     receiver_values["Hz"] = float(h_receiver[2])
 
 
+def _biot_receiver_dbdt_from_h(h_new, h_old, *, dt: float, mu: float = 1.2566370614359173e-6):
+    import numpy as np
+
+    dt_value = float(dt)
+    if not math.isfinite(dt_value) or dt_value <= 0.0:
+        raise ValueError("dt must be positive")
+    mu_value = float(mu)
+    if not math.isfinite(mu_value) or mu_value <= 0.0:
+        raise ValueError("mu must be positive")
+    new = np.asarray(h_new, dtype=float).reshape(-1)
+    old = np.asarray(h_old, dtype=float).reshape(-1)
+    if new.shape != old.shape or new.size != 3:
+        raise ValueError("h_new and h_old must be three-component vectors")
+    if not (np.all(np.isfinite(new)) and np.all(np.isfinite(old))):
+        raise ValueError("h_new and h_old must be finite")
+    return mu_value * (new - old) / dt_value
+
+
 def _interpolate_analytic_initial_dc_field(msh, spaces, config: PipelineConfig):
     """Interpolate analytic halfspace DC E into the Nedelec space."""
 
@@ -3096,6 +3121,11 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
     magnetic_receiver_mode = str(config.magnetic_receiver_mode).strip().lower()
     if magnetic_receiver_mode not in {"curl", "biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_receiver_mode must be 'curl', 'biot_current', or 'biot_ohmic'")
+    magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
+    if magnetic_dbdt_mode not in {"curl", "biot_rate"}:
+        raise ValueError("magnetic_dbdt_mode must be 'curl' or 'biot_rate'")
+    if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
+        raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     H_old_receiver = None
     if magnetic_receiver_mode == "biot_current":
         H_old_receiver = _biot_savart_total_h_at_receiver(
@@ -3257,6 +3287,10 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             rec = evaluate_receivers(E_new, dbdt, msh, config)
             if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
                 _assign_biot_receiver_hz(rec, H_new_receiver)
+                if magnetic_dbdt_mode == "biot_rate":
+                    rec["dBzdt"] = float(
+                        _biot_receiver_dbdt_from_h(H_new_receiver, H_old_receiver, dt=dt)[2]
+                    )
             rows.append([rec[name] for name in components])
             receiver_diagnostic_rows.extend(
                 _evaluate_receiver_diagnostics(
@@ -4243,6 +4277,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "outer_boundary_mode": str(config.outer_boundary_mode),
         "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
         "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
+        "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
         "polarization": str(config.polarization),
     }
     lines = []
@@ -4528,6 +4563,7 @@ def write_report(
     lines.append(f"  Nedelec order: {config.nedelec_order}")
     lines.append(f"  initial DC mode: {config.initial_dc_mode}")
     lines.append(f"  magnetic receiver mode: {config.magnetic_receiver_mode}")
+    lines.append(f"  magnetic dBdt mode: {config.magnetic_dbdt_mode}")
     lines.append(
         f"  outer boundary mode: {config.outer_boundary_mode}; "
         f"robin scale={float(config.outer_boundary_robin_scale):.6g}"
@@ -5399,6 +5435,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--formulation", choices=["e", "h"], default="e")
     parser.add_argument("--initial-dc-mode", choices=["fem", "analytic_halfspace"], default="fem")
     parser.add_argument("--magnetic-receiver-mode", choices=["curl", "biot_current", "biot_ohmic"], default="curl")
+    parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate"], default="curl")
     parser.add_argument("--outer-boundary-mode", choices=["pec", "natural", "robin"], default="pec")
     parser.add_argument("--outer-boundary-robin-scale", type=float, default=1.0)
     parser.add_argument("--receiver-type", choices=["point", "volume_average", "disk_average"], default="point")
@@ -5499,6 +5536,7 @@ def main(argv: list[str] | None = None) -> int:
         formulation=args.formulation,
         initial_dc_mode=args.initial_dc_mode,
         magnetic_receiver_mode=args.magnetic_receiver_mode,
+        magnetic_dbdt_mode=args.magnetic_dbdt_mode,
         outer_boundary_mode=args.outer_boundary_mode,
         outer_boundary_robin_scale=args.outer_boundary_robin_scale,
         receiver_type=args.receiver_type,

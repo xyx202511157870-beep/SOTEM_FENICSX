@@ -161,3 +161,11 @@ def test_magnetic_recovery_summary_checks_hz_rate_against_dbdt():
     assert summary["rate_consistency"]["method"] == "mu_dHzdt_vs_trapezoid_dBzdt"
     assert summary["rate_consistency"]["sample_count"] == 2
     assert summary["rate_consistency"]["max_relative_difference"] < 1.0e-12
+
+
+def test_biot_receiver_dbdt_from_h_uses_interval_rate():
+    sp = _load_pipeline_module()
+
+    dbdt = sp._biot_receiver_dbdt_from_h([0.0, 1.0, 5.0], [0.0, -1.0, 1.0], dt=2.0, mu=4.0)
+
+    np.testing.assert_allclose(dbdt, np.asarray([0.0, 4.0, 8.0]))
