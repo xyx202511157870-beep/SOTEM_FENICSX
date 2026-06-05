@@ -139,6 +139,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `build_receiver` factory for `point`, `disk_average`, and
     `volume_average` receiver configuration.
 
+- `src/atem3d/__init__.py`
+  - Exposes pure receiver APIs: `PointReceiver`, `AverageReceiver`, and
+    `build_receiver` without requiring optional modelling dependencies.
+
 - `src/atem3d/config.py`
   - Receiver YAML entries can now pass `type`/`receiver_type` and `radius`
     through `build_receiver`.
@@ -221,6 +225,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_validation_3comp_cli.py`
 - `tests/test_source_consistency.py`
 - `tests/test_average_receivers.py`
+- `tests/test_public_api.py`
 - Existing `tests/test_empymod_validation.py`
 - Existing `tests/test_empymod_validation_cli.py`
 
