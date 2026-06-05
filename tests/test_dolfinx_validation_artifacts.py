@@ -213,6 +213,25 @@ def test_validation_artifacts_include_source_local_projection_diagnostics(tmp_pa
     assert diagnostics["source_local_projection"]["cell_contribution_top_fraction"] == pytest.approx(0.4)
 
 
+def test_scalar_source_balance_vector_diagnostics_reports_residual_distribution():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp._scalar_source_balance_vector_diagnostics(
+        endpoint=np.asarray([1.0, -1.0, 0.0, 0.0]),
+        current_div=np.asarray([0.8, -0.4, 0.3, 0.0]),
+        residual=np.asarray([0.2, -0.6, -0.3, 0.0]),
+    )
+
+    assert diagnostics["endpoint_active_dofs"] == 2
+    assert diagnostics["current_div_active_dofs"] == 3
+    assert diagnostics["residual_active_dofs"] == 3
+    assert diagnostics["residual_l1_norm"] == pytest.approx(1.1)
+    assert diagnostics["residual_linf_norm"] == pytest.approx(0.6)
+    assert diagnostics["residual_l2_over_endpoint_l2"] == pytest.approx(np.linalg.norm([0.2, -0.6, -0.3]) / np.sqrt(2.0))
+    assert diagnostics["residual_top_abs_fraction"] == pytest.approx(0.6 / 1.1)
+    assert diagnostics["current_div_endpoint_alignment"] == pytest.approx(1.2 / (np.linalg.norm([0.8, -0.4, 0.3]) * np.sqrt(2.0)))
+
+
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():
     sp = _load_pipeline_module()
     times = np.asarray([1.0, 3.0, 6.0])

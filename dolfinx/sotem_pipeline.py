@@ -1867,6 +1867,11 @@ def _enforce_source_charge_conservation(
     residual_norm = residual.norm()
     raw_source_l2_norm = float(source_vec.norm())
     raw_source_l1_norm = float(source_vec.norm(PETSc.NormType.NORM_1))
+    scalar_balance = _scalar_source_balance_vector_diagnostics(
+        endpoint.getArray(readonly=True).copy(),
+        current_div.getArray(readonly=True).copy(),
+        residual.getArray(readonly=True).copy(),
+    )
     projection_mode = "charge_conserving" if bool(apply_projection) else "raw"
     if not apply_projection:
         log(
@@ -1893,6 +1898,7 @@ def _enforce_source_charge_conservation(
             "correction_l1_norm": 0.0,
             "correction_l1_over_raw": 0.0,
             "divergence_residual_reduction": 0.0,
+            "scalar_balance": scalar_balance,
             "ksp_iterations": 0,
             "ksp_reason": 0,
             "ksp_residual": 0.0,
@@ -1921,6 +1927,7 @@ def _enforce_source_charge_conservation(
             "correction_l1_norm": 0.0,
             "correction_l1_over_raw": 0.0,
             "divergence_residual_reduction": 0.0,
+            "scalar_balance": scalar_balance,
             "ksp_iterations": 0,
             "ksp_reason": 0,
             "ksp_residual": 0.0,
@@ -1988,6 +1995,7 @@ def _enforce_source_charge_conservation(
         "divergence_residual_reduction": (
             float((residual_norm - corrected_norm) / residual_norm) if residual_norm > 0.0 else 0.0
         ),
+        "scalar_balance": scalar_balance,
         "ksp_iterations": int(ksp.getIterationNumber()),
         "ksp_reason": int(reason),
         "ksp_residual": float(ksp.getResidualNorm()),
@@ -4433,6 +4441,46 @@ def _summarize_manual_line_source_local_diagnostics(
     }
 
 
+def _scalar_source_balance_vector_diagnostics(endpoint, current_div, residual) -> dict[str, Any]:
+    """Summarize scalar-space source balance vectors before projection."""
+
+    import numpy as np
+
+    endpoint = np.asarray(endpoint, dtype=float).reshape(-1)
+    current_div = np.asarray(current_div, dtype=float).reshape(-1)
+    residual = np.asarray(residual, dtype=float).reshape(-1)
+    if endpoint.shape != current_div.shape or endpoint.shape != residual.shape:
+        raise ValueError("endpoint, current_div, and residual must have the same shape")
+
+    def _norms(prefix: str, values) -> dict[str, Any]:
+        abs_values = np.abs(np.asarray(values, dtype=float))
+        linf = float(abs_values.max()) if abs_values.size else 0.0
+        tol = max(1.0e-14, 1.0e-12 * linf)
+        l1 = float(np.sum(abs_values))
+        l2 = float(np.linalg.norm(values))
+        return {
+            f"{prefix}_active_dofs": int(np.count_nonzero(abs_values > tol)),
+            f"{prefix}_l1_norm": l1,
+            f"{prefix}_l2_norm": l2,
+            f"{prefix}_linf_norm": linf,
+            f"{prefix}_top_abs_fraction": float(linf / l1) if l1 > 0.0 else 0.0,
+        }
+
+    endpoint_l2 = float(np.linalg.norm(endpoint))
+    current_l2 = float(np.linalg.norm(current_div))
+    residual_l2 = float(np.linalg.norm(residual))
+    dot = float(np.dot(current_div, endpoint))
+    diagnostics: dict[str, Any] = {}
+    diagnostics.update(_norms("endpoint", endpoint))
+    diagnostics.update(_norms("current_div", current_div))
+    diagnostics.update(_norms("residual", residual))
+    diagnostics["residual_l2_over_endpoint_l2"] = float(residual_l2 / endpoint_l2) if endpoint_l2 > 0.0 else 0.0
+    diagnostics["current_div_l2_over_endpoint_l2"] = float(current_l2 / endpoint_l2) if endpoint_l2 > 0.0 else 0.0
+    diagnostics["current_div_endpoint_dot"] = dot
+    diagnostics["current_div_endpoint_alignment"] = float(dot / (current_l2 * endpoint_l2)) if current_l2 > 0.0 and endpoint_l2 > 0.0 else 0.0
+    return diagnostics
+
+
 def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | None:
     if not isinstance(source_info, dict):
         return None
@@ -4472,6 +4520,9 @@ def _source_projection_diagnostics_from_info(source_info) -> dict[str, Any] | No
             out[key] = None
         else:
             out[key] = float(value)
+    scalar_balance = diagnostics.get("scalar_balance")
+    if isinstance(scalar_balance, dict):
+        out["scalar_balance"] = json.loads(json.dumps(scalar_balance, allow_nan=False, default=float))
     return out
 
 
@@ -4854,6 +4905,15 @@ def write_report(
             f"correction_l2/raw={float(source_projection.get('correction_l2_over_raw', math.nan)):.6g}; "
             f"correction_l1/raw={float(source_projection.get('correction_l1_over_raw', math.nan)):.6g}"
         )
+        scalar_balance = source_projection.get("scalar_balance")
+        if isinstance(scalar_balance, dict):
+            lines.append(
+                "  source scalar balance: "
+                f"residual_active_dofs={int(scalar_balance.get('residual_active_dofs', 0))}; "
+                f"residual_l2/endpoint_l2={float(scalar_balance.get('residual_l2_over_endpoint_l2', math.nan)):.6g}; "
+                f"residual_top_fraction={float(scalar_balance.get('residual_top_abs_fraction', math.nan)):.6g}; "
+                f"current_endpoint_alignment={float(scalar_balance.get('current_div_endpoint_alignment', math.nan)):.6g}"
+            )
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
     if source_local_projection is not None:
         lines.append(

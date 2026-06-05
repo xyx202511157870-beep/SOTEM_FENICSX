@@ -587,6 +587,35 @@ Receiver mesh-sensitivity smoke:
   gradient projection as the only correction.
 
 - Directory:
+  `dolfinx/current_task_runs/y200_rxminus300_noip_src40_recv20_nearest_biotrate_rawproj_balance_smoke`.
+- Change: same raw-source diagnostic run, with scalar source-balance vector
+  distribution diagnostics added under `source_projection.scalar_balance`.
+- Scalar balance diagnostics before projection:
+  - endpoint active scalar DOFs: `2`.
+  - raw current-divergence active scalar DOFs: `216`.
+  - residual active scalar DOFs: `216`.
+  - endpoint L2 norm: `1.414213562373099`.
+  - raw current-divergence L2 norm: `6.703242996163269`.
+  - residual L2 norm: `6.561607663609301`.
+  - residual L2 / endpoint L2: `4.639757274423743`.
+  - residual Linf norm: `2.2542275461651973`.
+  - residual top-absolute fraction: `0.03433153794676107`.
+  - current-divergence/endpoint alignment: `0.20458050351679713`.
+- Result at `t_obs=1.0e-5 s`:
+  - `max_error_Ex = 0.04866187758167016`
+  - `max_error_Ey = 1033376377.0488973`
+  - `max_error_Hz_or_dBzdt = 0.17328421255717028`
+  - `pass_all_components = false`
+- Interpretation: the raw source-balance residual is distributed over many
+  scalar DOFs, not concentrated at the two endpoints. A simple local endpoint
+  patch is therefore unlikely to be sufficient. The more likely fault is that
+  the direct manual-line Nedelec integral is not fully compatible with
+  DOLFINx's discrete-gradient orientation/transformation convention on the
+  unstructured tetrahedral mesh. The next step should audit the source vector
+  against explicit `G.T @ s` contributions cell-by-cell or switch to a
+  DOLFINx-native line/source assembly that preserves the de Rham identity.
+
+- Directory:
   `dolfinx/current_task_runs/y200_rxminus300_noip_src60_recv20_diskcurl_smoke`.
 - Change: source mesh size `60 m`, source refinement radius `400 m`,
   receiver mesh size `20 m`, main receiver `disk_average`, one output point.
@@ -651,10 +680,11 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 
 ## Next Steps
 
-1. Replace or improve the current global gradient charge-conservation source
-   projection with a charge-conserving construction that preserves the
-   near-source moment; use the raw-vs-projected first-point evidence as the
-   regression target.
+1. Audit manual-line Nedelec source assembly against the DOLFINx
+   discrete-gradient operator cell-by-cell. The raw residual is distributed
+   over `216` scalar DOFs, so first check local dof orientation/transformation
+   and Basix push-forward conventions before attempting an endpoint-local
+   correction.
 2. Extend the latest-model point/disk diagnostic run beyond the first five output times after improving the receiver/curl recovery path, so long runs are not spent confirming the same early-time failure.
 3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
