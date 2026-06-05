@@ -209,11 +209,45 @@ def test_model_consistency_reports_divergence_control_settings():
     sp = _load_pipeline_module()
 
     diagnostics = sp.validate_model_consistency(
-        sp.PipelineConfig(divergence_control_weight=1.0e-8, divergence_control_t_obs_min=0.02)
+        sp.PipelineConfig(
+            divergence_control_weight=1.0e-8,
+            divergence_control_t_obs_min=0.02,
+            divergence_control_scale="lhs",
+        )
     )
 
     assert diagnostics["divergence_control_weight"] == pytest.approx(1.0e-8)
     assert diagnostics["divergence_control_t_obs_min"] == pytest.approx(0.02)
+    assert diagnostics["divergence_control_scale"] == "lhs"
+
+
+def test_model_consistency_rejects_unknown_divergence_control_scale():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="divergence_control_scale"):
+        sp.validate_model_consistency(sp.PipelineConfig(divergence_control_scale="bad-scale"))
+
+
+def test_divergence_control_lhs_scale_uses_left_hand_operator_norm():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(divergence_control_weight=0.25, divergence_control_scale="lhs")
+
+    stats = sp._divergence_control_step_stats(
+        config,
+        dt=2.0,
+        lhs_mass=3.0,
+        lhs_stiffness=4.0,
+        mass_norm=5.0,
+        stiffness_norm=7.0,
+        control_norm=10.0,
+    )
+
+    assert stats["divergence_control_scale"] == "lhs"
+    assert stats["divergence_control_weight"] == pytest.approx(0.25)
+    assert stats["divergence_control_reference_norm"] == pytest.approx(43.0)
+    assert stats["divergence_control_matrix_norm"] == pytest.approx(10.0)
+    assert stats["divergence_control_applied_weight"] == pytest.approx(1.075)
+    assert stats["divergence_control_relative_weight"] == pytest.approx(0.25)
 
 
 def test_should_apply_divergence_control_respects_weight_and_observation_time_gate():

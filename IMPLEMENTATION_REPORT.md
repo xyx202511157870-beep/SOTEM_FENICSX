@@ -1173,6 +1173,65 @@ solve the early-time error. A meaningful sweep needs normalized scaling of the
 penalty relative to the mass/stiffness terms before spending a full-window
 fine run.
 
+## P2 LHS-Scaled Divergence-Control Diagnostics
+
+I added an explicit divergence-control scale mode:
+
+```text
+--divergence-control-scale absolute|mass|stiffness|lhs
+```
+
+The default remains `absolute`, preserving existing runs. The new `lhs` mode
+treats `divergence_control_weight` as a dimensionless fraction of the current
+implicit left-hand operator norm:
+
+```text
+applied_weight = weight * (|lhs_mass| ||M_sigma|| + |lhs_stiffness| ||K||)
+                 / ||M_sigma G G^T M_sigma||
+```
+
+The solver now records the applied divergence-control coefficient, matrix
+norm, reference LHS norm, relative weight, and scale mode in solver logs,
+partial/checkpoint NPZ files, `diagnostics.json`, `run_config_resolved.yaml`,
+and the text report. This makes parameter sweeps auditable instead of relying
+on an opaque absolute coefficient.
+
+Smoke run:
+
+```text
+dolfinx/current_task_runs/y200_rxminus300_noip_meshseg_analyticdc_divcontrol_lhs_smoke
+```
+
+Configuration summary:
+
+```text
+t_obs = 1e-5, 2e-5 s
+source = (-500, 200, -0.1) -> (500, 200, -0.1)
+receiver = (0, -300, -0.1)
+source_mesh_size = 180 m
+receiver_mesh_size = 120 m
+divergence_control_weight = 1e-3
+divergence_control_scale = lhs
+```
+
+The WSL run completed and shut down successfully. The diagnostics record:
+
+```text
+applied_step_count = 2
+first_applied_observation_time = 1e-5 s
+max_reference_norm = 5.080943524505622e9
+max_matrix_norm = 4.467403547193896e5
+max_applied_weight = 11.373370394750006
+max_relative_weight = 0.001
+scale_values = lhs
+```
+
+Interpretation: the normalized scaling is now functioning on the real PETSc
+matrix path, and the recorded relative weight matches the configured
+dimensionless `1e-3`. This smoke is not an accuracy acceptance run; the coarse
+two-point run still exceeds the physical gate and only validates the new
+diagnostic/control plumbing.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
@@ -1224,9 +1283,9 @@ fine run.
   `t_obs_min=0.02 s` run still fails the P2 physical gate, so delayed
   post-step cleaning should not be treated as the accepted algorithm.
 - `divergence_control_weight` is implemented only as a diagnostic weak
-  divergence-control term for non-polarizable E-form runs. The initial
-  `1e-12` smoke verifies that the matrix path runs, but it is not tuned and
-  does not meet the P2 5% gate.
+  divergence-control term for non-polarizable E-form runs. The `lhs` scale mode
+  now makes the weight dimensionless relative to the implicit LHS matrix, but
+  it is still a diagnostic path and does not meet the P2 5% gate.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
@@ -1237,8 +1296,9 @@ fine run.
    variational consistency treatment or move to the primary-secondary solver
    path. Simple per-step strength scaling and delayed post-step cleaning have
    both been shown to be insufficient.
-   The new divergence-control path should next use dimensionless scaling
-   relative to `M_sigma/dt` and `K` before any full fine-grid sweep.
+   The new divergence-control path now has dimensionless `lhs` scaling; the
+   next step is a short-window sweep over relative weights before any full
+   fine-grid run.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.

@@ -1,0 +1,24 @@
+source_start: [-500, 200, -0.1]
+source_end: [500, 200, -0.1]
+source_current: 10
+source_projection_mode: charge_conserving
+receiver: [0, -300, -0.1]
+ramp_off_time: 1e-05
+time_origin: after_ramp
+t_min: 1e-05
+t_max: 2e-05
+time_growth: 2
+min_steps_during_turnoff: 10
+min_steps_before_first_observation: 4
+components: runtime
+outer_boundary_mode: robin
+outer_boundary_robin_scale: 0.1
+magnetic_receiver_mode: biot_current
+magnetic_dbdt_mode: curl
+divergence_cleaning: none
+divergence_cleaning_strength: 1
+divergence_cleaning_t_obs_min: 0
+divergence_control_weight: 0.001
+divergence_control_t_obs_min: 1e-05
+divergence_control_scale: lhs
+polarization: none

@@ -398,6 +398,54 @@ def test_validation_artifacts_include_divergence_cleaning_summary(tmp_path):
     assert summary["strength_values"] == [0.5, 1.0]
 
 
+def test_validation_artifacts_include_divergence_control_summary(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.asarray([1.0e-5, 2.0e-5])
+    pred = np.asarray([[1.0, 0.0, 2.0], [1.0, 0.0, 2.0]])
+    ref = pred.copy()
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        solver_log=[
+            {
+                "step": 1,
+                "time": 1.1e-5,
+                "observation_time": 1.0e-6,
+                "divergence_control_applied": False,
+            },
+            {
+                "step": 2,
+                "time": 2.1e-5,
+                "observation_time": 1.1e-5,
+                "divergence_control_applied": True,
+                "divergence_control_scale": "lhs",
+                "divergence_control_weight": 0.25,
+                "divergence_control_applied_weight": 1.075,
+                "divergence_control_reference_norm": 43.0,
+                "divergence_control_matrix_norm": 10.0,
+                "divergence_control_relative_weight": 0.25,
+            },
+        ],
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    summary = diagnostics["divergence_control"]
+    assert summary["enabled"] is True
+    assert summary["applied_step_count"] == 1
+    assert summary["first_applied_observation_time"] == pytest.approx(1.1e-5)
+    assert summary["scale_values"] == ["lhs"]
+    assert summary["max_applied_weight"] == pytest.approx(1.075)
+    assert summary["max_relative_weight"] == pytest.approx(0.25)
+    assert summary["max_reference_norm"] == pytest.approx(43.0)
+
+
 def test_magnetic_recovery_summary_checks_hz_rate_against_dbdt():
     sp = _load_pipeline_module()
     mu0 = 1.2566370614359173e-6

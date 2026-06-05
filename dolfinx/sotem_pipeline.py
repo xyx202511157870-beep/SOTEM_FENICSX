@@ -121,6 +121,7 @@ class PipelineConfig:
     divergence_cleaning_t_obs_min: float = 0.0
     divergence_control_weight: float = 0.0
     divergence_control_t_obs_min: float = 0.0
+    divergence_control_scale: str = "absolute"  # absolute, mass, stiffness, lhs
     polarization: str = "none"  # none, cole-cole
     cole_rho0: float = 100.0
     cole_m: float = 0.2
@@ -546,6 +547,9 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "divergence_control_t_obs_min must be finite and nonnegative; "
             f"got {divergence_control_t_obs_min:.12g}"
         )
+    divergence_control_scale = str(config.divergence_control_scale).strip().lower()
+    if divergence_control_scale not in {"absolute", "mass", "stiffness", "lhs"}:
+        raise ValueError("divergence_control_scale must be 'absolute', 'mass', 'stiffness', or 'lhs'")
     initial_dc_mode = str(config.initial_dc_mode).strip().lower()
     if initial_dc_mode not in {"fem", "analytic_halfspace"}:
         raise ValueError("initial_dc_mode must be 'analytic_halfspace' or 'fem'")
@@ -735,6 +739,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "divergence_cleaning_t_obs_min": divergence_cleaning_t_obs_min,
             "divergence_control_weight": divergence_control_weight,
             "divergence_control_t_obs_min": divergence_control_t_obs_min,
+            "divergence_control_scale": divergence_control_scale,
             "diffusion_refinement": _diffusion_refinement_audit(config),
             "sponge": sponge,
             "time_method": time_method,
@@ -2295,6 +2300,20 @@ def _build_conductivity_divergence_control_matrix(spaces: dict[str, Any], operat
     return control
 
 
+def _petsc_matrix_norm(mat) -> float:
+    """Return a robust PETSc matrix norm for diagnostics and relative scaling."""
+
+    try:
+        from petsc4py import PETSc
+
+        norm_type = getattr(PETSc.NormType, "FROBENIUS", None)
+        if norm_type is not None:
+            return float(mat.norm(norm_type))
+    except Exception:
+        pass
+    return float(mat.norm())
+
+
 def _apply_conductivity_divergence_cleaning(cleaner, E, operators, config: PipelineConfig) -> dict[str, float | int]:
     """Project E onto the M_sigma-orthogonal complement of gradient fields."""
 
@@ -2511,6 +2530,55 @@ def _should_apply_divergence_control(t_internal: float, config: PipelineConfig) 
         return False
     t_obs = max(0.0, float(t_internal) - float(config.ramp_off_time))
     return t_obs >= float(config.divergence_control_t_obs_min)
+
+
+def _divergence_control_step_stats(
+    config: PipelineConfig,
+    *,
+    dt: float,
+    lhs_mass: float,
+    lhs_stiffness: float,
+    mass_norm: float,
+    stiffness_norm: float,
+    control_norm: float,
+) -> dict[str, float | str]:
+    """Return the actual divergence-control coefficient for this implicit step."""
+
+    scale = str(config.divergence_control_scale).strip().lower()
+    base_weight = float(config.divergence_control_weight)
+    mass_part = abs(float(lhs_mass)) * float(mass_norm)
+    stiffness_part = abs(float(lhs_stiffness)) * float(stiffness_norm)
+    if scale == "absolute":
+        reference_norm = float("nan")
+        applied_weight = base_weight
+        relative_weight = (
+            abs(applied_weight) * float(control_norm) / (mass_part + stiffness_part)
+            if mass_part + stiffness_part > 0.0
+            else float("nan")
+        )
+    elif scale == "mass":
+        reference_norm = mass_part
+        applied_weight = base_weight * reference_norm / float(control_norm) if control_norm > 0.0 else 0.0
+        relative_weight = base_weight if reference_norm > 0.0 and control_norm > 0.0 else float("nan")
+    elif scale == "stiffness":
+        reference_norm = stiffness_part
+        applied_weight = base_weight * reference_norm / float(control_norm) if control_norm > 0.0 else 0.0
+        relative_weight = base_weight if reference_norm > 0.0 and control_norm > 0.0 else float("nan")
+    elif scale == "lhs":
+        reference_norm = mass_part + stiffness_part
+        applied_weight = base_weight * reference_norm / float(control_norm) if control_norm > 0.0 else 0.0
+        relative_weight = base_weight if reference_norm > 0.0 and control_norm > 0.0 else float("nan")
+    else:
+        raise ValueError("divergence_control_scale must be 'absolute', 'mass', 'stiffness', or 'lhs'")
+    return {
+        "divergence_control_scale": scale,
+        "divergence_control_weight": base_weight,
+        "divergence_control_applied_weight": float(applied_weight),
+        "divergence_control_reference_norm": float(reference_norm),
+        "divergence_control_matrix_norm": float(control_norm),
+        "divergence_control_relative_weight": float(relative_weight),
+        "divergence_control_dt": float(dt),
+    }
 
 
 def _source_interval_average_didt(t0: float, t1: float, config: PipelineConfig) -> float:
@@ -3549,10 +3617,16 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             raise ValueError("conductivity divergence cleaning is currently implemented for non-polarizable runs only")
         divergence_cleaner = _build_conductivity_divergence_cleaner(spaces, operators, config)
     divergence_control = None
+    divergence_control_norms = None
     if float(config.divergence_control_weight) > 0.0:
         if debye is not None:
             raise ValueError("conductivity divergence control is currently implemented for non-polarizable runs only")
         divergence_control = _build_conductivity_divergence_control_matrix(spaces, operators, config)
+        divergence_control_norms = {
+            "mass": _petsc_matrix_norm(operators["M"]),
+            "stiffness": _petsc_matrix_norm(operators["K"]),
+            "control": _petsc_matrix_norm(divergence_control),
+        }
     V = spaces["V"]
     E_initial = _solve_initial_dc_field(msh, spaces, materials, facet_tags, config)
     source_term_mode = str(config.source_term_mode).strip().lower()
@@ -3682,11 +3756,21 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             )
             A.assemble()
         divergence_control_applied = divergence_control is not None and _should_apply_divergence_control(float(t), config)
+        divergence_control_stats = None
         if divergence_control_applied:
             from petsc4py import PETSc
 
+            divergence_control_stats = _divergence_control_step_stats(
+                config,
+                dt=dt,
+                lhs_mass=lhs_mass,
+                lhs_stiffness=lhs_stiffness,
+                mass_norm=float(divergence_control_norms["mass"]),
+                stiffness_norm=float(divergence_control_norms["stiffness"]),
+                control_norm=float(divergence_control_norms["control"]),
+            )
             A.axpy(
-                float(config.divergence_control_weight),
+                float(divergence_control_stats["divergence_control_applied_weight"]),
                 divergence_control,
                 structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN,
             )
@@ -3781,6 +3865,8 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             "avg_didt": float(avg_didt),
             "divergence_control_applied": bool(divergence_control_applied),
         }
+        if divergence_control_stats is not None:
+            log_item.update(divergence_control_stats)
         if is_output:
             log_item["observation_time"] = float(observation_time_by_step[step])
         if clean_stats is not None:
@@ -4705,6 +4791,49 @@ def _divergence_cleaning_summary(solver_log) -> dict[str, Any]:
     }
 
 
+def _divergence_control_summary(solver_log) -> dict[str, Any]:
+    entries = []
+    for item in solver_log or []:
+        if not bool(item.get("divergence_control_applied", False)):
+            continue
+        try:
+            applied_weight = float(item.get("divergence_control_applied_weight", math.nan))
+        except (TypeError, ValueError):
+            applied_weight = math.nan
+        entry = {
+            "step": int(item.get("step", -1)),
+            "time": float(item.get("time", math.nan)),
+            "observation_time": float(item.get("observation_time", item.get("time", math.nan))),
+            "scale": str(item.get("divergence_control_scale", "")),
+            "weight": float(item.get("divergence_control_weight", math.nan)),
+            "applied_weight": applied_weight,
+            "reference_norm": float(item.get("divergence_control_reference_norm", math.nan)),
+            "matrix_norm": float(item.get("divergence_control_matrix_norm", math.nan)),
+            "relative_weight": float(item.get("divergence_control_relative_weight", math.nan)),
+        }
+        entries.append(entry)
+    if not entries:
+        return {"enabled": False, "applied_step_count": 0}
+
+    def max_finite(key: str) -> float:
+        vals = [float(entry[key]) for entry in entries if math.isfinite(float(entry[key]))]
+        return float(max(vals)) if vals else float("nan")
+
+    return {
+        "enabled": True,
+        "applied_step_count": len(entries),
+        "first_applied_step": int(entries[0]["step"]),
+        "first_applied_time": float(entries[0]["time"]),
+        "first_applied_observation_time": float(entries[0]["observation_time"]),
+        "scale_values": sorted({str(entry["scale"]) for entry in entries if str(entry["scale"])}),
+        "weight_values": sorted({float(entry["weight"]) for entry in entries if math.isfinite(float(entry["weight"]))}),
+        "max_applied_weight": max_finite("applied_weight"),
+        "max_relative_weight": max_finite("relative_weight"),
+        "max_reference_norm": max_finite("reference_norm"),
+        "max_matrix_norm": max_finite("matrix_norm"),
+    }
+
+
 def diagnose_source_consistency(config: PipelineConfig, *, source_projection_residual: float | None = None) -> dict[str, Any]:
     """Return source/waveform consistency diagnostics available without FEM matrices."""
 
@@ -4986,6 +5115,7 @@ def write_validation_artifacts(
     )
     diagnostics["magnetic_recovery"] = _magnetic_recovery_summary(times, pred_data, components)
     diagnostics["divergence_cleaning"] = _divergence_cleaning_summary(solver_log)
+    diagnostics["divergence_control"] = _divergence_control_summary(solver_log)
     (workdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
     _write_validation_plots(workdir, times, pred_data, ref_data, rows, components)
@@ -5016,6 +5146,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "divergence_cleaning_t_obs_min": float(config.divergence_cleaning_t_obs_min),
         "divergence_control_weight": float(config.divergence_control_weight),
         "divergence_control_t_obs_min": float(config.divergence_control_t_obs_min),
+        "divergence_control_scale": str(config.divergence_control_scale),
         "polarization": str(config.polarization),
     }
     lines = []
@@ -5435,7 +5566,8 @@ def write_report(
     )
     lines.append(
         f"  divergence control: weight={float(config.divergence_control_weight):.6g}; "
-        f"t_obs_min={float(config.divergence_control_t_obs_min):.6g} s"
+        f"t_obs_min={float(config.divergence_control_t_obs_min):.6g} s; "
+        f"scale={str(config.divergence_control_scale)}"
     )
     lines.append(
         f"  checkpoint forward: {bool(config.checkpoint_forward)}; resume forward: {bool(config.resume_forward)}; "
@@ -6041,6 +6173,33 @@ def _save_forward_partial(config: PipelineConfig, times, rows, components, solve
             [float(item.get("divergence_clean_strength", np.nan)) for item in output_logs],
             dtype=float,
         ),
+        "solver_divergence_control_applied": np.asarray(
+            [bool(item.get("divergence_control_applied", False)) for item in output_logs],
+            dtype=bool,
+        ),
+        "solver_divergence_control_scale": np.asarray(
+            [str(item.get("divergence_control_scale", "")) for item in output_logs],
+        ),
+        "solver_divergence_control_weight": np.asarray(
+            [float(item.get("divergence_control_weight", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_control_applied_weight": np.asarray(
+            [float(item.get("divergence_control_applied_weight", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_control_reference_norm": np.asarray(
+            [float(item.get("divergence_control_reference_norm", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_control_matrix_norm": np.asarray(
+            [float(item.get("divergence_control_matrix_norm", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
+        "solver_divergence_control_relative_weight": np.asarray(
+            [float(item.get("divergence_control_relative_weight", np.nan)) for item in output_logs],
+            dtype=float,
+        ),
     }
     if receiver_diagnostic_rows:
         payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
@@ -6097,6 +6256,33 @@ def _solver_log_to_arrays(solver_log):
         ),
         "solver_divergence_clean_strength": np.asarray(
             [float(item.get("divergence_clean_strength", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_control_applied": np.asarray(
+            [bool(item.get("divergence_control_applied", False)) for item in solver_log],
+            dtype=bool,
+        ),
+        "solver_divergence_control_scale": np.asarray(
+            [str(item.get("divergence_control_scale", "")) for item in solver_log],
+        ),
+        "solver_divergence_control_weight": np.asarray(
+            [float(item.get("divergence_control_weight", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_control_applied_weight": np.asarray(
+            [float(item.get("divergence_control_applied_weight", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_control_reference_norm": np.asarray(
+            [float(item.get("divergence_control_reference_norm", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_control_matrix_norm": np.asarray(
+            [float(item.get("divergence_control_matrix_norm", np.nan)) for item in solver_log],
+            dtype=float,
+        ),
+        "solver_divergence_control_relative_weight": np.asarray(
+            [float(item.get("divergence_control_relative_weight", np.nan)) for item in solver_log],
             dtype=float,
         ),
     }
@@ -6161,6 +6347,41 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
         if "solver_divergence_clean_strength" in payload.files
         else np.full(steps.size, np.nan)
     )
+    div_control_applied = (
+        np.asarray(payload["solver_divergence_control_applied"], dtype=bool)
+        if "solver_divergence_control_applied" in payload.files
+        else np.zeros(steps.size, dtype=bool)
+    )
+    div_control_scale = (
+        np.asarray(payload["solver_divergence_control_scale"]).astype(str)
+        if "solver_divergence_control_scale" in payload.files
+        else np.full(steps.size, "", dtype="<U1")
+    )
+    div_control_weight = (
+        np.asarray(payload["solver_divergence_control_weight"], dtype=float)
+        if "solver_divergence_control_weight" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_control_applied_weight = (
+        np.asarray(payload["solver_divergence_control_applied_weight"], dtype=float)
+        if "solver_divergence_control_applied_weight" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_control_reference_norm = (
+        np.asarray(payload["solver_divergence_control_reference_norm"], dtype=float)
+        if "solver_divergence_control_reference_norm" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_control_matrix_norm = (
+        np.asarray(payload["solver_divergence_control_matrix_norm"], dtype=float)
+        if "solver_divergence_control_matrix_norm" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    div_control_relative_weight = (
+        np.asarray(payload["solver_divergence_control_relative_weight"], dtype=float)
+        if "solver_divergence_control_relative_weight" in payload.files
+        else np.full(steps.size, np.nan)
+    )
     out: list[dict[str, Any]] = []
     for i, step in enumerate(steps):
         item = {
@@ -6185,6 +6406,20 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
             item["divergence_clean_applied_correction_norm"] = float(div_applied[i])
         if i < div_strength.size and np.isfinite(div_strength[i]):
             item["divergence_clean_strength"] = float(div_strength[i])
+        if i < div_control_applied.size:
+            item["divergence_control_applied"] = bool(div_control_applied[i])
+        if i < div_control_scale.size and str(div_control_scale[i]):
+            item["divergence_control_scale"] = str(div_control_scale[i])
+        if i < div_control_weight.size and np.isfinite(div_control_weight[i]):
+            item["divergence_control_weight"] = float(div_control_weight[i])
+        if i < div_control_applied_weight.size and np.isfinite(div_control_applied_weight[i]):
+            item["divergence_control_applied_weight"] = float(div_control_applied_weight[i])
+        if i < div_control_reference_norm.size and np.isfinite(div_control_reference_norm[i]):
+            item["divergence_control_reference_norm"] = float(div_control_reference_norm[i])
+        if i < div_control_matrix_norm.size and np.isfinite(div_control_matrix_norm[i]):
+            item["divergence_control_matrix_norm"] = float(div_control_matrix_norm[i])
+        if i < div_control_relative_weight.size and np.isfinite(div_control_relative_weight[i]):
+            item["divergence_control_relative_weight"] = float(div_control_relative_weight[i])
         out.append(item)
     return out
 
@@ -6320,6 +6555,41 @@ def _load_forward_partial(config: PipelineConfig):
         if "solver_divergence_clean_strength" in payload.files
         else np.full(times.size, np.nan)
     )
+    div_control_applied = (
+        np.asarray(payload["solver_divergence_control_applied"], dtype=bool)
+        if "solver_divergence_control_applied" in payload.files
+        else np.zeros(times.size, dtype=bool)
+    )
+    div_control_scale = (
+        np.asarray(payload["solver_divergence_control_scale"]).astype(str)
+        if "solver_divergence_control_scale" in payload.files
+        else np.full(times.size, "", dtype="<U1")
+    )
+    div_control_weight = (
+        np.asarray(payload["solver_divergence_control_weight"], dtype=float)
+        if "solver_divergence_control_weight" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_control_applied_weight = (
+        np.asarray(payload["solver_divergence_control_applied_weight"], dtype=float)
+        if "solver_divergence_control_applied_weight" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_control_reference_norm = (
+        np.asarray(payload["solver_divergence_control_reference_norm"], dtype=float)
+        if "solver_divergence_control_reference_norm" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_control_matrix_norm = (
+        np.asarray(payload["solver_divergence_control_matrix_norm"], dtype=float)
+        if "solver_divergence_control_matrix_norm" in payload.files
+        else np.full(times.size, np.nan)
+    )
+    div_control_relative_weight = (
+        np.asarray(payload["solver_divergence_control_relative_weight"], dtype=float)
+        if "solver_divergence_control_relative_weight" in payload.files
+        else np.full(times.size, np.nan)
+    )
     for i, t in enumerate(times):
         item = {
             "step": int(steps[i]) if i < steps.size else -1,
@@ -6341,6 +6611,20 @@ def _load_forward_partial(config: PipelineConfig):
             item["divergence_clean_applied_correction_norm"] = float(div_applied[i])
         if i < div_strength.size and np.isfinite(div_strength[i]):
             item["divergence_clean_strength"] = float(div_strength[i])
+        if i < div_control_applied.size:
+            item["divergence_control_applied"] = bool(div_control_applied[i])
+        if i < div_control_scale.size and str(div_control_scale[i]):
+            item["divergence_control_scale"] = str(div_control_scale[i])
+        if i < div_control_weight.size and np.isfinite(div_control_weight[i]):
+            item["divergence_control_weight"] = float(div_control_weight[i])
+        if i < div_control_applied_weight.size and np.isfinite(div_control_applied_weight[i]):
+            item["divergence_control_applied_weight"] = float(div_control_applied_weight[i])
+        if i < div_control_reference_norm.size and np.isfinite(div_control_reference_norm[i]):
+            item["divergence_control_reference_norm"] = float(div_control_reference_norm[i])
+        if i < div_control_matrix_norm.size and np.isfinite(div_control_matrix_norm[i]):
+            item["divergence_control_matrix_norm"] = float(div_control_matrix_norm[i])
+        if i < div_control_relative_weight.size and np.isfinite(div_control_relative_weight[i]):
+            item["divergence_control_relative_weight"] = float(div_control_relative_weight[i])
         solver_log.append(item)
     return {
         "times": times,
@@ -6497,6 +6781,12 @@ def main(argv: list[str] | None = None) -> int:
         default=0.0,
         help="Only add implicit divergence-control after this post-ramp observation time in seconds.",
     )
+    parser.add_argument(
+        "--divergence-control-scale",
+        choices=["absolute", "mass", "stiffness", "lhs"],
+        default="absolute",
+        help="Scale divergence-control weight as an absolute matrix coefficient or as a relative mass/stiffness/LHS fraction.",
+    )
     parser.add_argument("--polarization", choices=["none", "cole-cole"], default="none")
     parser.add_argument("--cole-layer-top", type=float, default=0.0, help="Top depth of the polarizable Cole-Cole interval in meters.")
     parser.add_argument(
@@ -6606,6 +6896,7 @@ def main(argv: list[str] | None = None) -> int:
         divergence_cleaning_t_obs_min=args.divergence_cleaning_t_obs_min,
         divergence_control_weight=args.divergence_control_weight,
         divergence_control_t_obs_min=args.divergence_control_t_obs_min,
+        divergence_control_scale=args.divergence_control_scale,
         polarization=args.polarization,
         cole_layer_top=args.cole_layer_top,
         cole_layer_bottom=args.cole_layer_bottom,
