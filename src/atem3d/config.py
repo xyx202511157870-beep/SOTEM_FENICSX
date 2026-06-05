@@ -18,7 +18,7 @@ from .boundary import BoundaryConfig, apply_boundary
 from .cpml import CPMLConfig
 from .hj import HJMagneticSimulation
 from .ip import DebyeIPModel, DebyeTerm
-from .receivers import PointReceiver
+from .receivers import PointReceiver, build_receiver
 from .source_history_runtime import (
     ChargeConservingInitialPolarizationSourceHistoryCorrection,
     DrivenRecoverySourceHistoryCorrection,
@@ -355,9 +355,14 @@ def _driven_recovery_response_tau(cfg: dict[str, Any]) -> Any:
     return cfg["response_tau"] if has_scalar else cfg["response_taus"]
 
 
-def _build_receivers(config: dict[str, Any]) -> list[PointReceiver]:
+def _build_receivers(config: dict[str, Any]) -> list:
     receivers = [
-        PointReceiver(location=tuple(rx["location"]), component=str(rx["component"]))
+        build_receiver(
+            location=tuple(rx["location"]),
+            component=str(rx["component"]),
+            receiver_type=str(rx.get("type", rx.get("receiver_type", "point"))),
+            radius=rx.get("radius"),
+        )
         for rx in config.get("receivers", [])
     ]
     line_cfg = config.get("receiver_line")

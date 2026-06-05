@@ -136,6 +136,12 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `PointReceiver`
   - `AverageReceiver` for deterministic `disk_average` and `volume_average`
     sampling around a point receiver.
+  - `build_receiver` factory for `point`, `disk_average`, and
+    `volume_average` receiver configuration.
+
+- `src/atem3d/config.py`
+  - Receiver YAML entries can now pass `type`/`receiver_type` and `radius`
+    through `build_receiver`.
 
 - `src/atem3d/solvers/dc_secondary.py`
   - `DCSecondaryInitialization`

@@ -38,6 +38,30 @@ _VECTOR_COMPONENT_INDEX = {
 }
 
 
+def build_receiver(
+    *,
+    location: tuple[float, float, float],
+    component: str,
+    receiver_type: str = "point",
+    radius: float | None = None,
+) -> "PointReceiver | AverageReceiver":
+    """Build a point or averaged receiver from configuration-style values."""
+
+    receiver_type = str(receiver_type).strip().lower()
+    if receiver_type == "point":
+        return PointReceiver(location=location, component=component)
+    if receiver_type in {"disk_average", "volume_average"}:
+        if radius is None:
+            raise ValueError("radius is required for average receiver types")
+        return AverageReceiver(
+            location=location,
+            component=component,
+            receiver_type=receiver_type,
+            radius=float(radius),
+        )
+    raise ValueError("receiver_type must be 'point', 'disk_average', or 'volume_average'")
+
+
 @dataclass(frozen=True)
 class PointReceiver:
     """Point receiver for electric, magnetic-flux, or magnetic-field components."""

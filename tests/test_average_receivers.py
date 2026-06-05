@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from atem3d.receivers import AverageReceiver
+from atem3d.receivers import AverageReceiver, PointReceiver, build_receiver
 
 
 class LinearFakeMesh:
@@ -51,3 +51,21 @@ def test_average_receiver_rejects_invalid_receiver_type():
             receiver_type="line_average",
             radius=1.0,
         )
+
+
+def test_build_receiver_factory_creates_point_and_average_receivers():
+    point = build_receiver(
+        location=(0.0, 0.0, 0.0),
+        component="Ex",
+        receiver_type="point",
+    )
+    disk = build_receiver(
+        location=(0.0, 0.0, 0.0),
+        component="Ex",
+        receiver_type="disk_average",
+        radius=2.0,
+    )
+
+    assert isinstance(point, PointReceiver)
+    assert isinstance(disk, AverageReceiver)
+    assert disk.radius == 2.0
