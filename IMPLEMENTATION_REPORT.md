@@ -230,8 +230,23 @@ The run writes both the legacy combined plot and the new P2 validation artifacts
 
 The latest known no-IP baseline still exceeds 5% over the full time range:
 
-- `Ex max` is roughly tens of percent.
-- `Hz/dBzdt` also exceeds 5% depending on recovery mode and time window.
+- A WSL no-IP DOLFINx run for the current corrected geometry completed from
+  `1e-5 s <= t_obs <= 1 s` in
+  `dolfinx/current_task_runs/y200_rxminus300_noip_meshcheck`.
+- Geometry: source `(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver
+  `(0, -300, -0.1)`, current `10 A`.
+- Mesh preflight: about `22045` local tetrahedral cells, `26467` Nedelec dofs,
+  estimated memory `0.705 GB` under a `32 GB` budget.
+- Runtime report: total `15.585 s`, forward solve `8.204 s`,
+  empymod reference `1.733 s` for the final resumed segment.
+- The run does not pass:
+  - `max_error_Ex = 3.951694157397999`
+  - `max_error_Ey = 4695844246.711698`
+  - `max_error_Hz_or_dBzdt = 0.9083946154727693`
+  - `pass_all_components = false`
+- The report also flags the physical domain as too small for late time:
+  `Lmax(t_max)=12615.7 m`, recommended radius/depth `>=25231.3 m`, actual
+  radius/depth much smaller.
 
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem.
 
