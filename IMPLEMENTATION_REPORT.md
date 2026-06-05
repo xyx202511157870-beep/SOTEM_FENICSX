@@ -370,6 +370,9 @@ Simultaneous point/disk receiver diagnostic smoke:
   - standard `comparison_3comp.png`, `error_curves_3comp.png`,
     `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
     `error_summary.json`, `diagnostics.json`.
+  - `diagnostics.json` now includes a `receiver_sampling` summary with
+    point/disk component-wise relative differences and
+    `receiver_sampling_issue_suspected=true`.
 - Result over the first five output times
   (`1.0e-5` to `2.44140625e-5 s`):
   - `max_error_Ex = 0.27639692569161395`

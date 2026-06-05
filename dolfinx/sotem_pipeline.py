@@ -2305,6 +2305,75 @@ def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time
     return rows
 
 
+def _receiver_diagnostic_summary(receiver_diagnostic_rows, *, threshold: float = 0.05) -> dict[str, Any]:
+    rows = list(receiver_diagnostic_rows or [])
+    if not rows:
+        return {"enabled": False}
+
+    receiver_types: list[str] = []
+    by_time: dict[float, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        receiver_type = str(row.get("receiver_type", ""))
+        if not receiver_type:
+            continue
+        if receiver_type not in receiver_types:
+            receiver_types.append(receiver_type)
+        time_obs = float(row.get("time_obs", math.nan))
+        if not math.isfinite(time_obs):
+            continue
+        by_time.setdefault(time_obs, {})[receiver_type] = row
+
+    if not receiver_types:
+        return {"enabled": False}
+    baseline = "point" if "point" in receiver_types else receiver_types[0]
+    components = ["Ex", "Ey", "Hz", "dBzdt"]
+    comparisons: dict[str, Any] = {}
+    issue_suspected = False
+    for receiver_type in receiver_types:
+        if receiver_type == baseline:
+            continue
+        component_summary: dict[str, Any] = {}
+        for component in components:
+            relatives = []
+            absolutes = []
+            component_times = []
+            for time_obs, grouped in sorted(by_time.items()):
+                if baseline not in grouped or receiver_type not in grouped:
+                    continue
+                base_value = float(grouped[baseline].get(component, math.nan))
+                value = float(grouped[receiver_type].get(component, math.nan))
+                if not (math.isfinite(base_value) and math.isfinite(value)):
+                    continue
+                abs_diff = abs(value - base_value)
+                rel_diff = abs_diff / max(abs(base_value), 1.0e-300)
+                relatives.append(rel_diff)
+                absolutes.append(abs_diff)
+                component_times.append(time_obs)
+            if not relatives:
+                continue
+            max_index = max(range(len(relatives)), key=lambda i: relatives[i])
+            max_relative = float(round(relatives[max_index], 15))
+            issue_suspected = issue_suspected or max_relative > float(threshold)
+            component_summary[component] = {
+                "sample_count": len(relatives),
+                "max_relative_difference": max_relative,
+                "mean_relative_difference": float(round(sum(relatives) / len(relatives), 15)),
+                "max_absolute_difference": float(absolutes[max_index]),
+                "time_at_max_relative_difference": float(component_times[max_index]),
+            }
+        comparisons[receiver_type] = component_summary
+
+    return {
+        "enabled": True,
+        "threshold": float(threshold),
+        "baseline_receiver_type": baseline,
+        "receiver_types": receiver_types,
+        "time_count": len(by_time),
+        "comparisons": comparisons,
+        "receiver_sampling_issue_suspected": bool(issue_suspected),
+    }
+
+
 def _forward_components(config: PipelineConfig) -> list[str]:
     components = ["Ex", "Ey"]
     magnetic_mode = str(config.magnetic_receiver_mode).strip().lower()
@@ -3745,6 +3814,7 @@ def write_validation_artifacts(
     *,
     case_type: str,
     reference_type: str,
+    receiver_diagnostic_rows=None,
 ) -> dict[str, Any]:
     """Write P2 validation CSV/JSON/plot artifacts for a three-component run."""
 
@@ -3768,6 +3838,10 @@ def write_validation_artifacts(
         magnetic_receiver_mode=str(config.magnetic_receiver_mode),
     )
     diagnostics["source_consistency"] = diagnose_source_consistency(config)
+    diagnostics["receiver_sampling"] = _receiver_diagnostic_summary(
+        receiver_diagnostic_rows,
+        threshold=float(config.error_tolerance),
+    )
     (workdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
     _write_validation_plots(workdir, times, pred_data, ref_data, rows, components)
@@ -4075,6 +4149,18 @@ def write_report(
         f"average radius={float(config.receiver_average_radius):.6g} m"
     )
     lines.append(f"  receiver evaluation mode: {config.receiver_evaluation_mode}")
+    receiver_summary = _receiver_diagnostic_summary(
+        fem_result.get("receiver_diagnostic_rows"),
+        threshold=float(config.error_tolerance),
+    )
+    if receiver_summary.get("enabled"):
+        lines.append(
+            "  receiver diagnostics: "
+            f"baseline={receiver_summary['baseline_receiver_type']}; "
+            f"types={','.join(receiver_summary['receiver_types'])}; "
+            f"time_count={receiver_summary['time_count']}; "
+            f"sampling_issue_suspected={receiver_summary['receiver_sampling_issue_suspected']}"
+        )
     lines.append(f"  divergence cleaning: {config.divergence_cleaning}")
     lines.append(
         f"  checkpoint forward: {bool(config.checkpoint_forward)}; resume forward: {bool(config.resume_forward)}; "
@@ -4155,6 +4241,18 @@ def write_report(
         f"RMS={horizontal_e_error['rms']:.6e}, max={horizontal_e_error['max']:.6e} "
         f"at t={fem_result['times'][idx]:.6e} s, floor={horizontal_e_error['floor']:.6e}"
     )
+    if receiver_summary.get("enabled"):
+        lines.append("")
+        lines.append("receiver sampling diagnostics:")
+        for receiver_type, comparison in receiver_summary["comparisons"].items():
+            lines.append(f"  {receiver_type} vs {receiver_summary['baseline_receiver_type']}:")
+            for component, metrics in comparison.items():
+                lines.append(
+                    f"    {component}: max_rel_diff={metrics['max_relative_difference']:.6e} "
+                    f"at t={metrics['time_at_max_relative_difference']:.6e} s; "
+                    f"mean_rel_diff={metrics['mean_relative_difference']:.6e}; "
+                    f"max_abs_diff={metrics['max_absolute_difference']:.6e}"
+                )
 
     passing_window = find_physical_error_passing_window(
         fem_result["times"],
@@ -4814,6 +4912,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         config,
         case_type="ip" if ref_mode == "cole-cole" else "noip",
         reference_type="empymod",
+        receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
     )
     runtime["postprocess_seconds"] = time.perf_counter() - t_post
     runtime["total_seconds"] = time.perf_counter() - t0
@@ -5138,6 +5237,7 @@ def main(argv: list[str] | None = None) -> int:
             config,
             case_type="ip" if ref_mode == "cole-cole" else "noip",
             reference_type="empymod",
+            receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
         )
         runtime["postprocess_seconds"] = time.perf_counter() - t0
         runtime["total_seconds"] = time.perf_counter() - run_t0

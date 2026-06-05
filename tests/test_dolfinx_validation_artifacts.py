@@ -36,6 +36,18 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
         config,
         case_type="noip",
         reference_type="empymod",
+        receiver_diagnostic_rows=[
+            {"time_obs": 1.0e-5, "receiver_type": "point", "radius": 0.0, "Ex": 1.0, "Ey": 0.0, "Hz": np.nan, "dBzdt": 2.0},
+            {
+                "time_obs": 1.0e-5,
+                "receiver_type": "disk_average",
+                "radius": 2.0,
+                "Ex": 1.2,
+                "Ey": 0.0,
+                "Hz": np.nan,
+                "dBzdt": 3.0,
+            },
+        ],
     )
 
     required = [
@@ -71,3 +83,6 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert report["magnetic_quantity"] == "dBzdt"
     assert report["pass_all_components"] is True
     assert summary["pass_all_components"] is True
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["receiver_sampling"]["enabled"] is True
+    assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.5

@@ -95,6 +95,26 @@ def test_save_forward_partial_writes_receiver_diagnostics(tmp_path):
     assert config.receiver_diagnostics_png().stat().st_size > 0
 
 
+def test_receiver_diagnostic_summary_quantifies_point_average_difference():
+    sp = _load_pipeline_module()
+    rows = [
+        {"time_obs": 1.0, "receiver_type": "point", "radius": 0.0, "Ex": 10.0, "Ey": 1.0, "Hz": np.nan, "dBzdt": 4.0},
+        {"time_obs": 1.0, "receiver_type": "disk_average", "radius": 2.0, "Ex": 11.0, "Ey": 1.2, "Hz": np.nan, "dBzdt": 5.0},
+        {"time_obs": 2.0, "receiver_type": "point", "radius": 0.0, "Ex": 20.0, "Ey": 2.0, "Hz": np.nan, "dBzdt": 8.0},
+        {"time_obs": 2.0, "receiver_type": "disk_average", "radius": 2.0, "Ex": 22.0, "Ey": 2.4, "Hz": np.nan, "dBzdt": 10.0},
+    ]
+
+    summary = sp._receiver_diagnostic_summary(rows)
+
+    assert summary["enabled"] is True
+    assert summary["baseline_receiver_type"] == "point"
+    assert summary["receiver_types"] == ["point", "disk_average"]
+    assert summary["comparisons"]["disk_average"]["Ex"]["max_relative_difference"] == 0.1
+    assert summary["comparisons"]["disk_average"]["Ey"]["max_relative_difference"] == 0.2
+    assert summary["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.25
+    assert summary["receiver_sampling_issue_suspected"] is True
+
+
 def test_completed_return_times_follow_completed_rows_only():
     sp = _load_pipeline_module()
     return_times = np.asarray([1.0e-5, 2.0e-5, 4.0e-5], dtype=float)
