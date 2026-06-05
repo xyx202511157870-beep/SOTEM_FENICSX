@@ -8,6 +8,8 @@ from atem3d.primary import (
     EmpymodPrimaryProvider,
     PrimaryFieldProvider,
     ZeroPrimaryProvider,
+    analytic_halfspace_dc_runner,
+    analytic_halfspace_grounded_wire_dc_electric_field,
 )
 
 
@@ -197,6 +199,36 @@ def test_empymod_primary_provider_get_Ep_dc_on_V_uses_dc_runner():
     np.testing.assert_allclose(seen["points"], points)
     assert seen["kwargs"]["config"] == _empymod_provider_config()
     assert seen["kwargs"]["method"] == "analytic_halfspace"
+
+
+def test_analytic_halfspace_grounded_wire_dc_field_matches_endpoint_formula():
+    points = np.array([[0.0, 1.0, 0.0]])
+
+    values = analytic_halfspace_grounded_wire_dc_electric_field(
+        points,
+        source_start=(-1.0, 0.0, 0.0),
+        source_end=(1.0, 0.0, 0.0),
+        current=2.0,
+        resistivity=100.0,
+    )
+
+    np.testing.assert_allclose(values, [[-100.0 / (np.pi * np.sqrt(2.0)), 0.0, 0.0]])
+
+
+def test_analytic_halfspace_dc_runner_reads_empymod_provider_config():
+    config = _empymod_provider_config()
+    points = np.array([[0.0, 10.0, -0.5]])
+
+    runner_values = analytic_halfspace_dc_runner(points, config=config)
+    direct_values = analytic_halfspace_grounded_wire_dc_electric_field(
+        points,
+        source_start=config["source_start"],
+        source_end=config["source_end"],
+        current=config["strength"],
+        resistivity=config["resistivities"][-1],
+    )
+
+    np.testing.assert_allclose(runner_values, direct_values)
 
 
 def _empymod_provider_config():
