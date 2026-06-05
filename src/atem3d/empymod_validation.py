@@ -10,13 +10,14 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
-from .config import build_simulation
 from .empymod_compare import (
     EmpymodSurvey,
     build_empymod_survey_from_config,
     make_debye_resistivity_model_from_config,
     run_empymod_reference,
 )
+
+build_simulation = None
 from .metrics import (
     component_diagnostics,
     component_group_summary,
@@ -277,6 +278,11 @@ def run_empymod_validation_sweep(
 
 
 def _run_config(config: dict[str, Any], *, data_only: bool):
+    global build_simulation
+    if build_simulation is None:
+        from .config import build_simulation as loaded_build_simulation
+
+        build_simulation = loaded_build_simulation
     simulation = build_simulation(config)
     if data_only and hasattr(simulation, "run_data_only"):
         return simulation.run_data_only()

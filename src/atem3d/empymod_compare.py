@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-import h5py
 import numpy as np
 from scipy.constants import mu_0
 import yaml
@@ -76,6 +75,8 @@ def build_empymod_survey_from_result(
     signal: int | None = -1,
 ) -> tuple[EmpymodSurvey, list[str]]:
     """Build an empymod survey and column names from an ATEM3D result file."""
+
+    import h5py
 
     with h5py.File(result_path, "r") as h5:
         times = h5["times"][:]

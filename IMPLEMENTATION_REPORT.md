@@ -91,6 +91,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Adds `validate-ip-3comp CONFIG.yaml`.
   - Uses lazy imports so validation CLI does not require heavy simulation dependencies.
 
+- `src/atem3d/empymod_validation.py` and `src/atem3d/empymod_validation_cli.py`
+  - Lazy-load simulation construction dependencies.
+  - Keep empymod validation unit tests runnable with injected runners/reference runners.
+
 - `pyproject.toml`
   - Adds `tdem-ip-forward = "atem3d.cli:main"` command alias.
 
@@ -118,6 +122,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_ip_3comp_validation_smoke.py`
 - `tests/test_complex_terrain_leakage_smoke.py`
 - `tests/test_validation_3comp_cli.py`
+- Existing `tests/test_empymod_validation.py`
+- Existing `tests/test_empymod_validation_cli.py`
 
 ## Validation Command
 
@@ -161,6 +167,12 @@ P7 validation CLI tests:
 
 ```bash
 python -m pytest -q tests/test_validation_3comp_cli.py
+```
+
+Empymod validation helper/CLI tests:
+
+```bash
+python -m pytest -q tests/test_empymod_validation.py tests/test_empymod_validation_cli.py
 ```
 
 P8 complex-terrain leakage-channel smoke tests:

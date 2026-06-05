@@ -7,7 +7,6 @@ from pathlib import Path
 
 import yaml
 
-from .config import load_config
 from .empymod_validation import run_empymod_validation, run_empymod_validation_sweep
 
 
@@ -57,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.absolute_tolerance is not None and args.absolute_tolerance < 0.0:
         parser.error("--absolute-tolerance must be nonnegative")
 
-    config = load_config(args.config)
+    config = _load_config(args.config)
     validation_kwargs = {
         "depths": list(args.depths),
         "resistivities": list(args.resistivities),
@@ -110,6 +109,14 @@ def _load_sweep_cases(path: Path):
         payload = yaml.safe_load(handle)
     if isinstance(payload, dict) and "cases" in payload:
         return payload["cases"]
+    return payload
+
+
+def _load_config(path: Path):
+    with path.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("configuration root must be a mapping")
     return payload
 
 
