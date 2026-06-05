@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Generated data and figures
+outputs/
+output/
+tmp/
+generated/
+*.npz
+*.csv
+*.png
+*.svg
+*.log
+
+# Large/proprietary modelling artifacts
+*.mph
+*.class
+*.status
+
+# Local papers and notes are not committed by default.
+*.pdf
+*.docx
+
