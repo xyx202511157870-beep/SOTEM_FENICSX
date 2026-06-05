@@ -376,6 +376,9 @@ Simultaneous point/disk receiver diagnostic smoke:
   - `diagnostics.json` also records source charge-conservation projection
     residuals: before `5.663467`, after `2.869899e-10`,
     endpoint norm `1.414214`.
+  - `diagnostics.json` includes `magnetic_recovery` from a Faraday-integrated
+    `dBzdt` receiver trace. Over the first five points, the integrated `Hz`
+    differs from reported Biot `Hz` by at most about `0.45%`.
 - Result over the first five output times
   (`1.0e-5` to `2.44140625e-5 s`):
   - `max_error_Ex = 0.27639692569161395`
@@ -390,7 +393,9 @@ Simultaneous point/disk receiver diagnostic smoke:
   electric response is close to the point response for `Ex`, but `dBzdt`
   changes substantially, supporting the current diagnosis that receiver/curl
   recovery near the shallow interface is a major contributor to the early
-  magnetic-response error.
+  magnetic-response error. The Faraday-integrated `Hz` diagnostic is close to
+  the Biot `Hz` trace over this short window, so the current evidence points
+  more strongly at `dBzdt`/curl recovery than at Biot `Hz` recovery.
 
 This implementation round improves time-axis correctness and reporting/diagnostics. It does not resolve the known near-source source-transfer/MMR consistency problem or achieve the final 5% no-IP/IP target.
 

@@ -3743,6 +3743,9 @@ def _write_errors_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _write_validation_plots(workdir: Path, times, pred_data, ref_data, rows, components) -> None:
     import numpy as np
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
     times = np.asarray(times, dtype=float)
@@ -3805,6 +3808,61 @@ def _automatic_failure_diagnostics(summary: dict[str, Any], *, magnetic_receiver
             "Hz is recovered from Biot-Savart current; compare dBzdt before treating this as a PDE failure."
         )
     return diagnostics
+
+
+def _faraday_integrated_hz_trace(times, dbzdt, *, initial_hz: float, mu: float = 1.2566370614359173e-6):
+    import numpy as np
+
+    t = np.asarray(times, dtype=float)
+    rate = np.asarray(dbzdt, dtype=float)
+    if t.ndim != 1 or rate.ndim != 1 or t.size != rate.size:
+        raise ValueError("times and dbzdt must be one-dimensional arrays with matching length")
+    if t.size == 0:
+        return np.empty(0, dtype=float)
+    if np.any(np.diff(t) < 0.0):
+        raise ValueError("times must be sorted in nondecreasing order")
+    hz = np.empty(t.size, dtype=float)
+    hz[0] = float(initial_hz)
+    mu_value = float(mu)
+    if not math.isfinite(mu_value) or mu_value <= 0.0:
+        raise ValueError("mu must be positive")
+    for i in range(1, t.size):
+        hz[i] = hz[i - 1] + 0.5 * (rate[i - 1] + rate[i]) * (t[i] - t[i - 1]) / mu_value
+    return hz
+
+
+def _magnetic_recovery_summary(times, pred_data, components) -> dict[str, Any]:
+    import numpy as np
+
+    component_names = [str(component) for component in components]
+    if "Hz" not in component_names or "dBzdt" not in component_names:
+        return {"enabled": False, "reason": "requires both Hz and dBzdt components"}
+    hz_idx = component_names.index("Hz")
+    dbdt_idx = component_names.index("dBzdt")
+    pred = np.asarray(pred_data, dtype=float)
+    t = np.asarray(times, dtype=float)
+    if pred.ndim != 2 or pred.shape[0] != t.size:
+        return {"enabled": False, "reason": "inconsistent prediction/time shapes"}
+    hz = pred[:, hz_idx]
+    dbzdt = pred[:, dbdt_idx]
+    if not (np.all(np.isfinite(hz)) and np.all(np.isfinite(dbzdt))):
+        return {"enabled": False, "reason": "non-finite Hz or dBzdt values"}
+    faraday_hz = _faraday_integrated_hz_trace(t, dbzdt, initial_hz=float(hz[0]))
+    diff = faraday_hz - hz
+    abs_diff = np.abs(diff)
+    denom = np.maximum(np.abs(hz), max(float(np.max(np.abs(hz))) * 1.0e-6, 1.0e-16))
+    rel = abs_diff / denom
+    max_index = int(np.argmax(rel)) if rel.size else 0
+    return {
+        "enabled": True,
+        "method": "faraday_integrated_dBzdt",
+        "initial_hz": float(hz[0]) if hz.size else float("nan"),
+        "max_absolute_hz_difference": float(abs_diff[max_index]) if abs_diff.size else 0.0,
+        "max_relative_hz_difference": float(rel[max_index]) if rel.size else 0.0,
+        "time_at_max_relative_hz_difference": float(t[max_index]) if t.size else float("nan"),
+        "faraday_hz_final": float(faraday_hz[-1]) if faraday_hz.size else float("nan"),
+        "reported_hz_final": float(hz[-1]) if hz.size else float("nan"),
+    }
 
 
 def diagnose_source_consistency(config: PipelineConfig, *, source_projection_residual: float | None = None) -> dict[str, Any]:
@@ -3893,6 +3951,7 @@ def write_validation_artifacts(
         receiver_diagnostic_rows,
         threshold=float(config.error_tolerance),
     )
+    diagnostics["magnetic_recovery"] = _magnetic_recovery_summary(times, pred_data, components)
     (workdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
     _write_validation_plots(workdir, times, pred_data, ref_data, rows, components)
@@ -4313,6 +4372,21 @@ def write_report(
                     f"mean_rel_diff={metrics['mean_relative_difference']:.6e}; "
                     f"max_abs_diff={metrics['max_absolute_difference']:.6e}"
                 )
+    magnetic_summary = _magnetic_recovery_summary(
+        fem_result["times"],
+        fem_result["data"],
+        fem_result["components"],
+    )
+    if magnetic_summary.get("enabled"):
+        lines.append("")
+        lines.append("magnetic recovery diagnostics:")
+        lines.append(
+            f"  {magnetic_summary['method']}: max_rel_hz_diff={magnetic_summary['max_relative_hz_difference']:.6e} "
+            f"at t={magnetic_summary['time_at_max_relative_hz_difference']:.6e} s; "
+            f"max_abs_hz_diff={magnetic_summary['max_absolute_hz_difference']:.6e}; "
+            f"faraday_hz_final={magnetic_summary['faraday_hz_final']:.6e}; "
+            f"reported_hz_final={magnetic_summary['reported_hz_final']:.6e}"
+        )
 
     passing_window = find_physical_error_passing_window(
         fem_result["times"],

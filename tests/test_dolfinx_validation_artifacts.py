@@ -98,3 +98,43 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert diagnostics["source_projection"]["after_residual"] == 1.0e-9
     assert diagnostics["receiver_sampling"]["enabled"] is True
     assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.5
+
+
+def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():
+    sp = _load_pipeline_module()
+    times = np.asarray([1.0, 3.0, 6.0])
+    dbzdt = np.asarray([2.0, 4.0, 8.0])
+
+    hz = sp._faraday_integrated_hz_trace(times, dbzdt, initial_hz=10.0, mu=2.0)
+
+    np.testing.assert_allclose(hz, np.asarray([10.0, 13.0, 22.0]))
+
+
+def test_validation_artifacts_include_faraday_magnetic_recovery_summary(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.asarray([1.0, 3.0, 6.0])
+    pred = np.asarray(
+        [
+            [1.0, 0.0, 10.0, 2.0],
+            [1.0, 0.0, 13.0, 4.0],
+            [1.0, 0.0, 23.0, 8.0],
+        ]
+    )
+    ref = pred.copy()
+    components = ["Ex", "Ey", "Hz", "dBzdt"]
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        components,
+        config,
+        case_type="noip",
+        reference_type="empymod",
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["magnetic_recovery"]["enabled"] is True
+    assert diagnostics["magnetic_recovery"]["method"] == "faraday_integrated_dBzdt"
+    assert diagnostics["magnetic_recovery"]["max_absolute_hz_difference"] > 0.0
