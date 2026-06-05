@@ -320,6 +320,56 @@ next diagnostic focus should remain mesh/boundary/receiver/curl recovery and
 the primary-secondary formulation. WSL was shut down after the run and
 confirmed `Stopped`.
 
+First-output local mesh sensitivity smoke:
+
+```text
+workdir = dolfinx/current_task_runs/y200_rxminus300_noip_first_output_mesh100_smoke
+source_mesh_size = 100 m
+receiver_mesh_size = 100 m
+t_obs = 1.0e-5 s
+stop_after_outputs = 1
+```
+
+Runtime:
+
+```text
+total = 19.615 s
+mesh = 2.006 s
+setup = 1.297 s
+forward_solve = 12.252 s
+empymod_reference = 0.633 s
+```
+
+Result:
+
+```text
+max_error_Ex = 0.7429212596469872
+max_error_Ey = 868019039.4803351
+max_error_dBzdt = 0.5860474600297446
+physical_failed_components = Ex, dBzdt
+weak_components = Ey
+weak_component_passed = true
+source_endpoint_balance_residual = 2.6473569601796998e-14
+waveform_integral_residual = 0.0
+quadrature_points = 2200
+missed_points = 0
+```
+
+Compared with the `source_mesh_size=receiver_mesh_size=200 m` first-output
+smoke, simply lowering both mesh sizes to `100 m` did not improve the physical
+gate:
+
+```text
+Ex:    0.5726338805279592 -> 0.7429212596469872
+dBzdt: 0.3370050078629801 -> 0.5860474600297446
+```
+
+Interpretation: the first-output error is not a simple monotonic local mesh
+size issue on this coarse geometry. The receiver/cell-candidate geometry,
+source transfer, boundary/domain setup, and primary-secondary formulation are
+still higher-value next diagnostics than a blind local mesh-size sweep. WSL was
+shut down after the run and confirmed `Stopped`.
+
 Lightweight P0-P2 tests:
 
 ```bash
