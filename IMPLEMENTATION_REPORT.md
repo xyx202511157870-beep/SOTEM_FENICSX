@@ -1,4 +1,4 @@
-# P0-P6 Implementation Report
+# P0-P7 Implementation Report
 
 ## Scope
 
@@ -11,6 +11,7 @@ This report covers the implementation rounds currently committed or staged from 
 - P4 partial: add primary-field provider interfaces with zero and cached providers.
 - P5 partial: add a DC secondary initialization core with zero-contrast tests.
 - P6 partial: add no-IP/IP primary-secondary TDEM step kernels with zero-contrast tests.
+- P7 partial: add no-IP/IP three-component validation smoke artifact writer.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
@@ -74,6 +75,13 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Variable-`dt` backward-Euler secondary RHS density helpers through injected solvers.
   - Exact zero-contrast secondary response for no-IP and zero-delta IP.
 
+- `src/atem3d/validation_3comp.py`
+  - `ThreeComponentValidationInput`
+  - `write_three_component_validation_artifacts`
+  - Required no-IP/IP validation CSV/JSON/PNG output names.
+  - Robust relative error and peak-normalized error output through existing metric code.
+  - IP Prony metadata in `error_summary.json`.
+
 ## Tests Added
 
 - `tests/test_waveform.py`
@@ -84,6 +92,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_primary_provider.py`
 - `tests/test_dc_initialization.py`
 - `tests/test_secondary_zero_contrast.py`
+- `tests/test_noip_3comp_validation_smoke.py`
+- `tests/test_ip_3comp_validation_smoke.py`
 
 ## Validation Command
 
@@ -115,6 +125,12 @@ P6 TDEM secondary stepper tests:
 
 ```bash
 python -m pytest -q tests/test_secondary_zero_contrast.py
+```
+
+P7 no-IP/IP validation smoke tests:
+
+```bash
+python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py
 ```
 
 ## Running No-IP Three-Component Validation
@@ -164,6 +180,7 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 - P4 currently provides zero/cached primary providers and an empymod skeleton; the actual empymod field sampling implementation remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers; DOLFINx curl-curl/mass/Robin operator assembly remains pending.
+- P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - Full no-IP/IP 5% acceptance is not yet achieved.
 
 ## Next Steps
@@ -175,4 +192,5 @@ This implementation round improves time-axis correctness and reporting/diagnosti
 5. Continue P4 by implementing real `EmpymodPrimaryProvider` sampling or a 1D reference backend.
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
 7. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
-8. Continue to P7: no-IP/IP empymod or 1D three-component validation.
+8. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
+9. Continue to P8: complex terrain and leakage-channel example.
