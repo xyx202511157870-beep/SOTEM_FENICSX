@@ -131,6 +131,7 @@ def _main_validate_secondary(argv: list[str]) -> int:
     max_abs_secondary_dbdt = 0.0
     previous = state
     previous_time = 0.0
+    trace_rows: list[dict[str, float | bool]] = []
     for time in times:
         dt = float(time - previous_time)
         if dt <= 0.0:
@@ -147,6 +148,16 @@ def _main_validate_secondary(argv: list[str]) -> int:
         max_abs_secondary_dbdt = max(
             max_abs_secondary_dbdt,
             float(np.max(np.abs((state.Es - previous.Es) / dt))),
+        )
+        trace_rows.append(
+            {
+                "time_obs": float(time),
+                "max_abs_Es": float(np.max(np.abs(state.Es))) if state.Es.size else 0.0,
+                "max_abs_secondary_dBdt": max_abs_secondary_dbdt,
+                "total_response_equals_primary": bool(
+                    np.allclose(Ep0 + state.Es, Ep0, rtol=0.0, atol=threshold)
+                ),
+            }
         )
         previous = state
         previous_time = float(time)
@@ -171,6 +182,31 @@ def _main_validate_secondary(argv: list[str]) -> int:
     }
     path = output_dir / "secondary_validation_summary.json"
     path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    trace_path = output_dir / "secondary_validation_trace.csv"
+    trace_lines = [
+        "time_obs,max_abs_Es,max_abs_secondary_dBdt,total_response_equals_primary",
+        *[
+            (
+                f"{row['time_obs']:.17g},{row['max_abs_Es']:.17g},"
+                f"{row['max_abs_secondary_dBdt']:.17g},{row['total_response_equals_primary']}"
+            )
+            for row in trace_rows
+        ],
+    ]
+    trace_path.write_text("\n".join(trace_lines) + "\n", encoding="utf-8")
+    diagnostics = {
+        "validation_type": "secondary_zero_contrast",
+        "contrast_is_zero": bool(init.contrast_is_zero),
+        "time_count": int(times.size),
+    }
+    (output_dir / "diagnostics.json").write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (output_dir / "run_config_resolved.yaml").write_text(
+        yaml.safe_dump(cfg, sort_keys=True),
+        encoding="utf-8",
+    )
     print(f"wrote {path}")
     print(f"pass_zero_contrast: {summary['pass_zero_contrast']}")
     return 0

@@ -75,3 +75,9 @@ def test_cli_validate_secondary_writes_zero_contrast_summary(tmp_path):
     assert summary["max_abs_Es"] == 0.0
     assert summary["max_abs_secondary_dBdt"] == 0.0
     assert summary["total_response_equals_primary"] is True
+    trace = (output_dir / "secondary_validation_trace.csv").read_text(encoding="utf-8")
+    assert "time_obs,max_abs_Es,max_abs_secondary_dBdt,total_response_equals_primary" in trace
+    diagnostics = json.loads((output_dir / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["validation_type"] == "secondary_zero_contrast"
+    resolved = yaml.safe_load((output_dir / "run_config_resolved.yaml").read_text(encoding="utf-8"))
+    assert resolved["sigma"] == 0.01

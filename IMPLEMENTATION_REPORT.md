@@ -148,7 +148,8 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Adds `validate-noip-3comp CONFIG.yaml`.
   - Adds `validate-ip-3comp CONFIG.yaml`.
   - Adds `validate-secondary CONFIG.yaml` for a lightweight primary-secondary
-    zero-contrast validation summary.
+    zero-contrast validation summary, per-time trace CSV, diagnostics JSON,
+    and resolved YAML config.
   - Adds `plot RUN_DIR` to regenerate `comparison_3comp.png` and
     `error_curves_3comp.png` from validation CSV artifacts.
   - Uses lazy imports so validation CLI does not require heavy simulation dependencies.
@@ -271,6 +272,21 @@ P6 TDEM secondary stepper tests:
 
 ```bash
 python -m pytest -q tests/test_secondary_zero_contrast.py
+```
+
+P6 secondary validation CLI regression:
+
+```bash
+python -m pytest -q tests/test_cli_subcommands.py::test_cli_validate_secondary_writes_zero_contrast_summary
+```
+
+`tdem-ip-forward validate-secondary CONFIG.yaml` now writes:
+
+```text
+secondary_validation_summary.json
+secondary_validation_trace.csv
+diagnostics.json
+run_config_resolved.yaml
 ```
 
 Current P6 status:
