@@ -107,6 +107,12 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - `PrimaryFEMInterpolator` for provider-to-FEM-point `E_p(t)` and `E_p,dc`
     sampling, with an injected assembler hook for later DOLFINx Function/vector
     interpolation.
+
+- `src/atem3d/forward_operator.py`
+  - `ForwardRequest`
+  - `ForwardOperator.forward(model, survey, waveform, times)`
+  - Injected runner backend and strict time/data-shape validation for
+    inversion-ready forward calls.
   - `TabulatedVectorField` and `make_tabulated_vector_assembler` for converting
     fixed point/vector samples into a DOLFINx `Function.interpolate`-style
     callable with `(3, n)` coordinate input and `(3, n)` component output.
@@ -161,6 +167,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 
 ## Tests Added
 
+- `tests/test_forward_operator.py`
 - `tests/test_waveform.py`
 - `tests/test_time_grid.py`
 - `tests/test_error_metric_floor.py`
