@@ -145,6 +145,7 @@ def _validated_arrays(
     predictions = np.asarray(case.predictions, dtype=float)
     reference = np.asarray(case.reference, dtype=float)
     component_names = [str(name) for name in case.component_names]
+    magnetic_quantity = str(case.magnetic_quantity)
     if times.ndim != 1 or times.size == 0:
         raise ValueError("times must be a non-empty 1D array")
     if np.any(times <= 0.0):
@@ -165,6 +166,10 @@ def _validated_arrays(
     if case.reference_type not in SUPPORTED_REFERENCE_TYPES:
         names = ", ".join(sorted(SUPPORTED_REFERENCE_TYPES))
         raise ValueError(f"reference_type must be one of: {names}")
+    if magnetic_quantity not in {"Hz", "dBzdt"}:
+        raise ValueError("magnetic_quantity must be 'Hz' or 'dBzdt'")
+    if magnetic_quantity not in component_names:
+        raise ValueError("magnetic_quantity must be present in component_names")
     return times, predictions, reference, component_names
 
 

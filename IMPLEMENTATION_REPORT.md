@@ -364,6 +364,26 @@ Results: the new top-level help regression test passed, CLI-focused pytest
 passed (`12 passed`), `python -m atem3d.cli --help` printed the top-level
 command index, and full pytest exited `0`.
 
+## Magnetic Quantity Consistency Checkpoint (2026-06-06)
+
+Three-component validation inputs now enforce that `magnetic_quantity` is
+one of the task-book accepted magnetic responses, `Hz` or `dBzdt`, and that
+the selected quantity is actually present in `component_names`. This prevents
+an artifact set from silently labelling a `dBzdt` response as `Hz` or the
+reverse in `error_summary.json`, `diagnostics.json`, and
+`run_config_resolved.yaml`.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_noip_3comp_validation_smoke.py::test_validation_rejects_magnetic_quantity_not_present_in_components
+python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_corrected_model_runner.py
+python -m pytest -q
+```
+
+Results: the new mismatch regression test passed, validation/corrected-model
+pytest passed (`33 passed`), and full pytest exited `0`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

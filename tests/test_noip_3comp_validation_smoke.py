@@ -69,6 +69,31 @@ def test_noip_3comp_validation_smoke_writes_required_artifacts(tmp_path):
     assert "validation_scope_not_corrected_model_full" in payload["acceptance_status"]["blocking_reasons"]
 
 
+def test_validation_rejects_magnetic_quantity_not_present_in_components(tmp_path):
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    reference = np.array(
+        [
+            [1.0, 0.0, 1.0e-9],
+            [0.5, 0.0, 5.0e-10],
+            [0.1, 0.0, 1.0e-10],
+        ]
+    )
+
+    with pytest.raises(ValueError, match="magnetic_quantity"):
+        write_three_component_validation_artifacts(
+            ThreeComponentValidationInput(
+                output_dir=tmp_path,
+                times=times,
+                predictions=reference,
+                reference=reference,
+                component_names=["Ex", "Ey", "dBzdt"],
+                case_type="noip",
+                reference_type="empymod",
+                magnetic_quantity="Hz",
+            )
+        )
+
+
 def test_corrected_model_full_scope_can_claim_final_acceptance(tmp_path):
     times = np.array([1.0e-5, 1.0e-3, 1.0])
     reference = np.array(
