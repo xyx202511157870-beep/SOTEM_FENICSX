@@ -100,6 +100,41 @@ def test_corrected_model_full_scope_can_claim_final_acceptance(tmp_path):
     assert summary["final_acceptance_passed"] is True
 
 
+def test_dolfinx_refined_reference_writes_artifacts_but_cannot_claim_final_acceptance(tmp_path):
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    reference = np.array(
+        [
+            [1.0, 0.1, 1.0e-9],
+            [0.5, 0.05, 5.0e-10],
+            [0.1, 0.01, 1.0e-10],
+        ]
+    )
+    predictions = reference * np.array([[1.01, 0.99, 1.02]])
+
+    summary = write_three_component_validation_artifacts(
+        ThreeComponentValidationInput(
+            output_dir=tmp_path,
+            times=times,
+            predictions=predictions,
+            reference=reference,
+            component_names=["Ex", "Ey", "dBzdt"],
+            case_type="noip",
+            reference_type="dolfinx_refined",
+            magnetic_quantity="dBzdt",
+            validation_scope="corrected_model_full",
+        )
+    )
+
+    payload = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert payload["reference_type"] == "dolfinx_refined"
+    assert payload["physical_pass_all_components"] is True
+    assert payload["final_acceptance_passed"] is False
+    assert "reference_type_not_final_acceptance" in payload["acceptance_status"]["blocking_reasons"]
+    assert "reference_type_not_final_acceptance" in diagnostics["validation_failure"]["reason_codes"]
+    assert summary["final_acceptance_passed"] is False
+
+
 def test_acceptance_status_rejects_partial_time_window_even_when_errors_pass():
     status = validation_acceptance_status(
         np.array([1.0e-5, 1.0e-3, 1.0e-2]),

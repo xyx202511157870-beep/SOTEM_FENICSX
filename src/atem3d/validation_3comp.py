@@ -16,6 +16,9 @@ from atem3d.yaml_io import safe_dump_yaml
 REQUIRED_TIME_MIN = 1.0e-5
 REQUIRED_TIME_MAX = 1.0
 FINAL_ACCEPTANCE_SCOPE = "corrected_model_full"
+FINAL_ACCEPTANCE_REFERENCE_TYPES = {"empymod", "1d"}
+DIAGNOSTIC_REFERENCE_TYPES = {"dolfinx_refined", "self_convergence", "manufactured"}
+SUPPORTED_REFERENCE_TYPES = FINAL_ACCEPTANCE_REFERENCE_TYPES | DIAGNOSTIC_REFERENCE_TYPES
 
 
 @dataclass(frozen=True)
@@ -147,8 +150,9 @@ def _validated_arrays(
         raise ValueError("at least three components are required")
     if case.case_type not in {"noip", "ip"}:
         raise ValueError("case_type must be 'noip' or 'ip'")
-    if case.reference_type not in {"empymod", "1d"}:
-        raise ValueError("reference_type must be 'empymod' or '1d'")
+    if case.reference_type not in SUPPORTED_REFERENCE_TYPES:
+        names = ", ".join(sorted(SUPPORTED_REFERENCE_TYPES))
+        raise ValueError(f"reference_type must be one of: {names}")
     return times, predictions, reference, component_names
 
 
@@ -178,7 +182,8 @@ def validation_acceptance_status(
     required_components_present = bool(electric_present and magnetic_present)
     scope_is_final = str(validation_scope) == FINAL_ACCEPTANCE_SCOPE
     case_type_ok = case_type in {"noip", "ip"}
-    reference_type_ok = reference_type in {"empymod", "1d"}
+    reference_type_supported = reference_type in SUPPORTED_REFERENCE_TYPES
+    reference_type_ok = reference_type in FINAL_ACCEPTANCE_REFERENCE_TYPES
     threshold_ok = float(threshold) <= 0.05
     physical_gate_passed = bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
     strict_gate_passed = bool(summary.get("pass_all_components", False))
@@ -192,8 +197,10 @@ def validation_acceptance_status(
         blocking_reasons.append("required_components_missing")
     if not case_type_ok:
         blocking_reasons.append("case_type_invalid")
-    if not reference_type_ok:
+    if not reference_type_supported:
         blocking_reasons.append("reference_type_invalid")
+    elif not reference_type_ok:
+        blocking_reasons.append("reference_type_not_final_acceptance")
     if not threshold_ok:
         blocking_reasons.append("threshold_above_5pct")
     if not physical_gate_passed:
@@ -221,6 +228,9 @@ def validation_acceptance_status(
         "required_components_present": required_components_present,
         "case_type_ok": bool(case_type_ok),
         "reference_type_ok": bool(reference_type_ok),
+        "reference_type_supported": bool(reference_type_supported),
+        "final_acceptance_reference_types": sorted(FINAL_ACCEPTANCE_REFERENCE_TYPES),
+        "diagnostic_reference_types": sorted(DIAGNOSTIC_REFERENCE_TYPES),
         "threshold_requirement_met": bool(threshold_ok),
         "strict_error_gate_passed": strict_gate_passed,
         "physical_error_gate_passed": physical_gate_passed,

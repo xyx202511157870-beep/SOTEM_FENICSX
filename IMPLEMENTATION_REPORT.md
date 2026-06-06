@@ -2770,6 +2770,12 @@ source-term substitution inside the existing total-field equation.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
+- Three-component validation artifacts now distinguish final-acceptance
+  references (`empymod`, `1d`) from diagnostic three-dimensional numerical
+  references (`dolfinx_refined`, `self_convergence`, `manufactured`). This
+  enables nonzero secondary/terrain/leakage convergence artifacts without
+  falsely claiming task-book final acceptance; such runs now receive the
+  explicit blocking reason `reference_type_not_final_acceptance`.
 
 ## Next Steps
 
