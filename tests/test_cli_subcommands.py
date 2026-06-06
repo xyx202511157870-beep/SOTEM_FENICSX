@@ -81,3 +81,44 @@ def test_cli_validate_secondary_writes_zero_contrast_summary(tmp_path):
     assert diagnostics["validation_type"] == "secondary_zero_contrast"
     resolved = yaml.safe_load((output_dir / "run_config_resolved.yaml").read_text(encoding="utf-8"))
     assert resolved["sigma"] == 0.01
+
+
+def test_cli_validate_secondary_writes_forward_core_predictions(tmp_path):
+    output_dir = tmp_path / "secondary_forward"
+    config_path = tmp_path / "secondary_forward.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "output_dir": str(output_dir),
+                "Ep0": [[1.0, 0.0, 0.0]],
+                "sigma": 0.01,
+                "sigma_background": 0.01,
+                "times": [1.0e-5, 2.0e-5],
+                "threshold": 1.0e-12,
+                "receiver_locations": [[0.0, -300.0, -0.1]],
+                "components": ["Ex", "Ey", "dBzdt"],
+                "receiver_E": [
+                    [[10.0, 1.0, 0.0]],
+                    [[5.0, 0.5, 0.0]],
+                ],
+                "receiver_dBdt": [
+                    [[0.0, 0.0, -3.0]],
+                    [[0.0, 0.0, -1.5]],
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["validate-secondary", str(config_path)])
+
+    assert exit_code == 0
+    predictions = (output_dir / "primary_secondary_predictions.csv").read_text(encoding="utf-8")
+    assert predictions.splitlines() == [
+        "time_obs,Ex,Ey,dBzdt",
+        "1.0000000000000001e-05,10,1,-3",
+        "2.0000000000000002e-05,5,0.5,-1.5",
+    ]
+    summary = json.loads((output_dir / "secondary_validation_summary.json").read_text(encoding="utf-8"))
+    assert summary["forward_core_used"] is True
+    assert summary["max_abs_total_minus_primary"] == 0.0

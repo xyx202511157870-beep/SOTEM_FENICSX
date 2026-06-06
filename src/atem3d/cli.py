@@ -102,7 +102,9 @@ def _main_validate_secondary(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     from .materials.prony import PronyConductivity
+    from .primary import CachedPrimaryProvider
     from .solvers import (
+        PrimarySecondaryForwardOperator,
         initialize_dc_secondary,
         secondary_state_from_dc_initialization,
         secondary_step_noip,
@@ -119,12 +121,13 @@ def _main_validate_secondary(argv: list[str]) -> int:
     times = np.asarray(cfg.get("times", [1.0e-5]), dtype=float)
     if times.ndim != 1 or times.size == 0 or np.any(times <= 0.0):
         raise ValueError("times must be positive observation times")
+    material = PronyConductivity.no_ip(sigma)
 
     init = initialize_dc_secondary(
         Ep0=Ep0,
         sigma0=sigma,
         sigma_background=sigma_background,
-        material=PronyConductivity.no_ip(sigma),
+        material=material,
         contrast_atol=threshold,
     )
     state = secondary_state_from_dc_initialization(init)
@@ -164,20 +167,57 @@ def _main_validate_secondary(argv: list[str]) -> int:
 
     max_abs_es = float(np.max(np.abs(state.Es))) if state.Es.size else 0.0
     total_equals_primary = bool(np.allclose(Ep0 + state.Es, Ep0, rtol=0.0, atol=threshold))
+    forward_core_used = False
+    max_abs_total_minus_primary = None
+    if {"receiver_locations", "components", "receiver_E", "receiver_dBdt"}.issubset(cfg):
+        receiver_locations = np.asarray(cfg["receiver_locations"], dtype=float)
+        components = tuple(str(component) for component in cfg["components"])
+        receiver_E = np.asarray(cfg["receiver_E"], dtype=float)
+        receiver_dbdt = np.asarray(cfg["receiver_dBdt"], dtype=float)
+        fem_points = np.asarray(
+            cfg.get("fem_points", np.zeros((Ep0.shape[0], 3), dtype=float)),
+            dtype=float,
+        )
+        provider = CachedPrimaryProvider(
+            times=times,
+            points=fem_points,
+            receivers=receiver_locations,
+            Ep_on_V=np.repeat(Ep0.reshape(1, *Ep0.shape), times.size, axis=0),
+            receiver_E=receiver_E,
+            receiver_dBdt=receiver_dbdt,
+            Ep_dc_on_V=Ep0,
+        )
+        operator = PrimarySecondaryForwardOperator(
+            primary=provider,
+            fem_points=fem_points,
+            receiver_locations=receiver_locations,
+            components=components,
+            material=material,
+            sigma_background=sigma_background,
+            contrast_atol=threshold,
+        )
+        predictions = operator.forward(times)
+        primary_rows = _receiver_component_rows(receiver_E, receiver_dbdt, components)
+        max_abs_total_minus_primary = float(np.max(np.abs(predictions - primary_rows)))
+        _write_response_csv(output_dir / "primary_secondary_predictions.csv", times, predictions, components)
+        forward_core_used = True
     summary = {
         "case_type": "secondary_zero_contrast",
         "sigma": sigma,
         "sigma_background": sigma_background,
         "threshold": threshold,
         "time_count": int(times.size),
+        "forward_core_used": forward_core_used,
         "max_abs_Es": max_abs_es,
         "max_abs_secondary_dBdt": max_abs_secondary_dbdt,
+        "max_abs_total_minus_primary": max_abs_total_minus_primary,
         "total_response_equals_primary": total_equals_primary,
         "pass_zero_contrast": bool(
             max_abs_es <= threshold
             and max_abs_secondary_dbdt <= threshold
             and total_equals_primary
             and init.contrast_is_zero
+            and (max_abs_total_minus_primary is None or max_abs_total_minus_primary <= threshold)
         ),
     }
     path = output_dir / "secondary_validation_summary.json"
@@ -210,6 +250,39 @@ def _main_validate_secondary(argv: list[str]) -> int:
     print(f"wrote {path}")
     print(f"pass_zero_contrast: {summary['pass_zero_contrast']}")
     return 0
+
+
+def _receiver_component_rows(receiver_E, receiver_dbdt, components: tuple[str, ...]) -> np.ndarray:
+    electric = np.asarray(receiver_E, dtype=float)
+    dbdt = np.asarray(receiver_dbdt, dtype=float)
+    if electric.ndim != 3 or electric.shape[2] != 3:
+        raise ValueError("receiver_E must have shape (n_times, n_receivers, 3)")
+    if dbdt.shape != electric.shape:
+        raise ValueError("receiver_dBdt must have the same shape as receiver_E")
+    rows = []
+    for electric_t, dbdt_t in zip(electric, dbdt):
+        columns = []
+        for component in components:
+            if component in {"Ex", "Ey", "Ez"}:
+                columns.append(electric_t[:, {"Ex": 0, "Ey": 1, "Ez": 2}[component]])
+            elif component in {"dBxdt", "dBydt", "dBzdt"}:
+                columns.append(dbdt_t[:, {"dBxdt": 0, "dBydt": 1, "dBzdt": 2}[component]])
+            else:
+                raise ValueError(f"unsupported receiver component: {component}")
+        rows.append(np.column_stack(columns).reshape(-1))
+    return np.vstack(rows)
+
+
+def _write_response_csv(
+    path: Path,
+    times: np.ndarray,
+    values: np.ndarray,
+    components: tuple[str, ...],
+) -> None:
+    lines = ["time_obs," + ",".join(components)]
+    for time, row in zip(times, values):
+        lines.append(",".join([f"{time:.17g}", *[f"{value:.17g}" for value in row]]))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _load_yaml(path: Path) -> dict:

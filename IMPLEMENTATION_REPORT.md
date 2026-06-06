@@ -215,6 +215,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Adds `validate-secondary CONFIG.yaml` for a lightweight primary-secondary
     zero-contrast validation summary, per-time trace CSV, diagnostics JSON,
     and resolved YAML config.
+  - `validate-secondary` can now use `PrimarySecondaryForwardOperator` when
+    receiver locations, components, and primary receiver `E`/`dBdt` tables are
+    supplied, writing `primary_secondary_predictions.csv` and checking total
+    receiver response against the primary response in the zero-contrast case.
   - Adds `plot RUN_DIR` to regenerate `comparison_3comp.png` and
     `error_curves_3comp.png` from validation CSV artifacts.
   - Uses lazy imports so validation CLI does not require heavy simulation dependencies.
