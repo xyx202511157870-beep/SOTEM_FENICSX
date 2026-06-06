@@ -3480,6 +3480,21 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_primary_secondary_forward.py::test_primary_secondary_forward_samples_internal_times_after_turnoff tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_full_artifact_set tests/test_corrected_model_runner.py::test_corrected_model_spec_cli_allows_observation_time_count_override`,
   `python -m pytest -q tests/test_primary_secondary_forward.py tests/test_corrected_model_runner.py tests/test_cli_subcommands.py tests/test_dolfinx_primary_secondary_metadata.py tests/test_dolfinx_validation_artifacts.py`,
   and `python -m pytest -q`, all with exit code 0.
+- Shared internal time-grid diagnostics checkpoint (2026-06-06): added
+  `build_internal_time_grid_from_turnoff(...)` as the shared helper for
+  turnoff-grid construction when only `turnoff_time` and `turnoff_steps` are
+  available. `PrimarySecondaryForwardOperator` now reuses this helper and
+  drops only the initial `t=0` sample for its stepping loop, so the solver path
+  and waveform diagnostics use the same grid semantics. Corrected-model
+  diagnostics now include an `internal_time_grid` summary with turnoff-grid
+  point count, output point count, total internal point count, first/last
+  internal time, last output internal time, and explicit flags confirming that
+  `t=0`, `t_off`, and all `t_off + t_obs` outputs are present. Windows
+  verification ran
+  `python -m pytest -q tests/test_time_grid.py tests/test_primary_secondary_forward.py`
+  and
+  `python -m pytest -q tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_full_artifact_set tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_ip_secondary_equation_metadata tests/test_corrected_model_runner.py::test_corrected_model_spec_cli_allows_observation_time_count_override`,
+  both with exit code 0.
 
 ## Next Steps
 

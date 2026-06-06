@@ -90,6 +90,12 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
     assert equation["first_output_internal_time_s"] == pytest.approx(2.0e-5)
     assert equation["first_internal_step_dt_s"] == pytest.approx(1.0e-6)
     assert equation["dt_source"] == "turnoff_grid_first_step"
+    assert equation["internal_time_grid"]["turnoff_grid_points"] == 11
+    assert equation["internal_time_grid"]["observation_output_points"] == 3
+    assert equation["internal_time_grid"]["total_internal_points"] == 14
+    assert equation["internal_time_grid"]["contains_turnoff_end"] is True
+    assert equation["internal_time_grid"]["contains_all_observation_outputs"] is True
+    assert equation["internal_time_grid"]["last_output_internal_time_s"] == pytest.approx(1.00001)
 
 
 def test_run_corrected_model_validation_writes_ip_secondary_equation_metadata(tmp_path):

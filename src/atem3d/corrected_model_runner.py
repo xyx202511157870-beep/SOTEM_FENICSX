@@ -18,6 +18,7 @@ from atem3d.validation_3comp import (
     ThreeComponentValidationInput,
     write_three_component_validation_artifacts,
 )
+from atem3d.waveforms import build_internal_time_grid_from_turnoff
 
 ResponseRunner = Callable[[dict], np.ndarray]
 
@@ -303,6 +304,11 @@ def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: n
     metadata["first_observation_time_s"] = first_observation_time
     metadata["first_output_internal_time_s"] = first_output_internal_time
     metadata["first_internal_step_dt_s"] = first_internal_step_dt
+    metadata["internal_time_grid"] = _internal_time_grid_metadata(
+        time_array,
+        turnoff_time=turnoff_time,
+        turnoff_steps=turnoff_steps,
+    )
     metadata["primary_includes_ip_background"] = bool(
         dict(case_spec.get("dolfinx_forward", {})).get("primary_includes_ip_background", True)
     )
@@ -316,6 +322,39 @@ def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: n
     else:
         metadata["secondary_material_reason"] = "case_material"
     return metadata
+
+
+def _internal_time_grid_metadata(
+    observation_times: np.ndarray,
+    *,
+    turnoff_time: float,
+    turnoff_steps: int,
+) -> dict:
+    grid = build_internal_time_grid_from_turnoff(
+        observation_times,
+        turnoff_time=turnoff_time,
+        turnoff_steps=turnoff_steps,
+    )
+    output_internal_times = float(turnoff_time) + np.asarray(observation_times, dtype=float)
+    turnoff_grid = grid[grid <= float(turnoff_time)]
+    return {
+        "turnoff_grid_points": int(turnoff_grid.size),
+        "observation_output_points": int(output_internal_times.size),
+        "total_internal_points": int(grid.size),
+        "first_internal_time_s": float(grid[0]),
+        "last_internal_time_s": float(grid[-1]),
+        "last_output_internal_time_s": float(output_internal_times[-1]),
+        "contains_turnoff_start": bool(np.any(np.isclose(grid, 0.0, rtol=0.0, atol=1.0e-15))),
+        "contains_turnoff_end": bool(
+            np.any(np.isclose(grid, float(turnoff_time), rtol=0.0, atol=1.0e-15))
+        ),
+        "contains_all_observation_outputs": bool(
+            all(
+                np.any(np.isclose(grid, output_time, rtol=0.0, atol=1.0e-15))
+                for output_time in output_internal_times
+            )
+        ),
+    }
 
 
 def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:

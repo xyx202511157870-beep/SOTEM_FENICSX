@@ -117,6 +117,21 @@ class TabulatedWaveform(Waveform):
 def build_internal_time_grid(observation_times, waveform: Waveform) -> np.ndarray:
     """Build an internal grid from turn-off start to ``t_off + t_obs`` samples."""
 
+    return build_internal_time_grid_from_turnoff(
+        observation_times,
+        turnoff_time=float(waveform.t_off),
+        turnoff_steps=int(waveform.min_steps_during_turnoff),
+    )
+
+
+def build_internal_time_grid_from_turnoff(
+    observation_times,
+    *,
+    turnoff_time: float,
+    turnoff_steps: int,
+) -> np.ndarray:
+    """Build an internal grid from turn-off start to ``turnoff_time + t_obs``."""
+
     observation_times = np.asarray(observation_times, dtype=float)
     if observation_times.ndim != 1 or observation_times.size == 0:
         raise ValueError("observation_times must be a non-empty one-dimensional array")
@@ -125,8 +140,15 @@ def build_internal_time_grid(observation_times, waveform: Waveform) -> np.ndarra
     if np.any(np.diff(observation_times) <= 0.0):
         raise ValueError("observation_times must be strictly increasing")
 
-    ramp = np.linspace(0.0, float(waveform.t_off), int(waveform.min_steps_during_turnoff) + 1)
-    output_times = float(waveform.t_off) + observation_times
+    turnoff_time = float(turnoff_time)
+    if not np.isfinite(turnoff_time) or turnoff_time < 0.0:
+        raise ValueError("turnoff_time must be finite and nonnegative")
+    turnoff_steps = int(turnoff_steps)
+    if turnoff_steps < 1:
+        raise ValueError("turnoff_steps must be positive")
+
+    ramp = np.linspace(0.0, turnoff_time, turnoff_steps + 1)
+    output_times = turnoff_time + observation_times
     return np.unique(np.r_[ramp, output_times])
 
 
@@ -135,4 +157,3 @@ def _validate_turnoff(t_off: float, min_steps: int) -> None:
         raise ValueError("t_off must be finite and nonnegative")
     if int(min_steps) < 1:
         raise ValueError("min_steps_during_turnoff must be positive")
-

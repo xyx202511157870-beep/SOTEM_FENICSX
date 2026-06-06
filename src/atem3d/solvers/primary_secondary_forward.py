@@ -10,6 +10,7 @@ import numpy as np
 from atem3d.materials.prony import PronyConductivity
 from atem3d.primary.base import PrimaryFieldProvider, as_points
 from atem3d.primary.interpolation import PrimaryFEMInterpolator
+from atem3d.waveforms import build_internal_time_grid_from_turnoff
 
 from .dc_secondary import DCSecondaryInitialization, initialize_dc_secondary_from_primary
 from .tdem_secondary import (
@@ -250,15 +251,9 @@ def _internal_time_grid(
     turnoff_time: float,
     turnoff_steps: int,
 ) -> np.ndarray:
-    observation_times = _as_strictly_increasing_times(observation_times)
-    turnoff_time = float(turnoff_time)
-    if not np.isfinite(turnoff_time) or turnoff_time < 0.0:
-        raise ValueError("turnoff_time must be finite and nonnegative")
-    turnoff_steps = int(turnoff_steps)
-    if turnoff_steps < 1:
-        raise ValueError("turnoff_steps must be positive")
-    output_internal_times = observation_times + turnoff_time
-    if turnoff_time > 0.0:
-        turnoff_grid = np.linspace(0.0, turnoff_time, turnoff_steps + 1)[1:]
-        return np.unique(np.r_[turnoff_grid, output_internal_times])
-    return output_internal_times
+    grid = build_internal_time_grid_from_turnoff(
+        observation_times,
+        turnoff_time=turnoff_time,
+        turnoff_steps=turnoff_steps,
+    )
+    return grid[grid > 0.0]
