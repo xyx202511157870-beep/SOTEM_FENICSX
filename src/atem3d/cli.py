@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_run(argv[1:])
     if argv and argv[0] == "plot":
         return _main_plot(argv[1:])
+    if argv and argv[0] == "model-schematic":
+        return _main_model_schematic(argv[1:])
     if argv and argv[0] == "validate-secondary":
         return _main_validate_secondary(argv[1:])
     if argv and argv[0] == "acceptance-report":
@@ -105,6 +107,24 @@ def _main_plot(argv: list[str]) -> int:
     _plot_errors(run_dir / "error_curves_3comp.png", errors, component_names, threshold=0.05)
     print(f"wrote {run_dir / 'comparison_3comp.png'}")
     print(f"wrote {run_dir / 'error_curves_3comp.png'}")
+    return 0
+
+
+def _main_model_schematic(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write a corrected-model geometry schematic from a case spec.")
+    parser.add_argument("config", type=Path, help="JSON/YAML corrected-model case spec")
+    parser.add_argument("--case", choices=("noip", "ip"), default="noip")
+    parser.add_argument("--output", type=Path, default=Path("model_schematic.png"))
+    args = parser.parse_args(argv)
+
+    from .model_schematic import write_model_schematic
+
+    config = _load_yaml(args.config)
+    case_spec = dict(config[args.case] if args.case in config else config)
+    info = write_model_schematic(case_spec, args.output)
+    print(f"wrote {args.output}")
+    print(f"source_length_m: {info['source_length_m']}")
+    print(f"parallel_offset_m: {info['parallel_offset_m']}")
     return 0
 
 

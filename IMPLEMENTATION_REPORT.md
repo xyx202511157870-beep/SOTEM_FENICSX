@@ -80,6 +80,12 @@ final acceptance.
     (`S092698512400329X`) without treating missing full-text model parameters
     as verified.
 
+- `src/atem3d/model_schematic.py`
+  - `write_model_schematic`
+  - Writes a two-panel plan/depth PNG schematic from a corrected-model case
+    spec, including source line, receiver, computational domain, and optional
+    leakage-channel polyline.
+
 - `src/atem3d/source_diagnostics.py`
   - `diagnose_source_consistency`
   - Reports task-book source residuals:
@@ -361,6 +367,8 @@ final acceptance.
     is tested to remain equivalent to the no-IP zero-contrast response.
   - Adds `plot RUN_DIR` to regenerate `comparison_3comp.png` and
     `error_curves_3comp.png` from validation CSV artifacts.
+  - Adds `model-schematic SPEC.json --case noip|ip --output FIG.png` for
+    writing model geometry schematics from corrected-model specs.
   - Adds `corrected-leakage-model-spec` for writing a corrected-scale,
     memory-safe leakage-channel diagnostic spec before running DOLFINx.
   - Adds `published-paper-model-spec` for writing the published SOTEM paper
@@ -411,6 +419,7 @@ final acceptance.
 - `tests/test_source_consistency.py`
 - `tests/test_average_receivers.py`
 - `tests/test_public_api.py`
+- `tests/test_model_schematic.py`
 - Existing `tests/test_empymod_validation.py`
 - Existing `tests/test_empymod_validation_cli.py`
 
@@ -1020,6 +1029,7 @@ dolfinx/runs/corrected_leakage_model_run/noip_3comp
 Artifacts written:
 
 ```text
+model_schematic.png
 predictions.csv
 reference_empymod_or_1d.csv
 errors.csv
@@ -1045,6 +1055,15 @@ the reference is the empymod background response. Therefore this result proves
 the corrected-scale leakage diagnostic backend/artifact path runs, not that the
 3D anomaly response has an accepted reference-level error.
 
+The model schematic can be regenerated with:
+
+```bash
+tdem-ip-forward model-schematic dolfinx/runs/corrected_leakage_model/spec.json --case noip --output dolfinx/runs/corrected_leakage_model_run/noip_3comp/model_schematic.png
+```
+
+The schematic is a geometry artifact only. It does not affect the forward solve
+or error metrics.
+
 A WSL IP diagnostic run using the same spec also completed with:
 
 ```bash
@@ -1055,6 +1074,12 @@ Output directory:
 
 ```text
 dolfinx/runs/corrected_leakage_model_run/ip_3comp
+```
+
+The IP model schematic can be regenerated with:
+
+```bash
+tdem-ip-forward model-schematic dolfinx/runs/corrected_leakage_model/spec.json --case ip --output dolfinx/runs/corrected_leakage_model_run/ip_3comp/model_schematic.png
 ```
 
 Runtime:
