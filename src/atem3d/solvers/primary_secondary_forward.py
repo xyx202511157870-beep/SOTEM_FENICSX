@@ -135,6 +135,11 @@ class PrimarySecondaryForwardOperator:
             self.secondary_receiver_projector(state, Ep_new, time_value, dt, self.components),
             dtype=float,
         )
+        if secondary.ndim == 2 and secondary.shape == (
+            self.receiver_locations.shape[0],
+            len(self.components),
+        ):
+            secondary = secondary.reshape(-1)
         if secondary.shape != primary_row.shape:
             raise ValueError("secondary_receiver_projector returned the wrong shape")
         return primary_row + secondary

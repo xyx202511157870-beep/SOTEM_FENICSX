@@ -154,6 +154,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Keeps DOLFINx-specific pieces injectable:
     `secondary_field_solver`, `secondary_step_solver`, and
     `secondary_receiver_projector`.
+  - `secondary_receiver_projector` can return either a flattened receiver row
+    or a natural `(n_receivers, n_components)` table, which is then flattened
+    into the validation/output ordering.
   - Zero-contrast no-IP response returns the primary receiver `Ex`, `Ey`, and
     `dBdt` components without requiring a secondary solve.
 
