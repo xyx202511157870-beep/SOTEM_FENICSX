@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_acceptance_report(argv[1:])
     if argv and argv[0] == "corrected-model-spec":
         return _main_corrected_model_spec(argv[1:])
+    if argv and argv[0] == "corrected-model-run":
+        return _main_corrected_model_run(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
@@ -133,6 +135,34 @@ def _main_corrected_model_spec(argv: list[str]) -> int:
     args.output.write_text(json.dumps(specs, indent=2, sort_keys=True), encoding="utf-8")
     print(f"wrote {args.output}")
     return 0
+
+
+def _main_corrected_model_run(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Run corrected-model no-IP/IP validation artifacts.")
+    parser.add_argument("config", type=Path, help="JSON/YAML corrected-model case spec")
+    parser.add_argument("--case", choices=("noip", "ip", "both"), default="both")
+    parser.add_argument("--output-root", type=Path)
+    args = parser.parse_args(argv)
+
+    from .corrected_model_runner import run_corrected_model_validation
+
+    config = _load_yaml(args.config)
+    specs = _selected_corrected_model_specs(config, case=args.case)
+    summaries = []
+    for case_name, spec in specs:
+        case_spec = dict(spec)
+        if args.output_root is not None:
+            case_spec["output_dir"] = str(args.output_root / f"{case_name}_3comp")
+            runner = dict(case_spec.get("runner", {}))
+            runner["output_root"] = str(args.output_root)
+            case_spec["runner"] = runner
+        summary = run_corrected_model_validation(case_spec)
+        summaries.append(summary)
+        print(f"wrote {case_spec['output_dir']}")
+        print(
+            f"{case_name}: final_acceptance_passed={summary['final_acceptance_passed']}"
+        )
+    return 0 if all(bool(summary["final_acceptance_passed"]) for summary in summaries) else 1
 
 
 def _main_validate_secondary(argv: list[str]) -> int:
@@ -349,6 +379,24 @@ def _load_yaml(path: Path) -> dict:
     if not isinstance(config, dict):
         raise ValueError("configuration root must be a mapping")
     return config
+
+
+def _selected_corrected_model_specs(config: dict, *, case: str) -> list[tuple[str, dict]]:
+    if "noip" in config or "ip" in config:
+        if case == "both":
+            names = ["noip", "ip"]
+        else:
+            names = [case]
+        missing = [name for name in names if name not in config]
+        if missing:
+            raise ValueError(f"corrected-model spec missing cases: {missing}")
+        return [(name, dict(config[name])) for name in names]
+    case_name = str(config.get("case_type", case))
+    if case == "both":
+        return [(case_name, dict(config))]
+    if case_name != case:
+        raise ValueError(f"single corrected-model spec has case_type={case_name!r}, not {case!r}")
+    return [(case_name, dict(config))]
 
 
 def _response_component_names(path: Path) -> list[str]:

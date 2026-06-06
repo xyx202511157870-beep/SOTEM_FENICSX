@@ -54,6 +54,18 @@ def test_corrected_model_case_specs_prepare_noip_and_ip_acceptance_inputs(tmp_pa
     assert specs["ip"]["output_dir"] == str(tmp_path / "ip_3comp")
     assert specs["noip"]["components"] == ["Ex", "Ey", "dBzdt"]
     assert specs["ip"]["magnetic_quantity"] == "dBzdt"
+    assert specs["noip"]["runner"] == {
+        "backend": "dolfinx_primary_secondary",
+        "reference": "empymod",
+        "components": ["Ex", "Ey", "dBzdt"],
+        "output_root": str(tmp_path),
+    }
+    assert specs["noip"]["material"]["kind"] == "noip"
+    assert specs["noip"]["material"]["sigma"] == pytest.approx(0.01)
+    assert specs["ip"]["material"]["kind"] == "ip_prony"
+    assert specs["ip"]["material"]["sigma0"] > 0.0
+    assert specs["ip"]["material"]["sigma_inf"] >= specs["ip"]["material"]["sigma0"]
+    assert specs["ip"]["material"]["prony_dc_constraint_error"] == pytest.approx(0.0)
 
 
 def test_corrected_model_geometry_check_rejects_old_offset_model():

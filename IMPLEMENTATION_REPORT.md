@@ -22,7 +22,11 @@ This report covers the implementation rounds currently committed or staged from 
   `final_acceptance_passed=true`.
 - Corrected-model spec helper: add a canonical source/receiver/time-window
   configuration for the latest task geometry and a CLI to write no-IP/IP case
-  specs.
+  specs, including runner/material metadata.
+- Corrected-model runner scaffold: add a pure Python validation runner and
+  `tdem-ip-forward corrected-model-run` CLI that can write full artifact sets
+  from injected forward/reference runners. The default DOLFINx forward backend
+  is still pending.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 Validation artifacts now write an explicit `acceptance_status` object and a
@@ -890,9 +894,22 @@ tdem-ip-forward corrected-model-spec outputs/corrected_model --output corrected_
 ```
 
 The spec records the corrected source/receiver coordinates, source current,
-full observation time window, components, empymod primary configuration, and
-per-case output directories. It is intended as the shared input contract for
-the pending corrected-model DOLFINx/empymod validation runner.
+full observation time window, components, empymod primary configuration,
+runner metadata, no-IP/IP material metadata, and per-case output directories.
+It is intended as the shared input contract for the pending corrected-model
+DOLFINx forward backend.
+
+The pure orchestration command is:
+
+```bash
+tdem-ip-forward corrected-model-run corrected_model_validation_spec.json --case noip --output-root outputs/corrected_model
+```
+
+It writes the same validation artifact set as `validate-noip-3comp` and
+`validate-ip-3comp` when supplied with working forward/reference runners. The
+current default reference path uses `EmpymodPrimaryProvider`; the current
+default DOLFINx forward path intentionally raises `NotImplementedError` until
+the corrected-model backend adapter is wired.
 
 ## Current Accuracy Status
 
@@ -2104,11 +2121,18 @@ source-term substitution inside the existing total-field equation.
   the full corrected-model primary-secondary validation runner remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver, a provider-driven entry point that consumes `E_p,dc` samples, and a DOLFINx scalar secondary-potential solver with WSL zero-contrast and nonzero-contrast unit-cube smoke tests. Integration into a full corrected-model DOLFINx primary-secondary run remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, a pure primary-secondary forward orchestration core, a reusable secondary receiver projection adapter, a DOLFINx-backed secondary step solver with WSL zero-RHS and nonzero constant-RHS PETSc smoke tests, DOLFINx primary-secondary zero-contrast and uniform nonzero-contrast forward smokes, a variable-DG0 no-IP DOLFINx primary-secondary state-stepper smoke, a scalar Debye/Prony IP DOLFINx state-stepper smoke, a spatial-DG0 `delta_sigma` IP smoke using `debye["delta_functions"]`, physical Nedelec interpolation-point export for non-constant tabulated primary/RHS fields, and a DOLFINx operator helper that wires primary-provider FEM sampling into the primary-secondary operator. Corrected-model validation and full no-IP/IP 5% acceptance remain pending.
-- P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
-- P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
+- P7 currently verifies artifact generation from supplied arrays and the
+  corrected-model runner scaffold with injected runners; it does not yet run a
+  real DOLFINx corrected-model forward backend to prove 5% physical agreement.
+- P7 CLI reads precomputed prediction/reference CSV files for
+  `validate-noip-3comp` and `validate-ip-3comp`. `corrected-model-run` now
+  exists as the orchestration entry point, but its default DOLFINx forward
+  runner is not wired yet.
 - `tdem-ip-forward acceptance-report` summarizes no-IP/IP validation outputs; it does not create those outputs or repair failing component errors.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
-  metadata; it does not run the forward solver.
+  metadata, including runner/material metadata. `tdem-ip-forward
+  corrected-model-run` can write artifacts with injected runners, but the
+  default DOLFINx forward backend remains pending.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities, runs a
   small DOLFINx primary-secondary leakage-channel forward smoke on a unit-cube

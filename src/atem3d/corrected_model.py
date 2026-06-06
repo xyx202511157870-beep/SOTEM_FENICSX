@@ -31,6 +31,9 @@ class CorrectedModelValidationConfig:
     magnetic_quantity: str = "dBzdt"
     depths: tuple[float, ...] = (350.0, 650.0)
     resistivities: tuple[float, ...] = (100.0, 100.0, 100.0)
+    ip_sigma_inf: float = 0.012
+    ip_delta_sigma: tuple[float, ...] = (0.002,)
+    ip_tau: tuple[float, ...] = (0.1,)
     validation_scope: str = "corrected_model_full"
     reference_type: str = "empymod"
     coordinate_system: str = "depth_down"
@@ -94,6 +97,23 @@ def build_corrected_model_case_specs(
     cfg = config or CorrectedModelValidationConfig()
     cfg.validate_geometry()
     output = Path(output_root)
+    runner = {
+        "backend": "dolfinx_primary_secondary",
+        "reference": cfg.reference_type,
+        "components": list(cfg.components),
+        "output_root": str(output),
+    }
+    sigma0 = cfg.sigma_background
+    sum_delta = sum(float(value) for value in cfg.ip_delta_sigma)
+    ip_material = {
+        "kind": "ip_prony",
+        "sigma0": float(sigma0),
+        "sigma_inf": float(cfg.ip_sigma_inf),
+        "delta_sigma_list": [float(value) for value in cfg.ip_delta_sigma],
+        "tau_list": [float(value) for value in cfg.ip_tau],
+        "sum_delta_sigma": float(sum_delta),
+        "prony_dc_constraint_error": float(cfg.ip_sigma_inf - sum_delta - sigma0),
+    }
     common = {
         "reference_type": cfg.reference_type,
         "validation_scope": cfg.validation_scope,
@@ -105,16 +125,23 @@ def build_corrected_model_case_specs(
         "source_current": float(cfg.source_current),
         "observation_times": [float(value) for value in cfg.observation_times()],
         "empymod_primary": cfg.empymod_primary_config(),
+        "runner": runner,
     }
     return {
         "noip": {
             **common,
             "case_type": "noip",
             "output_dir": str(output / "noip_3comp"),
+            "material": {
+                "kind": "noip",
+                "sigma": float(sigma0),
+                "resistivity": float(1.0 / sigma0),
+            },
         },
         "ip": {
             **common,
             "case_type": "ip",
             "output_dir": str(output / "ip_3comp"),
+            "material": ip_material,
         },
     }
