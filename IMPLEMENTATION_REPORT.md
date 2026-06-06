@@ -63,6 +63,7 @@ final acceptance.
 - `src/atem3d/corrected_model.py`
   - `CorrectedModelValidationConfig`
   - `build_corrected_model_case_specs`
+  - `build_corrected_leakage_channel_case_specs`
   - `build_published_paper_model_target_spec`
   - Stores the corrected latest geometry:
     source `(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver
@@ -70,6 +71,10 @@ final acceptance.
     offset `500 m`.
   - Generates full-window log observation times from `1e-5 s` to `1 s` and
     no-IP/IP case metadata with `validation_scope=corrected_model_full`.
+  - Generates a memory-safe corrected-scale leakage-channel diagnostic spec
+    with the same source/receiver geometry, a `4000 m x 4000 m x 1100 m` box,
+    coarse `2 x 2 x 1` DOLFINx cells, and no-IP/IP leakage-channel material
+    metadata.
   - Records a published-paper reproduction target for the Journal of Applied
     Geophysics paper `Analysis of 3D induced polarization effects of SOTEM`
     (`S092698512400329X`) without treating missing full-text model parameters
@@ -356,6 +361,8 @@ final acceptance.
     is tested to remain equivalent to the no-IP zero-contrast response.
   - Adds `plot RUN_DIR` to regenerate `comparison_3comp.png` and
     `error_curves_3comp.png` from validation CSV artifacts.
+  - Adds `corrected-leakage-model-spec` for writing a corrected-scale,
+    memory-safe leakage-channel diagnostic spec before running DOLFINx.
   - Adds `published-paper-model-spec` for writing the published SOTEM paper
     reproduction target metadata and the list of full-text parameters still
     required before a paper-response overlay can be claimed.
@@ -978,6 +985,65 @@ target and coarse setup, but not enough to digitize the published response
 curves or define the full 3D IP anomaly. The next reproducibility step is to
 extract the missing model table/figure data from the full article text or a
 user-supplied PDF, then add those values to this spec and run the overlay.
+
+## Corrected-Scale Leakage Diagnostic Spec
+
+Write a memory-safe corrected-scale leakage-channel diagnostic spec with:
+
+```bash
+tdem-ip-forward corrected-leakage-model-spec dolfinx/runs/corrected_leakage_model --output dolfinx/runs/corrected_leakage_model/spec.json --n-observation-times 3
+```
+
+The generated no-IP/IP specs keep the corrected latest source and receiver,
+cover the full `1e-5 s` to `1 s` observation window, and add DOLFINx forward
+metadata:
+
+```text
+domain_min = [-2000, -2000, -1000]
+domain_max = [2000, 2000, 100]
+cells = [2, 2, 1]
+leakage_channel = four-point irregular polyline
+```
+
+A WSL no-IP diagnostic run completed with:
+
+```bash
+PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m atem3d.cli corrected-model-run dolfinx/runs/corrected_leakage_model/spec.json --case noip --output-root dolfinx/runs/corrected_leakage_model_run
+```
+
+Output directory:
+
+```text
+dolfinx/runs/corrected_leakage_model_run/noip_3comp
+```
+
+Artifacts written:
+
+```text
+predictions.csv
+reference_empymod_or_1d.csv
+errors.csv
+error_summary.json
+comparison_3comp.png
+error_curves_3comp.png
+diagnostics.json
+run_config_resolved.yaml
+```
+
+Runtime:
+
+```text
+forward = 34.164 s
+reference = 0.443 s
+artifact_total = 1.019 s
+```
+
+The run reports `final_acceptance_passed=false` with blocking reasons
+`validation_scope_not_corrected_model_full` and `physical_error_gate_failed`.
+This is expected: the prediction includes a 3D leakage-channel anomaly, while
+the reference is the empymod background response. Therefore this result proves
+the corrected-scale leakage diagnostic backend/artifact path runs, not that the
+3D anomaly response has an accepted reference-level error.
 
 A WSL CLI smoke completed under:
 

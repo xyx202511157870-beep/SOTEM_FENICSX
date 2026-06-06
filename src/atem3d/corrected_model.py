@@ -147,6 +147,61 @@ def build_corrected_model_case_specs(
     }
 
 
+def build_corrected_leakage_channel_case_specs(
+    output_root: str | Path,
+    config: CorrectedModelValidationConfig | None = None,
+) -> dict[str, dict]:
+    """Return memory-safe corrected-scale no-IP/IP leakage-channel specs."""
+
+    cfg = config or CorrectedModelValidationConfig()
+    specs = build_corrected_model_case_specs(output_root, config=cfg)
+    common_forward = {
+        "domain_min": [-2000.0, -2000.0, -1000.0],
+        "domain_max": [2000.0, 2000.0, 100.0],
+        "cells": [2, 2, 1],
+        "receiver_evaluation_mode": "first_cell",
+        "outer_boundary_mode": "natural",
+        "ksp_type": "cg",
+        "rtol": 1.0e-8,
+        "atol": 1.0e-10,
+        "max_it": 400,
+        "terrain_model": {
+            "kind": "diagnostic_box_with_surface_metadata",
+            "surface_reference_z": 0.0,
+            "note": "The default corrected runner currently creates a box mesh; terrain metadata is recorded for the corrected-scale P8 diagnostic contract.",
+        },
+    }
+    leakage_points = [
+        [-700.0, -500.0, -120.0],
+        [-250.0, -320.0, -90.0],
+        [150.0, -120.0, -140.0],
+        [650.0, 80.0, -110.0],
+    ]
+    specs["noip"]["validation_scope"] = "corrected_model_terrain_leakage_diagnostic"
+    specs["noip"]["empymod_kwargs"] = {"srcpts": 3}
+    specs["noip"]["dolfinx_forward"] = {
+        **common_forward,
+        "leakage_channel": {
+            "points": leakage_points,
+            "radius": 900.0,
+            "sigma": 0.04,
+        },
+    }
+    specs["ip"]["validation_scope"] = "corrected_model_terrain_leakage_diagnostic"
+    specs["ip"]["empymod_kwargs"] = {"srcpts": 3}
+    specs["ip"]["dolfinx_forward"] = {
+        **common_forward,
+        "leakage_channel": {
+            "points": leakage_points,
+            "radius": 900.0,
+            "sigma_inf": 0.05,
+            "delta_sigma_list": [0.015],
+            "tau_list": [0.1],
+        },
+    }
+    return specs
+
+
 def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
     """Return the published SOTEM paper target metadata for later reproduction.
 

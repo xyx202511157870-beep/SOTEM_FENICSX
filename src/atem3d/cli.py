@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_corrected_model_spec(argv[1:])
     if argv and argv[0] == "corrected-model-run":
         return _main_corrected_model_run(argv[1:])
+    if argv and argv[0] == "corrected-leakage-model-spec":
+        return _main_corrected_leakage_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-model-spec":
         return _main_published_paper_model_spec(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
@@ -152,6 +154,26 @@ def _main_published_paper_model_spec(argv: list[str]) -> int:
     spec = build_published_paper_model_target_spec(args.output_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"wrote {args.output}")
+    return 0
+
+
+def _main_corrected_leakage_model_spec(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write corrected-scale leakage-channel validation case specs.")
+    parser.add_argument("output_root", type=Path, help="Root directory for corrected leakage validation outputs")
+    parser.add_argument("--output", type=Path, default=Path("corrected_leakage_model_spec.json"))
+    parser.add_argument("--n-observation-times", type=int, default=80)
+    args = parser.parse_args(argv)
+
+    from .corrected_model import (
+        CorrectedModelValidationConfig,
+        build_corrected_leakage_channel_case_specs,
+    )
+
+    config = CorrectedModelValidationConfig(n_observation_times=args.n_observation_times)
+    specs = build_corrected_leakage_channel_case_specs(args.output_root, config=config)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(specs, indent=2, sort_keys=True), encoding="utf-8")
     print(f"wrote {args.output}")
     return 0
 

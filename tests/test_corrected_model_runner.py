@@ -9,6 +9,7 @@ from atem3d.cli import _load_yaml
 from atem3d.corrected_model import (
     CorrectedModelValidationConfig,
     build_corrected_model_case_specs,
+    build_corrected_leakage_channel_case_specs,
     build_published_paper_model_target_spec,
 )
 from atem3d.corrected_model_runner import run_corrected_model_validation
@@ -252,3 +253,46 @@ def test_published_paper_model_spec_cli_writes_json(tmp_path):
     assert payload["published_reference"]["article_id"] == "S092698512400329X"
     assert payload["run_contract"]["output_root"] == str(tmp_path / "paper_run")
     assert payload["run_contract"]["validation_scope"] == "published_paper_reproduction_target"
+
+
+def test_corrected_leakage_channel_case_specs_define_memory_safe_3d_anomaly(tmp_path):
+    specs = build_corrected_leakage_channel_case_specs(tmp_path)
+
+    assert set(specs) == {"noip", "ip"}
+    noip = specs["noip"]
+    ip = specs["ip"]
+    assert noip["validation_scope"] == "corrected_model_terrain_leakage_diagnostic"
+    assert noip["runner"]["backend"] == "dolfinx_primary_secondary"
+    assert noip["source_start"] == [-500.0, 200.0, -0.1]
+    assert noip["source_end"] == [500.0, 200.0, -0.1]
+    forward = noip["dolfinx_forward"]
+    assert forward["domain_min"] == [-2000.0, -2000.0, -1000.0]
+    assert forward["domain_max"] == [2000.0, 2000.0, 100.0]
+    assert forward["cells"] == [2, 2, 1]
+    assert len(forward["leakage_channel"]["points"]) == 4
+    assert forward["leakage_channel"]["radius"] == 900.0
+    assert forward["leakage_channel"]["sigma"] == 0.04
+    assert ip["dolfinx_forward"]["leakage_channel"]["sigma_inf"] == 0.05
+    assert ip["dolfinx_forward"]["leakage_channel"]["delta_sigma_list"] == [0.015]
+
+
+def test_corrected_leakage_model_spec_cli_writes_json(tmp_path):
+    output = tmp_path / "leakage_spec.json"
+
+    exit_code = main(
+        [
+            "corrected-leakage-model-spec",
+            str(tmp_path / "leakage_run"),
+            "--output",
+            str(output),
+            "--n-observation-times",
+            "3",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["noip"]["validation_scope"] == "corrected_model_terrain_leakage_diagnostic"
+    assert payload["ip"]["observation_times"][0] == 1.0e-5
+    assert payload["ip"]["observation_times"][-1] == 1.0
+    assert len(payload["ip"]["observation_times"]) == 3
