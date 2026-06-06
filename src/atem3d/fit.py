@@ -22,6 +22,20 @@ class DebyeFitResult:
     fitted_sigma: np.ndarray
     relative_l2: float
 
+    def to_prony_conductivity(self):
+        """Return a scalar `PronyConductivity` material from the fitted poles."""
+
+        from atem3d.materials.prony import DebyeTerm as PronyDebyeTerm
+        from atem3d.materials.prony import PronyConductivity
+
+        terms = []
+        for term in self.terms:
+            delta = np.asarray(term.delta_sigma, dtype=float)
+            if delta.size != 1:
+                raise ValueError("only scalar Debye fit terms can be converted to PronyConductivity")
+            terms.append(PronyDebyeTerm(delta_sigma=float(delta.reshape(-1)[0]), tau=float(term.tau)))
+        return PronyConductivity(sigma_inf=float(self.sigma_infinity), terms=terms)
+
 
 def cole_cole_conductivity(
     frequencies,

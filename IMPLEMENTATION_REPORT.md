@@ -2956,6 +2956,14 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_corrected_model_runner.py` with `17 passed`
   and `python -m pytest -q` with all tests passing (`706 passed`,
   `2 skipped`).
+- `DebyeFitResult` now converts directly to the production
+  `PronyConductivity` material interface through `to_prony_conductivity()`.
+  This bridges Cole-Cole/Debye fitting outputs from `atem3d.fit` into the
+  material object used by the time-domain IP and primary-secondary code paths,
+  while preserving the conductivity-form DC constraint in the exact `c=1`
+  single-Debye case. Windows verification ran
+  `python -m pytest -q tests/test_debye_fit.py` with `5 passed` and
+  `python -m pytest -q` with all tests passing (`707 passed`, `2 skipped`).
 
 ## Next Steps
 

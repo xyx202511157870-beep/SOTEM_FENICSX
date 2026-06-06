@@ -6,6 +6,7 @@ from atem3d.fit import (
     fit_pelton_resistivity_debye,
     pelton_resistivity_to_conductivity,
 )
+from atem3d.materials.prony import PronyConductivity
 
 
 def test_conductivity_cole_cole_c_equals_one_is_single_debye():
@@ -82,3 +83,23 @@ def test_pelton_fit_uses_analytic_high_frequency_conductivity():
     )
 
     np.testing.assert_allclose(result.sigma_infinity, 1.0 / (100.0 * (1.0 - 0.2)))
+
+
+def test_debye_fit_result_converts_to_prony_conductivity_material():
+    result = fit_cole_cole_conductivity_debye(
+        sigma_infinity=0.02,
+        eta=0.25,
+        tau=1.0,
+        c=1.0,
+        frequencies=np.logspace(-2, 2, 50),
+        tau_grid=np.array([1.0]),
+    )
+
+    material = result.to_prony_conductivity()
+
+    assert isinstance(material, PronyConductivity)
+    assert material.sigma_inf == result.sigma_infinity
+    assert len(material.terms) == 1
+    assert material.terms[0].tau == 1.0
+    np.testing.assert_allclose(material.terms[0].delta_sigma, result.terms[0].delta_sigma[0])
+    np.testing.assert_allclose(material.sigma0, 0.015, rtol=1.0e-12, atol=1.0e-14)
