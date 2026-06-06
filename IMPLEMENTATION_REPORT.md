@@ -970,6 +970,13 @@ Use the canonical corrected-model helper to write no-IP/IP case metadata:
 tdem-ip-forward corrected-model-spec outputs/corrected_model --output corrected_model_validation_spec.json
 ```
 
+Use `--n-observation-times N` to override the default 80 log-spaced
+observation times while keeping the same `1e-5 s` to `1 s` window:
+
+```bash
+tdem-ip-forward corrected-model-spec outputs/corrected_model --output corrected_model_validation_spec.json --n-observation-times 5
+```
+
 The spec records the corrected source/receiver coordinates, source current,
 full observation time window, components, empymod primary configuration,
 runner metadata, no-IP/IP material metadata, and per-case output directories.
@@ -2586,10 +2593,11 @@ source-term substitution inside the existing total-field equation.
   is currently smoke-tested for no-IP zero-secondary cases only.
 - `tdem-ip-forward acceptance-report` summarizes no-IP/IP validation outputs; it does not create those outputs or repair failing component errors.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
-  metadata, including runner/material metadata. `tdem-ip-forward
-  corrected-model-run` can write artifacts with injected runners and has a
-  small WSL-tested no-IP default DOLFINx forward path. Nonzero-contrast/IP
-  corrected-model forward validation remains pending.
+  metadata, including runner/material metadata, and accepts
+  `--n-observation-times` for memory-safe reduced diagnostic specs.
+  `tdem-ip-forward corrected-model-run` can write artifacts with injected
+  runners and has a small WSL-tested no-IP default DOLFINx forward path.
+  Nonzero-contrast/IP corrected-model forward validation remains pending.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities, runs a
   small DOLFINx primary-secondary leakage-channel forward smoke on a unit-cube

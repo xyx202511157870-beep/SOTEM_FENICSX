@@ -169,11 +169,13 @@ def _main_corrected_model_spec(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Write corrected-model no-IP/IP validation case specs.")
     parser.add_argument("output_root", type=Path, help="Root directory for no-IP/IP validation outputs")
     parser.add_argument("--output", type=Path, default=Path("corrected_model_validation_spec.json"))
+    parser.add_argument("--n-observation-times", type=int, default=80)
     args = parser.parse_args(argv)
 
-    from .corrected_model import build_corrected_model_case_specs
+    from .corrected_model import CorrectedModelValidationConfig, build_corrected_model_case_specs
 
-    specs = build_corrected_model_case_specs(args.output_root)
+    config = CorrectedModelValidationConfig(n_observation_times=args.n_observation_times)
+    specs = build_corrected_model_case_specs(args.output_root, config=config)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(specs, indent=2, sort_keys=True), encoding="utf-8")
     print(f"wrote {args.output}")

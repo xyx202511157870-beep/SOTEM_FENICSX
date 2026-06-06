@@ -125,6 +125,27 @@ def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch
     assert calls == [("ip", str(tmp_path / "override" / "ip_3comp"))]
 
 
+def test_corrected_model_spec_cli_allows_observation_time_count_override(tmp_path):
+    output = tmp_path / "spec.json"
+
+    exit_code = main(
+        [
+            "corrected-model-spec",
+            str(tmp_path / "run"),
+            "--output",
+            str(output),
+            "--n-observation-times",
+            "5",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert len(payload["noip"]["observation_times"]) == 5
+    assert payload["noip"]["observation_times"][0] == 1.0e-5
+    assert payload["noip"]["observation_times"][-1] == 1.0
+
+
 def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_path, monkeypatch):
     specs = build_corrected_model_case_specs(tmp_path / "from_spec")
     spec_path = tmp_path / "spec.json"
