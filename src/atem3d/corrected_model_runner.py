@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib
 import importlib.util
 from pathlib import Path
 import sys
@@ -198,17 +199,62 @@ def _default_forward_runner(case_spec: dict) -> np.ndarray:
     return _run_dolfinx_primary_secondary_forward(case_spec)
 
 
-def _import_dolfinx_backend():
+def dolfinx_backend_status() -> dict:
+    """Return import diagnostics for the default DOLFINx forward backend."""
+
+    required_modules = ["dolfinx.fem", "dolfinx.mesh", "mpi4py.MPI"]
+    checks: dict[str, dict[str, object]] = {}
+    for module_name in required_modules[:2]:
+        try:
+            module = importlib.import_module(module_name)
+            checks[module_name] = {
+                "available": True,
+                "module_file": getattr(module, "__file__", None),
+            }
+        except ImportError as exc:
+            checks[module_name] = {
+                "available": False,
+                "error": str(exc),
+            }
     try:
-        from dolfinx import fem, mesh
         from mpi4py import MPI
+
+        checks["mpi4py.MPI"] = {
+            "available": True,
+            "module_file": getattr(MPI, "__file__", None),
+        }
     except ImportError as exc:
-        raise ImportError(
-            "DOLFINx forward backend is unavailable: expected importable "
-            "dolfinx.fem, dolfinx.mesh, and mpi4py.MPI. Use a complete "
-            "FEniCSx/DOLFINx Python environment before running the default "
-            "corrected-model forward backend."
-        ) from exc
+        checks["mpi4py.MPI"] = {
+            "available": False,
+            "error": str(exc),
+        }
+    missing = [name for name, item in checks.items() if not bool(item["available"])]
+    available = not missing
+    if available:
+        message = "DOLFINx forward backend is available."
+    else:
+        message = (
+            "DOLFINx forward backend is unavailable: missing "
+            + ", ".join(missing)
+            + ". Use a complete FEniCSx/DOLFINx Python environment before "
+            "running the default corrected-model forward backend."
+        )
+    return {
+        "available": available,
+        "required_modules": required_modules,
+        "missing_modules": missing,
+        "checks": checks,
+        "message": message,
+    }
+
+
+def _import_dolfinx_backend():
+    status = dolfinx_backend_status()
+    if not bool(status["available"]):
+        raise ImportError(str(status["message"]))
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+
     return fem, mesh, MPI
 
 

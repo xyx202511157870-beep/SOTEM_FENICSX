@@ -238,6 +238,34 @@ def test_corrected_model_run_cli_reports_backend_import_error(tmp_path, monkeypa
     assert "DOLFINx forward backend is unavailable" in captured.err
 
 
+def test_dolfinx_backend_check_cli_writes_unavailable_status(tmp_path, monkeypatch, capsys):
+    output = tmp_path / "backend_status.json"
+
+    def fake_status():
+        return {
+            "available": False,
+            "required_modules": ["dolfinx.fem", "dolfinx.mesh", "mpi4py.MPI"],
+            "missing_modules": ["dolfinx.fem"],
+            "checks": {
+                "dolfinx.fem": {"available": False, "error": "missing"},
+            },
+            "message": "DOLFINx forward backend is unavailable: missing dolfinx.fem",
+        }
+
+    import atem3d.corrected_model_runner as runner
+
+    monkeypatch.setattr(runner, "dolfinx_backend_status", fake_status)
+
+    exit_code = main(["dolfinx-backend-check", "--output", str(output)])
+
+    captured = capsys.readouterr()
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert payload["available"] is False
+    assert payload["missing_modules"] == ["dolfinx.fem"]
+    assert "available: False" in captured.out
+
+
 def test_corrected_model_convergence_run_cli_dispatches_selected_cases(tmp_path, monkeypatch):
     specs = build_corrected_leakage_channel_case_specs(tmp_path / "from_spec")
     spec_path = tmp_path / "spec.json"

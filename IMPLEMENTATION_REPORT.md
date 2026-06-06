@@ -287,6 +287,32 @@ python -m pytest -q
 Results: the targeted pytest commands passed, the CLI smoke exited `2` with
 the explicit DOLFINx backend availability message, and full pytest passed.
 
+## DOLFINx Backend Check CLI Checkpoint (2026-06-06)
+
+Added `tdem-ip-forward dolfinx-backend-check --output STATUS.json` to make
+the corrected-model backend requirement directly inspectable before launching
+a forward run. The command writes JSON with `available`, `required_modules`,
+`missing_modules`, per-module import checks, and the same actionable backend
+message used by `corrected-model-run`. Exit code `0` means the backend is
+available; exit code `2` means required imports are missing.
+
+The current Windows Python environment reports missing `dolfinx.fem`,
+`dolfinx.mesh`, and `mpi4py.MPI`, so the command exits `2`. This confirms the
+current environment cannot perform the real DOLFINx corrected-model forward
+run needed for final acceptance, while still making the blocker explicit and
+machine-checkable.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m atem3d.cli dolfinx-backend-check --output <temp>/dolfinx_backend_status.json
+python -m pytest -q tests/test_corrected_model_runner.py tests/test_cli_subcommands.py tests/test_dolfinx_primary_secondary_metadata.py
+python -m pytest -q
+```
+
+Results: backend-check exited `2` with missing modules listed above, targeted
+pytest passed (`32 passed`), and full pytest passed.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_corrected_model_spec(argv[1:])
     if argv and argv[0] == "corrected-model-run":
         return _main_corrected_model_run(argv[1:])
+    if argv and argv[0] == "dolfinx-backend-check":
+        return _main_dolfinx_backend_check(argv[1:])
     if argv and argv[0] == "corrected-model-convergence-run":
         return _main_corrected_model_convergence_run(argv[1:])
     if argv and argv[0] == "convergence-sweep-report":
@@ -350,6 +352,23 @@ def _main_corrected_model_run(argv: list[str]) -> int:
         effect_path = _write_corrected_model_polarization_effect(acceptance_root, output_dirs)
         print(f"wrote {effect_path}")
     return 0 if all(bool(summary["final_acceptance_passed"]) for summary in summaries) else 1
+
+
+def _main_dolfinx_backend_check(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Check DOLFINx backend imports for corrected-model runs.")
+    parser.add_argument("--output", type=Path, default=Path("dolfinx_backend_status.json"))
+    args = parser.parse_args(argv)
+
+    from . import corrected_model_runner as runner
+
+    status = runner.dolfinx_backend_status()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(status, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"wrote {args.output}")
+    print(f"available: {status['available']}")
+    if status["missing_modules"]:
+        print("missing_modules: " + ", ".join(status["missing_modules"]))
+    return 0 if bool(status["available"]) else 2
 
 
 def _main_corrected_model_convergence_run(argv: list[str]) -> int:
