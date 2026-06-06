@@ -166,6 +166,26 @@ python -m pytest -q tests/test_secondary_zero_contrast.py tests/test_primary_sec
 
 Results: `8 passed` and `23 passed`.
 
+## P6 Corrected-Model Diagnostics Integration Checkpoint (2026-06-06)
+
+`run_corrected_model_validation(...)` now writes the P6
+`primary_secondary_step_equation` block into every corrected-model
+`diagnostics.json`. For no-IP cases this records the active secondary equation
+and RHS convention. For IP cases where the empymod primary already includes
+the IP background and the secondary material is intentionally reduced to a
+no-IP background, the diagnostics record
+`secondary_material_reason = ip_primary_background_included` and preserve the
+original IP Prony equation metadata under `original_ip_material`.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_full_artifact_set tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_ip_secondary_equation_metadata
+python -m pytest -q tests/test_corrected_model_runner.py tests/test_corrected_model_validation.py tests/test_secondary_zero_contrast.py tests/test_primary_secondary_forward.py
+```
+
+Results: `2 passed` and `34 passed`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

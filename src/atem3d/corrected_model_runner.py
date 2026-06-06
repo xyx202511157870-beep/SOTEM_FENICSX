@@ -12,6 +12,7 @@ from typing import Callable
 import numpy as np
 
 from atem3d.materials.prony import DebyeTerm, PronyConductivity
+from atem3d.solvers import secondary_step_equation_metadata
 from atem3d.validation_3comp import (
     ThreeComponentValidationInput,
     write_three_component_validation_artifacts,
@@ -51,6 +52,17 @@ def run_corrected_model_validation(
         "forward": float(forward_runtime),
         "reference": float(reference_runtime),
     }
+    diagnostics = {
+        **dict(spec.get("diagnostics", {})),
+        "runner": spec.get("runner", {}),
+        "source_start": spec.get("source_start"),
+        "source_end": spec.get("source_end"),
+        "receiver": spec.get("receiver"),
+        "runtime_seconds": runtime_seconds,
+    }
+    diagnostics["primary_secondary_step_equation"] = (
+        _primary_secondary_step_equation_metadata_for_case(spec, times)
+    )
     artifact_t0 = time.perf_counter()
     case = ThreeComponentValidationInput(
         output_dir=spec["output_dir"],
@@ -61,14 +73,7 @@ def run_corrected_model_validation(
         case_type=str(spec["case_type"]),
         reference_type=str(spec.get("reference_type", "empymod")),
         magnetic_quantity=str(spec.get("magnetic_quantity", components[-1])),
-        diagnostics={
-            **dict(spec.get("diagnostics", {})),
-            "runner": spec.get("runner", {}),
-            "source_start": spec.get("source_start"),
-            "source_end": spec.get("source_end"),
-            "receiver": spec.get("receiver"),
-            "runtime_seconds": runtime_seconds,
-        },
+        diagnostics=diagnostics,
         resolved_config=spec,
         material=material,
         validation_scope=str(spec.get("validation_scope", "smoke")),
@@ -191,6 +196,38 @@ def _deep_merge_dict(base: dict, overrides: dict) -> dict:
 
 def _default_forward_runner(case_spec: dict) -> np.ndarray:
     return _run_dolfinx_primary_secondary_forward(case_spec)
+
+
+def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: np.ndarray) -> dict:
+    forward_material = _forward_material_from_case_spec(case_spec)
+    sigma_background = float(case_spec.get("sigma_background", _background_sigma_from_case_spec(case_spec)))
+    secondary_material = _secondary_material_for_forward(
+        case_spec,
+        forward_material,
+        sigma_background,
+    )
+    time_array = np.asarray(times, dtype=float)
+    if time_array.ndim != 1 or time_array.size == 0:
+        raise ValueError("observation times must be a non-empty 1D array")
+    metadata = secondary_step_equation_metadata(
+        material=secondary_material,
+        sigma_background=sigma_background,
+        dt=float(time_array[0]),
+    )
+    metadata["dt_source"] = "first_observation_step_from_initial_time_zero"
+    metadata["primary_includes_ip_background"] = bool(
+        dict(case_spec.get("dolfinx_forward", {})).get("primary_includes_ip_background", True)
+    )
+    if forward_material.terms and not secondary_material.terms:
+        metadata["secondary_material_reason"] = "ip_primary_background_included"
+        metadata["original_ip_material"] = secondary_step_equation_metadata(
+            material=forward_material,
+            sigma_background=sigma_background,
+            dt=float(time_array[0]),
+        )
+    else:
+        metadata["secondary_material_reason"] = "case_material"
+    return metadata
 
 
 def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:

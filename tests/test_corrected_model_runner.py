@@ -73,6 +73,39 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
     assert diagnostics["runtime_seconds"]["reference"] >= 0.0
     assert diagnostics["runtime_seconds"]["artifact_total"] >= 0.0
     assert diagnostics["model_schematic"]["source_length_m"] == 1000.0
+    equation = diagnostics["primary_secondary_step_equation"]
+    assert equation["case_type"] == "noip"
+    assert equation["lhs_operator"] == "K + R + M(sigma)/dt"
+    assert equation["rhs_history"] == "M(deltaJ_old - (sigma - sigma_b) Ep_new)/dt"
+    assert equation["dt"] == 1.0e-5
+
+
+def test_run_corrected_model_validation_writes_ip_secondary_equation_metadata(tmp_path):
+    config = CorrectedModelValidationConfig(n_observation_times=3)
+    spec = build_corrected_model_case_specs(tmp_path, config=config)["ip"]
+
+    def fake_response(case_spec):
+        return np.column_stack(
+            [
+                np.ones(len(case_spec["observation_times"])),
+                np.zeros(len(case_spec["observation_times"])),
+                2.0 * np.ones(len(case_spec["observation_times"])),
+            ]
+        )
+
+    run_corrected_model_validation(
+        spec,
+        forward_runner=fake_response,
+        reference_runner=fake_response,
+    )
+
+    diagnostics = json.loads((tmp_path / "ip_3comp" / "diagnostics.json").read_text(encoding="utf-8"))
+    equation = diagnostics["primary_secondary_step_equation"]
+    assert equation["case_type"] == "noip"
+    assert equation["zero_contrast_condition"] == "sigma == sigma_background"
+    assert equation["secondary_material_reason"] == "ip_primary_background_included"
+    assert equation["original_ip_material"]["case_type"] == "ip"
+    assert equation["original_ip_material"]["delta_sigma_zero_degenerates_to_noip"] is True
 
 
 def test_run_corrected_model_convergence_validation_uses_refined_reference_case(tmp_path):
