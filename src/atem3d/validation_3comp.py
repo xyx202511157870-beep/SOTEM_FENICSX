@@ -220,6 +220,8 @@ def validation_acceptance_status(
         blocking_reasons.append("reference_type_not_final_acceptance")
     if not threshold_ok:
         blocking_reasons.append("threshold_above_5pct")
+    if not strict_gate_passed:
+        blocking_reasons.append("strict_error_gate_failed")
     if not physical_gate_passed:
         blocking_reasons.append("physical_error_gate_failed")
 
@@ -230,7 +232,7 @@ def validation_acceptance_status(
         and case_type_ok
         and reference_type_ok
         and threshold_ok
-        and physical_gate_passed
+        and strict_gate_passed
     )
     return {
         "validation_scope": str(validation_scope),

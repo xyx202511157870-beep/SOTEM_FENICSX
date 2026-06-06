@@ -3435,6 +3435,19 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_solver_core.py::test_source_rhs_uses_waveform_interval_average_didt_api tests/test_solver_core.py::test_step_off_source_rhs_uses_initial_on_current_at_first_step`,
   `python -m pytest -q tests/test_solver_core.py tests/test_sources.py tests/test_config_and_io.py`,
   and `python -m pytest -q`, all with exit code 0.
+- Final acceptance strict three-component gate checkpoint (2026-06-06):
+  tightened `validation_acceptance_status` so `corrected_model_full`
+  no-IP/IP acceptance requires `pass_all_components=True`, not only the
+  weak-component physical diagnostic gate. The weak horizontal-component
+  report remains available for interpretation, but it can no longer replace
+  the task-book requirement that all required component error curves pass the
+  5% robust/peak-normalized threshold. Regression coverage now proves that a
+  full-window empymod case with `physical_pass_all_components=True` but
+  `pass_all_components=False` is blocked by `strict_error_gate_failed`.
+  Windows verification ran
+  `python -m pytest -q tests/test_noip_3comp_validation_smoke.py::test_final_acceptance_requires_strict_three_component_error_gate`,
+  `python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_validation_failure_diagnostics.py tests/test_final_acceptance.py tests/test_dolfinx_validation_artifacts.py tests/test_error_metric_floor.py`,
+  and `python -m pytest -q`, all with exit code 0.
 
 ## Next Steps
 

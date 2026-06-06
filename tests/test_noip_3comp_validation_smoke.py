@@ -212,6 +212,26 @@ def test_acceptance_status_rejects_partial_time_window_even_when_errors_pass():
     assert "time_window_not_covered" in status["blocking_reasons"]
 
 
+def test_final_acceptance_requires_strict_three_component_error_gate():
+    status = validation_acceptance_status(
+        np.array([1.0e-5, 1.0e-3, 1.0]),
+        ["Ex", "Ey", "dBzdt"],
+        {
+            "pass_all_components": False,
+            "physical_pass_all_components": True,
+        },
+        case_type="noip",
+        reference_type="empymod",
+        threshold=0.05,
+        validation_scope="corrected_model_full",
+    )
+
+    assert status["physical_error_gate_passed"] is True
+    assert status["strict_error_gate_passed"] is False
+    assert status["final_acceptance_passed"] is False
+    assert "strict_error_gate_failed" in status["blocking_reasons"]
+
+
 def test_validation_rejects_time_table_that_does_not_cover_required_window(tmp_path):
     times = np.array([1.0e-5, 1.0e-3, 1.0e-2])
     reference = np.ones((3, 3))
