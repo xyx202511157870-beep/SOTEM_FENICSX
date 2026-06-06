@@ -3795,6 +3795,106 @@ def _solve_initial_dc_field(msh, spaces, materials, facet_tags, config: Pipeline
     return E0
 
 
+def _solve_dc_secondary_field(
+    msh,
+    spaces,
+    materials,
+    Ep0,
+    config: PipelineConfig,
+    *,
+    sigma_background: float,
+):
+    """Solve the primary-secondary DC initialization problem.
+
+    The scalar secondary potential satisfies
+
+    int sigma0 grad(phi_s).grad(q) dx =
+    int (sigma0 - sigma_b) Ep0.grad(q) dx,
+
+    and the secondary electric field is Es0 = -grad(phi_s).
+    """
+
+    import numpy as np
+    import ufl
+    from dolfinx import fem
+    from dolfinx.fem import petsc as fem_petsc
+    from mpi4py import MPI
+    from petsc4py import PETSc
+
+    V = spaces["V"]
+    S = spaces["S"]
+    sigma0 = materials.get("sigma_initial", materials["sigma"])
+    sigma_b = float(sigma_background)
+    sigma_values = np.asarray(sigma0.x.array, dtype=float)
+    local_contrast = float(np.max(np.abs(sigma_values - sigma_b))) if sigma_values.size else 0.0
+    contrast_norm = float(msh.comm.allreduce(local_contrast, op=MPI.MAX))
+    contrast_is_zero = contrast_norm <= max(1.0e-14, 1.0e-12 * abs(sigma_b))
+
+    phi_s = fem.Function(S, name="dc_secondary_phi")
+    Es0 = fem.Function(V, name="E_secondary_dc")
+    if contrast_is_zero:
+        Es0.x.array[:] = 0.0
+        Es0.x.scatter_forward()
+        phi_s.x.array[:] = 0.0
+        phi_s.x.scatter_forward()
+        return {
+            "phi_s": phi_s,
+            "Es0": Es0,
+            "contrast_is_zero": True,
+            "contrast_norm": contrast_norm,
+            "ksp_iterations": 0,
+            "ksp_reason": 0,
+            "ksp_residual": 0.0,
+        }
+
+    u = ufl.TrialFunction(S)
+    q = ufl.TestFunction(S)
+    sigma_b_const = fem.Constant(msh, PETSc.ScalarType(sigma_b))
+    a = fem.form(sigma0 * ufl.inner(ufl.grad(u), ufl.grad(q)) * ufl.dx)
+    L = fem.form((sigma0 - sigma_b_const) * ufl.inner(Ep0, ufl.grad(q)) * ufl.dx)
+    gauge_dofs = _scalar_potential_gauge_dofs(S)
+    bc = fem.dirichletbc(PETSc.ScalarType(0.0), gauge_dofs, S)
+    A = fem_petsc.assemble_matrix(a, bcs=[bc])
+    A.assemble()
+    b = fem_petsc.assemble_vector(L)
+    fem_petsc.set_bc(b, [bc])
+
+    ksp = PETSc.KSP().create(A.comm)
+    ksp.setOperators(A)
+    ksp.setType("cg")
+    ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=max(config.max_it, 1000))
+    pc = ksp.getPC()
+    pc.setType("hypre")
+    pc.setHYPREType("boomeramg")
+    ksp.setFromOptions()
+    ksp.solve(b, phi_s.x.petsc_vec)
+    phi_s.x.scatter_forward()
+    reason = int(ksp.getConvergedReason())
+    residual = float(ksp.getResidualNorm())
+    its = int(ksp.getIterationNumber())
+    if reason < 0:
+        ksp.destroy()
+        b.destroy()
+        A.destroy()
+        raise RuntimeError(f"DC secondary potential solve failed, reason={reason}, residual={residual:.6e}")
+
+    expr = fem.Expression(-ufl.grad(phi_s), V.element.interpolation_points(), comm=msh.comm)
+    Es0.interpolate(expr)
+    Es0.x.scatter_forward()
+    ksp.destroy()
+    b.destroy()
+    A.destroy()
+    return {
+        "phi_s": phi_s,
+        "Es0": Es0,
+        "contrast_is_zero": False,
+        "contrast_norm": contrast_norm,
+        "ksp_iterations": its,
+        "ksp_reason": reason,
+        "ksp_residual": residual,
+    }
+
+
 def _update_debye_memories(debye, memories, E_new, dt: float) -> None:
     if debye is None:
         return
