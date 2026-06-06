@@ -47,6 +47,9 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
     diagnostics = _read_json(run_dir / "diagnostics.json")
     failure = dict(diagnostics.get("validation_failure", {}))
     convergence = dict(failure.get("convergence_diagnostic", {}))
+    marker = dict(diagnostics.get("leakage_marker_preflight", {}))
+    marker_prediction = dict(marker.get("prediction", {}))
+    marker_reference = dict(marker.get("reference", {}))
     runtime = dict(diagnostics.get("runtime_seconds", {}))
     physical_failed = [
         str(component)
@@ -67,6 +70,14 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
         "failed_time_band": str(convergence.get("failed_time_band", "")),
         "prediction_cells": list(convergence.get("prediction_cells", [])),
         "reference_cells": list(convergence.get("reference_cells", [])),
+        "prediction_leakage_cell_count": int(marker_prediction.get("leakage_cell_count", 0)),
+        "reference_leakage_cell_count": int(marker_reference.get("leakage_cell_count", 0)),
+        "prediction_nearest_channel_distance_m": float(
+            marker_prediction.get("nearest_channel_distance_m", 0.0)
+        ),
+        "reference_nearest_channel_distance_m": float(
+            marker_reference.get("nearest_channel_distance_m", 0.0)
+        ),
         "max_error_Ex": float(summary.get("max_error_Ex", 0.0)),
         "max_error_Ey": float(summary.get("max_error_Ey", 0.0)),
         "max_error_dBzdt": float(summary.get("max_error_dBzdt", summary.get("max_error_Hz_or_dBzdt", 0.0))),
@@ -100,6 +111,10 @@ def _write_sweep_csv(path: Path, runs: list[dict]) -> None:
         "failed_time_band",
         "prediction_cells",
         "reference_cells",
+        "prediction_leakage_cell_count",
+        "reference_leakage_cell_count",
+        "prediction_nearest_channel_distance_m",
+        "reference_nearest_channel_distance_m",
         "max_error_Ex",
         "max_error_Ey",
         "max_error_dBzdt",

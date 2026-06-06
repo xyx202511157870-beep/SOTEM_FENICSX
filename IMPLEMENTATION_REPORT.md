@@ -2869,6 +2869,12 @@ source-term substitution inside the existing total-field equation.
   marker counts. This makes future convergence artifacts self-contained: a
   failed leakage run can be audited for cell-center channel representation
   without rerunning the standalone marker CLI.
+- Convergence sweep summaries now carry the embedded marker diagnostics into
+  both `convergence_sweep_summary.csv` and `.json`: prediction/reference
+  leakage-cell counts and nearest channel distances are visible next to each
+  run's max physical error. This lets domain, mesh, and receiver sweeps be
+  screened for invalid or underrepresented leakage channels directly from the
+  sweep table.
 
 ## Next Steps
 

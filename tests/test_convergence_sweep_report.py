@@ -41,11 +41,15 @@ def test_write_convergence_sweep_report_summarizes_runs(tmp_path):
     json_payload = json.loads((tmp_path / "sweep" / "convergence_sweep_summary.json").read_text(encoding="utf-8"))
     assert json_payload["runs"][0]["failed_time_band"] == "late_time"
     assert json_payload["runs"][1]["reference_cells"] == [4, 4, 2]
+    assert json_payload["runs"][0]["prediction_leakage_cell_count"] == 1
+    assert json_payload["runs"][0]["reference_leakage_cell_count"] == 8
 
     with (tmp_path / "sweep" / "convergence_sweep_summary.csv").open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert rows[0]["label"] == "domain_a"
     assert rows[0]["physical_failed_components"] == "Ex;dBzdt"
+    assert rows[0]["prediction_leakage_cell_count"] == "1"
+    assert rows[0]["reference_leakage_cell_count"] == "8"
     assert rows[1]["max_physical_error"] == "0.21"
 
 
@@ -133,6 +137,18 @@ def _write_run(
                         "reference_cells": reference_cells,
                         "physical_failed_components": ["Ex", "dBzdt"],
                     }
+                },
+                "leakage_marker_preflight": {
+                    "prediction": {
+                        "leakage_cell_count": 1,
+                        "nearest_channel_distance_m": 670.0,
+                        "marked": True,
+                    },
+                    "reference": {
+                        "leakage_cell_count": 8,
+                        "nearest_channel_distance_m": 335.0,
+                        "marked": True,
+                    },
                 },
             }
         ),
