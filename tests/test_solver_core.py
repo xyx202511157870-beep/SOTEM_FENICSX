@@ -1181,6 +1181,41 @@ def test_step_off_source_rhs_uses_initial_on_current_at_first_step():
     np.testing.assert_allclose(sim.source_rhs(0), expected)
 
 
+def test_source_rhs_uses_waveform_interval_average_didt_api():
+    class IntervalOnlyWaveform:
+        has_initial_fields = False
+
+        def value(self, time):
+            return 0.0
+
+        def previous_value(self, time):
+            return 0.0
+
+        def initial_value(self):
+            return 0.0
+
+        def interval_average_didt(self, t0, t1):
+            return -2.0
+
+    mesh = _mesh()
+    source = GroundedWireSource(
+        start=(-1.5, 0.0, 0.0),
+        end=(1.5, 0.0, 0.0),
+        current=3.0,
+        waveform=IntervalOnlyWaveform(),
+    )
+    sim = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+        time_steps=[0.25],
+        sources=[source],
+    )
+
+    expected = -source.edge_vector_interval_average_didt(mesh, 0.0, 0.25)
+
+    np.testing.assert_allclose(sim.source_rhs(0), expected)
+
+
 def test_step_off_initial_magnetic_flux_satisfies_static_ampere_balance():
     mesh = _mesh()
     sigma = np.full(mesh.n_cells, 0.1)

@@ -342,13 +342,12 @@ class TDEMIPSimulation:
     def source_rhs(self, step_index: int) -> np.ndarray:
         """Return source contribution for ``e^(n+1)``."""
 
-        dt = float(self.time_steps[step_index])
         old_time = float(self.times[step_index])
         new_time = float(self.times[step_index + 1])
-        old_source = self.electric_source_term(old_time)
-        if step_index == 0:
-            old_source = self.previous_electric_source_term(old_time)
-        return -(self.electric_source_term(new_time) - old_source) / dt
+        value = np.zeros(self.mesh.n_edges, dtype=float)
+        for source in self.sources:
+            value -= source.edge_vector_interval_average_didt(self.mesh, old_time, new_time)
+        return value
 
     def previous_electric_source_term(self, time: float) -> np.ndarray:
         """Integrated electric source left-limit on edges at a time node."""

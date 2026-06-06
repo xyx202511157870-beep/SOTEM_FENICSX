@@ -3423,6 +3423,18 @@ source-term substitution inside the existing total-field equation.
   verification ran `python -m pytest -q tests/test_corrected_model_runner.py`
   with `18 passed` and `python -m pytest -q` with all tests passing
   (`712 passed`, `2 skipped`).
+- EB source RHS interval-average dI/dt checkpoint (2026-06-06): updated
+  `TDEMIPSimulation.source_rhs` to assemble the source contribution from
+  `GroundedWireSource.edge_vector_interval_average_didt` over each time step
+  instead of differencing endpoint source vectors. This preserves the existing
+  sign convention while allowing step-off, linear ramp-off, and tabulated
+  waveforms to contribute the physically correct interval-average source
+  derivative. Regression coverage now includes a waveform whose endpoint
+  values are zero but whose `interval_average_didt` is nonzero, proving the
+  solver RHS uses the waveform API directly. Windows verification ran
+  `python -m pytest -q tests/test_solver_core.py::test_source_rhs_uses_waveform_interval_average_didt_api tests/test_solver_core.py::test_step_off_source_rhs_uses_initial_on_current_at_first_step`,
+  `python -m pytest -q tests/test_solver_core.py tests/test_sources.py tests/test_config_and_io.py`,
+  and `python -m pytest -q`, all with exit code 0.
 
 ## Next Steps
 
