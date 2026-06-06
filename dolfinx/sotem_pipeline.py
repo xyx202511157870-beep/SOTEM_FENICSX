@@ -3735,6 +3735,58 @@ def _interpolate_vector_callable_to_nedelec_function(spaces, *, name: str, field
     return function
 
 
+def _make_nedelec_rhs_interpolator_from_samples(
+    spaces,
+    *,
+    sample_points=None,
+    name: str = "secondary_rhs_density",
+):
+    """Return a converter from vector samples to a Nedelec Function.
+
+    Constant sample tables are interpolated as constant vector fields. For
+    non-constant sample tables, explicit physical ``sample_points`` are needed
+    so the tabulated callable can match DOLFINx interpolation coordinates.
+    """
+
+    import numpy as np
+
+    points = None if sample_points is None else np.asarray(sample_points, dtype=float)
+
+    def convert(samples):
+        values = np.asarray(samples, dtype=float)
+        if values.ndim != 2 or values.shape[1] != 3 or values.shape[0] == 0:
+            raise ValueError("secondary RHS samples must have shape (n_samples, 3)")
+        if np.allclose(values, values[0], rtol=0.0, atol=0.0):
+            vector = values[0].copy()
+
+            def constant_field(x):
+                return np.vstack(
+                    (
+                        np.full(x.shape[1], vector[0], dtype=float),
+                        np.full(x.shape[1], vector[1], dtype=float),
+                        np.full(x.shape[1], vector[2], dtype=float),
+                    )
+                )
+
+            return _interpolate_vector_callable_to_nedelec_function(
+                spaces,
+                name=name,
+                field_callable=constant_field,
+            )
+        if points is None:
+            raise ValueError("sample_points are required for non-constant secondary RHS samples")
+        from atem3d.primary import TabulatedVectorField
+
+        field = TabulatedVectorField(points=points, values=values)
+        return _interpolate_vector_callable_to_nedelec_function(
+            spaces,
+            name=name,
+            field_callable=field,
+        )
+
+    return convert
+
+
 def _solve_initial_dc_field(msh, spaces, materials, facet_tags, config: PipelineConfig):
     """Solve charge-conserving DC potential and interpolate E0=-grad(phi)."""
 
