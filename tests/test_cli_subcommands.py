@@ -204,6 +204,21 @@ def test_cli_acceptance_report_writes_noip_ip_gate_summary(tmp_path):
     assert summary["blocking_reasons_by_case"]["ip"] == ["physical_error_gate_failed"]
 
 
+def test_cli_corrected_model_spec_writes_latest_geometry_case_specs(tmp_path):
+    spec_path = tmp_path / "corrected_model_spec.json"
+
+    exit_code = cli.main(["corrected-model-spec", str(tmp_path / "runs"), "--output", str(spec_path)])
+
+    assert exit_code == 0
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert spec["noip"]["source_start"] == [-500.0, 200.0, -0.1]
+    assert spec["noip"]["source_end"] == [500.0, 200.0, -0.1]
+    assert spec["noip"]["receiver"] == [0.0, -300.0, -0.1]
+    assert spec["noip"]["validation_scope"] == "corrected_model_full"
+    assert spec["ip"]["case_type"] == "ip"
+    assert spec["ip"]["output_dir"] == str(tmp_path / "runs" / "ip_3comp")
+
+
 def _acceptance_summary(case_type: str, passed: bool, reasons=None):
     reasons = [] if reasons is None else list(reasons)
     return {

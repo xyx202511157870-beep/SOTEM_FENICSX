@@ -25,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_validate_secondary(argv[1:])
     if argv and argv[0] == "acceptance-report":
         return _main_acceptance_report(argv[1:])
+    if argv and argv[0] == "corrected-model-spec":
+        return _main_corrected_model_spec(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
@@ -116,6 +118,21 @@ def _main_acceptance_report(argv: list[str]) -> int:
     print(f"wrote {output_dir / 'final_acceptance_summary.json'}")
     print(f"final_acceptance_passed: {summary['final_acceptance_passed']}")
     return 0 if bool(summary["final_acceptance_passed"]) else 1
+
+
+def _main_corrected_model_spec(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write corrected-model no-IP/IP validation case specs.")
+    parser.add_argument("output_root", type=Path, help="Root directory for no-IP/IP validation outputs")
+    parser.add_argument("--output", type=Path, default=Path("corrected_model_validation_spec.json"))
+    args = parser.parse_args(argv)
+
+    from .corrected_model import build_corrected_model_case_specs
+
+    specs = build_corrected_model_case_specs(args.output_root)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(specs, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"wrote {args.output}")
+    return 0
 
 
 def _main_validate_secondary(argv: list[str]) -> int:

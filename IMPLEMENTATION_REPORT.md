@@ -20,6 +20,9 @@ This report covers the implementation rounds currently committed or staged from 
 - P7 acceptance gate: add a combined no-IP/IP final acceptance report command
   that reads both `error_summary.json` files and fails unless both cases have
   `final_acceptance_passed=true`.
+- Corrected-model spec helper: add a canonical source/receiver/time-window
+  configuration for the latest task geometry and a CLI to write no-IP/IP case
+  specs.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 Validation artifacts now write an explicit `acceptance_status` object and a
@@ -51,6 +54,16 @@ final acceptance.
     `final_acceptance_report.txt` from no-IP/IP `error_summary.json` files.
   - Requires both no-IP and IP cases to pass their own
     `final_acceptance_passed` gates before the combined final gate passes.
+
+- `src/atem3d/corrected_model.py`
+  - `CorrectedModelValidationConfig`
+  - `build_corrected_model_case_specs`
+  - Stores the corrected latest geometry:
+    source `(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver
+    `(0, -300, -0.1)`, current `10 A`, source length `1000 m`, parallel
+    offset `500 m`.
+  - Generates full-window log observation times from `1e-5 s` to `1 s` and
+    no-IP/IP case metadata with `validation_scope=corrected_model_full`.
 
 - `src/atem3d/source_diagnostics.py`
   - `diagnose_source_consistency`
@@ -851,6 +864,19 @@ Outputs:
 The command returns exit code `0` only if both no-IP and IP summaries have
 `final_acceptance_passed=true`. It returns exit code `1` and records blocking
 reasons when either case is missing or failed.
+
+## Writing Corrected-Model Case Specs
+
+Use the canonical corrected-model helper to write no-IP/IP case metadata:
+
+```bash
+tdem-ip-forward corrected-model-spec outputs/corrected_model --output corrected_model_validation_spec.json
+```
+
+The spec records the corrected source/receiver coordinates, source current,
+full observation time window, components, empymod primary configuration, and
+per-case output directories. It is intended as the shared input contract for
+the pending corrected-model DOLFINx/empymod validation runner.
 
 ## Current Accuracy Status
 
@@ -2061,6 +2087,8 @@ source-term substitution inside the existing total-field equation.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - `tdem-ip-forward acceptance-report` summarizes no-IP/IP validation outputs; it does not create those outputs or repair failing component errors.
+- `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
+  metadata; it does not run the forward solver.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities, runs a
   small DOLFINx primary-secondary leakage-channel forward smoke on a unit-cube

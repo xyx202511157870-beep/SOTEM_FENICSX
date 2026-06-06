@@ -1,4 +1,10 @@
-from atem3d import AverageReceiver, PointReceiver, build_receiver
+from atem3d import (
+    AverageReceiver,
+    CorrectedModelValidationConfig,
+    PointReceiver,
+    build_corrected_model_case_specs,
+    build_receiver,
+)
 
 
 def test_receiver_builders_are_available_from_public_api():
@@ -16,3 +22,10 @@ def test_receiver_builders_are_available_from_public_api():
 
     assert isinstance(point, PointReceiver)
     assert isinstance(average, AverageReceiver)
+
+
+def test_corrected_model_helpers_are_available_from_public_api(tmp_path):
+    config = CorrectedModelValidationConfig()
+    specs = build_corrected_model_case_specs(tmp_path, config)
+
+    assert specs["noip"]["source_start"] == [-500.0, 200.0, -0.1]

@@ -21,6 +21,10 @@ from .metrics import (
     robust_relative_error,
     summarize_errors,
 )
+from .corrected_model import (
+    CorrectedModelValidationConfig,
+    build_corrected_model_case_specs,
+)
 from .receivers import AverageReceiver, PointReceiver, build_receiver
 from .waveforms import (
     LinearRampOffWaveform,
@@ -34,11 +38,13 @@ __all__ = [
     "LinearResponseFit",
     "LinearRampOffWaveform",
     "AverageReceiver",
+    "CorrectedModelValidationConfig",
     "PointReceiver",
     "StepOffWaveform",
     "TabulatedWaveform",
     "Waveform",
     "absolute_linf",
+    "build_corrected_model_case_specs",
     "build_internal_time_grid",
     "build_receiver",
     "fit_linear_response_components",
