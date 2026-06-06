@@ -2808,6 +2808,14 @@ source-term substitution inside the existing total-field equation.
   counts into `diagnostics.json`, and recommends the next sweep type. This is
   intended to make late-time leakage convergence failures actionable instead
   of leaving only aggregate max-error numbers.
+- `tdem-ip-forward convergence-sweep-report` now summarizes one or more
+  convergence artifact directories into `convergence_sweep_summary.csv` and
+  `convergence_sweep_summary.json`. The existing corrected leakage no-IP
+  convergence artifacts were regenerated from their saved CSV files with the
+  new row-level diagnostics and summarized as
+  `default_2x2x1_vs_4x4x2`: `failed_time_band=late_time`,
+  `physical_failed_components=[Ex,dBzdt]`, `max_physical_error=0.6238305`,
+  coarse runtime `23.93 s`, refined-reference runtime `164.08 s`.
 
 ## Next Steps
 

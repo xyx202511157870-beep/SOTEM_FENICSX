@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_corrected_model_run(argv[1:])
     if argv and argv[0] == "corrected-model-convergence-run":
         return _main_corrected_model_convergence_run(argv[1:])
+    if argv and argv[0] == "convergence-sweep-report":
+        return _main_convergence_sweep_report(argv[1:])
     if argv and argv[0] == "corrected-leakage-model-spec":
         return _main_corrected_leakage_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-model-spec":
@@ -283,6 +285,24 @@ def _main_corrected_model_convergence_run(argv: list[str]) -> int:
         print(
             f"{case_name}: physical_pass_all_components={summary.get('physical_pass_all_components', False)}"
         )
+    return 0
+
+
+def _main_convergence_sweep_report(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Summarize multiple convergence validation run directories.")
+    parser.add_argument("run_dirs", type=Path, nargs="+", help="Validation run directories")
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/convergence_sweep"))
+    parser.add_argument("--labels", help="Comma-separated labels matching run_dirs")
+    args = parser.parse_args(argv)
+
+    from .convergence_sweep import write_convergence_sweep_report
+
+    labels = None
+    if args.labels:
+        labels = [value.strip() for value in args.labels.split(",") if value.strip()]
+    summary = write_convergence_sweep_report(args.run_dirs, args.output_dir, labels=labels)
+    print(f"wrote {args.output_dir / 'convergence_sweep_summary.json'}")
+    print(f"best_by_max_physical_error: {summary['best_by_max_physical_error']['label']}")
     return 0
 
 
