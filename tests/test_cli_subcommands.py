@@ -1,9 +1,30 @@
 import builtins
 import json
 
+import pytest
 import yaml
 
 from atem3d import cli
+
+
+def test_cli_top_level_help_lists_task_book_subcommands(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help"])
+
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    for command in [
+        "run",
+        "plot",
+        "validate-noip-3comp",
+        "validate-ip-3comp",
+        "validate-secondary",
+        "corrected-model-spec",
+        "corrected-model-run",
+        "dolfinx-backend-check",
+        "acceptance-report",
+    ]:
+        assert command in output
 
 
 def test_cli_run_subcommand_dispatches_to_main_run(monkeypatch):

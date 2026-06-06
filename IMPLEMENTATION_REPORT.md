@@ -340,6 +340,30 @@ python -m pytest -q
 Results: backend-check exited `2` with missing modules listed above, targeted
 pytest passed (`32 passed`), and full pytest passed.
 
+## Task-Book CLI Help Checkpoint (2026-06-06)
+
+`tdem-ip-forward --help` now presents a top-level task-book command index
+instead of falling through to the legacy `run` parser. The help output lists
+the required validation and diagnostic commands including `run`, `plot`,
+`validate-noip-3comp`, `validate-ip-3comp`, `validate-secondary`,
+`corrected-model-spec`, `corrected-model-run`, `dolfinx-backend-check`, and
+`acceptance-report`, plus the current corrected-model/published-paper
+diagnostic commands. This makes the command surface auditable before running
+large DOLFINx jobs.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_cli_subcommands.py::test_cli_top_level_help_lists_task_book_subcommands
+python -m pytest -q tests/test_cli_subcommands.py tests/test_validation_3comp_cli.py
+python -m atem3d.cli --help
+python -m pytest -q
+```
+
+Results: the new top-level help regression test passed, CLI-focused pytest
+passed (`12 passed`), `python -m atem3d.cli --help` printed the top-level
+command index, and full pytest exited `0`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

@@ -15,10 +15,34 @@ from .validation_3comp import (
     write_three_component_validation_artifacts,
 )
 
+_TOP_LEVEL_COMMANDS = (
+    ("run", "Run a grounded-wire TDEM-IP simulation from a YAML config."),
+    ("plot", "Regenerate three-component validation plots from CSV artifacts."),
+    ("validate-noip-3comp", "Write no-IP Ex/Ey/Hz-or-dBzdt validation artifacts."),
+    ("validate-ip-3comp", "Write IP Ex/Ey/Hz-or-dBzdt validation artifacts."),
+    ("validate-secondary", "Run primary-secondary zero-contrast validation artifacts."),
+    ("acceptance-report", "Combine no-IP/IP error summaries into a final acceptance report."),
+    ("corrected-model-spec", "Write corrected source/receiver no-IP/IP case specs."),
+    ("corrected-model-run", "Run corrected-model no-IP/IP validation artifacts."),
+    ("dolfinx-backend-check", "Check required DOLFINx/FEniCSx backend imports."),
+    ("corrected-model-convergence-run", "Run coarse-vs-refined corrected-model diagnostics."),
+    ("convergence-sweep-report", "Summarize convergence diagnostic artifact directories."),
+    ("leakage-marker-diagnostics", "Preflight leakage-channel cell marker coverage."),
+    ("corrected-leakage-model-spec", "Write corrected leakage-channel diagnostic specs."),
+    ("model-schematic", "Write a corrected-model source/receiver schematic."),
+    ("polarization-effect", "Write IP-minus-noIP response and error artifacts."),
+    ("published-paper-model-spec", "Write the published-paper reproduction target spec."),
+    ("published-paper-digitization-template", "Write paper-curve digitization templates."),
+    ("published-paper-curve-artifacts", "Compare predictions against digitized paper curves."),
+    ("published-paper-prony-materials", "Write Prony materials fitted from paper Cole-Cole models."),
+)
+
 
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] in {"-h", "--help"}:
+        return _main_help(argv)
     if argv and argv[0] == "run":
         return _main_run(argv[1:])
     if argv and argv[0] == "plot":
@@ -56,6 +80,18 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
+
+
+def _main_help(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="tdem-ip-forward",
+        description="ATEM3D grounded-wire TDEM/IP forward modelling commands.",
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="command")
+    for command, help_text in _TOP_LEVEL_COMMANDS:
+        subparsers.add_parser(command, help=help_text)
+    parser.parse_args(argv)
+    return 0
 
 
 def _main_run(argv: list[str] | None = None) -> int:
