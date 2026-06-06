@@ -39,6 +39,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     `waveform_integral_residual`.
 
 - `dolfinx/sotem_pipeline.py`
+  - Default source/receiver geometry now matches the corrected latest model:
+    source `(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver
+    `(0, -300, -0.1)`, source current `10 A`, expected source length
+    `1000 m`, and expected parallel offset `500 m`.
   - Added `min_steps_during_turnoff`.
   - Added `min_steps_before_first_observation` for after-ramp internal
     substeps between ramp-off end and the first observation output.

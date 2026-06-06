@@ -61,16 +61,16 @@ class PipelineConfig:
     air_height: float = 10_000.0
     earth_depth: float = 25_000.0
 
-    source_start: tuple[float, float, float] = (-50.0, 0.0, -0.1)
-    source_end: tuple[float, float, float] = (50.0, 0.0, -0.1)
-    source_current: float = 1.0
+    source_start: tuple[float, float, float] = (-500.0, 200.0, -0.1)
+    source_end: tuple[float, float, float] = (500.0, 200.0, -0.1)
+    source_current: float = 10.0
     ramp_off_time: float = 1.0e-5
     wire_radius: float = 2.5
     source_mesh_size: float = 5.0
     source_refinement_radius: float = 100.0
     source_quadrature_points: int = 0
 
-    receiver: tuple[float, float, float] = (500.0, 50.0, -0.1)
+    receiver: tuple[float, float, float] = (0.0, -300.0, -0.1)
     receiver_type: str = "point"  # point, volume_average, disk_average
     receiver_average_radius: float = 2.0
     receiver_diagnostic_types: tuple[str, ...] | str = ()
@@ -86,8 +86,8 @@ class PipelineConfig:
     sponge_power: float = 2.0
     sponge_apply_to_initial: bool = False
     sponge_sides: tuple[str, ...] = SPONGE_ALL_SIDES
-    expected_source_length: float = 100.0
-    expected_parallel_offset: float = 50.0
+    expected_source_length: float = 1000.0
+    expected_parallel_offset: float = 500.0
     geometry_tolerance: float = 1.0e-8
 
     rho_air: float = 1.0e8
@@ -180,7 +180,7 @@ class PipelineConfig:
 
 
 def validate_geometry_consistency(config: PipelineConfig) -> dict[str, float]:
-    """Validate the intended 100 m wire and 50 m parallel-line survey geometry."""
+    """Validate the intended 1000 m wire and 500 m parallel-line survey geometry."""
 
     import numpy as np
 
@@ -7136,16 +7136,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cole-n-freq", type=int, default=96)
     parser.add_argument("--rho-air", type=float, default=1.0e8)
     parser.add_argument("--rho-earth", type=float, default=100.0)
-    parser.add_argument("--source-start-x", type=float, default=-50.0)
-    parser.add_argument("--source-start-y", type=float, default=0.0)
+    parser.add_argument("--source-start-x", type=float, default=-500.0)
+    parser.add_argument("--source-start-y", type=float, default=200.0)
     parser.add_argument("--source-start-z", type=float, default=-0.1)
-    parser.add_argument("--source-end-x", type=float, default=50.0)
-    parser.add_argument("--source-end-y", type=float, default=0.0)
+    parser.add_argument("--source-end-x", type=float, default=500.0)
+    parser.add_argument("--source-end-y", type=float, default=200.0)
     parser.add_argument("--source-end-z", type=float, default=-0.1)
-    parser.add_argument("--source-current", type=float, default=1.0)
+    parser.add_argument("--source-current", type=float, default=10.0)
     parser.add_argument("--ramp-off-time", type=float, default=1.0e-5)
-    parser.add_argument("--receiver-x", type=float, default=500.0)
-    parser.add_argument("--receiver-y", type=float, default=50.0)
+    parser.add_argument("--receiver-x", type=float, default=0.0)
+    parser.add_argument("--receiver-y", type=float, default=-300.0)
     parser.add_argument("--receiver-z", type=float, default=-0.1)
     parser.add_argument("--source-mesh-size", type=float, default=5.0)
     parser.add_argument("--source-refinement-radius", type=float, default=100.0)
@@ -7166,8 +7166,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sponge-apply-to-initial", action="store_true", help="Also apply the sponge to the DC/on-time initial solve; normally leave this off.")
     parser.add_argument("--sponge-sides", default=",".join(SPONGE_ALL_SIDES), help="Comma-separated active sponge sides: x_min,x_max,y_min,y_max,z_min,z_max.")
     parser.add_argument("--nedelec-order", type=int, choices=[1, 2], default=1)
-    parser.add_argument("--expected-source-length", type=float, default=100.0)
-    parser.add_argument("--expected-parallel-offset", type=float, default=50.0)
+    parser.add_argument("--expected-source-length", type=float, default=1000.0)
+    parser.add_argument("--expected-parallel-offset", type=float, default=500.0)
     parser.add_argument("--wire-radius", type=float, default=2.5)
     parser.add_argument("--time-growth", type=float, default=1.05)
     parser.add_argument("--time-method", choices=["theta", "bdf2"], default="theta")

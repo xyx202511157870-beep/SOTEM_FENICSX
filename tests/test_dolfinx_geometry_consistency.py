@@ -18,14 +18,18 @@ def _load_pipeline_module():
     return module
 
 
-def test_default_geometry_is_100m_wire_with_50m_parallel_offset():
+def test_default_geometry_is_latest_1000m_wire_with_500m_parallel_offset():
     sp = _load_pipeline_module()
 
     config = sp.PipelineConfig()
     diagnostics = sp.validate_geometry_consistency(config)
 
-    assert diagnostics["source_length"] == pytest.approx(100.0)
-    assert diagnostics["parallel_offset"] == pytest.approx(50.0)
+    assert config.source_start == pytest.approx((-500.0, 200.0, -0.1))
+    assert config.source_end == pytest.approx((500.0, 200.0, -0.1))
+    assert config.receiver == pytest.approx((0.0, -300.0, -0.1))
+    assert config.source_current == pytest.approx(10.0)
+    assert diagnostics["source_length"] == pytest.approx(1000.0)
+    assert diagnostics["parallel_offset"] == pytest.approx(500.0)
 
 
 def test_geometry_consistency_rejects_wrong_parallel_offset():
