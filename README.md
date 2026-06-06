@@ -1,5 +1,57 @@
 # ATEM3D: Grounded-Wire TDEM With Debye IP
 
+## Current FEniCSx Task-Book Workflow
+
+The current engineering line for the task book is the FEniCSx
+primary-secondary corrected-model workflow under `src/atem3d/`. The older
+finite-volume/SimPEG-style prototype is still kept as a legacy diagnostic
+baseline, but it is not the authoritative final-acceptance path.
+
+Use WSL with the conda FEniCSx environment for real DOLFINx runs:
+
+```bash
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate fenicsx
+cd "/mnt/d/Doctor/codex_app/simpeg自编时域电性源瞬变电磁法求解"
+export PYTHONPATH="$PWD/src"
+```
+
+Check the backend:
+
+```bash
+python -m atem3d.cli dolfinx-backend-check --output /tmp/atem3d_backend_status.json
+cat /tmp/atem3d_backend_status.json
+```
+
+Run the corrected homogeneous no-IP/IP final-acceptance chain:
+
+```bash
+python -m atem3d.cli corrected-model-spec dolfinx/runs/latest_corrected_model --output dolfinx/runs/latest_corrected_model/spec.json
+python -u -m atem3d.cli corrected-model-run dolfinx/runs/latest_corrected_model/spec.json --case both --output-root dolfinx/runs/latest_corrected_model
+python -u -m atem3d.cli acceptance-report dolfinx/runs/latest_corrected_model/acceptance.yaml
+```
+
+Run the memory-safe terrain/leakage diagnostic smoke:
+
+```bash
+python -u -m atem3d.cli corrected-terrain-smoke-run dolfinx/runs/latest_terrain_smoke_cli --case both --spec-output dolfinx/runs/latest_terrain_smoke_cli/spec.json
+```
+
+Always shut WSL down after a run:
+
+```powershell
+wsl --shutdown
+wsl -l -v
+```
+
+The current requirement-by-requirement status is tracked in
+[`TASK_BOOK_STATUS.md`](TASK_BOOK_STATUS.md). The important limitation is that
+the full homogeneous no-IP/IP empymod acceptance is valid, while terrain and
+leakage runs are currently diagnostic smoke/self-convergence evidence unless
+an independent nonzero 3D physical reference is supplied.
+
+## Legacy FV Prototype
+
 This repository implements a direct time-domain finite-volume prototype for a
 grounded electric wire source in 3D media, with induced-polarization memory
 coupled directly into the time-stepping equations.

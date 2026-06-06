@@ -19,10 +19,21 @@ def test_cli_top_level_help_lists_task_book_subcommands(capsys):
         "validate-noip-3comp",
         "validate-ip-3comp",
         "validate-secondary",
+        "model-schematic",
+        "polarization-effect",
         "corrected-model-spec",
         "corrected-model-run",
         "dolfinx-backend-check",
+        "corrected-model-convergence-run",
+        "convergence-sweep-report",
+        "leakage-marker-diagnostics",
+        "corrected-leakage-model-spec",
+        "corrected-terrain-smoke-run",
         "acceptance-report",
+        "published-paper-model-spec",
+        "published-paper-digitization-template",
+        "published-paper-curve-artifacts",
+        "published-paper-prony-materials",
     ]:
         assert command in output
 
