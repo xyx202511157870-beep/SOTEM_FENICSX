@@ -40,7 +40,9 @@ def test_cli_validate_noip_3comp_writes_artifacts_from_csv(tmp_path):
     assert (output_dir / "run_config_resolved.yaml").is_file()
     payload = yaml.safe_load((output_dir / "error_summary.json").read_text(encoding="utf-8"))
     assert payload["validation_scope"] == "corrected_model_full"
-    assert payload["final_acceptance_passed"] is True
+    assert payload["pass_all_components"] is True
+    assert payload["final_acceptance_passed"] is False
+    assert "internal_time_grid_not_verified" in payload["acceptance_status"]["blocking_reasons"]
 
 
 def test_cli_validate_ip_3comp_reads_prony_material_metadata(tmp_path):

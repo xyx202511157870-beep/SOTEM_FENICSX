@@ -67,6 +67,7 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
         reference_type=case.reference_type,
         threshold=case.threshold,
         validation_scope=case.validation_scope,
+        diagnostics=case.diagnostics,
     )
     summary["acceptance_status"] = acceptance_status
     summary["full_window_covered"] = bool(acceptance_status["full_window_covered"])
@@ -184,6 +185,7 @@ def validation_acceptance_status(
     validation_scope: str = "smoke",
     required_time_min: float = REQUIRED_TIME_MIN,
     required_time_max: float = REQUIRED_TIME_MAX,
+    diagnostics: dict | None = None,
 ) -> dict:
     """Return the final-acceptance gate status for a validation table."""
 
@@ -204,6 +206,10 @@ def validation_acceptance_status(
     threshold_ok = float(threshold) <= 0.05
     physical_gate_passed = bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
     strict_gate_passed = bool(summary.get("pass_all_components", False))
+    internal_time_grid_verified = _internal_time_grid_verified(
+        diagnostics,
+        required_time_max=float(required_time_max),
+    )
 
     blocking_reasons: list[str] = []
     if not scope_is_final:
@@ -224,6 +230,8 @@ def validation_acceptance_status(
         blocking_reasons.append("strict_error_gate_failed")
     if not physical_gate_passed:
         blocking_reasons.append("physical_error_gate_failed")
+    if scope_is_final and not internal_time_grid_verified:
+        blocking_reasons.append("internal_time_grid_not_verified")
 
     final_acceptance_passed = bool(
         scope_is_final
@@ -233,6 +241,7 @@ def validation_acceptance_status(
         and reference_type_ok
         and threshold_ok
         and strict_gate_passed
+        and internal_time_grid_verified
     )
     return {
         "validation_scope": str(validation_scope),
@@ -253,9 +262,34 @@ def validation_acceptance_status(
         "threshold_requirement_met": bool(threshold_ok),
         "strict_error_gate_passed": strict_gate_passed,
         "physical_error_gate_passed": physical_gate_passed,
+        "internal_time_grid_verified": internal_time_grid_verified,
         "final_acceptance_passed": final_acceptance_passed,
         "blocking_reasons": blocking_reasons,
     }
+
+
+def _internal_time_grid_verified(
+    diagnostics: dict | None,
+    *,
+    required_time_max: float,
+) -> bool:
+    diagnostics = dict(diagnostics or {})
+    summaries = []
+    direct = diagnostics.get("primary_secondary_internal_time_grid")
+    if isinstance(direct, dict):
+        summaries.append(direct)
+    equation = diagnostics.get("primary_secondary_step_equation")
+    if isinstance(equation, dict) and isinstance(equation.get("internal_time_grid"), dict):
+        summaries.append(equation["internal_time_grid"])
+    for summary in summaries:
+        if (
+            bool(summary.get("contains_turnoff_start", False))
+            and bool(summary.get("contains_turnoff_end", False))
+            and bool(summary.get("contains_all_observation_outputs", False))
+            and float(summary.get("last_output_internal_time_s", 0.0)) >= float(required_time_max)
+        ):
+            return True
+    return False
 
 
 def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict:

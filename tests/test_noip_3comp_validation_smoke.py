@@ -149,6 +149,16 @@ def test_corrected_model_full_scope_can_claim_final_acceptance(tmp_path):
             reference_type="empymod",
             magnetic_quantity="dBzdt",
             validation_scope="corrected_model_full",
+            diagnostics={
+                "primary_secondary_step_equation": {
+                    "internal_time_grid": {
+                        "contains_turnoff_start": True,
+                        "contains_turnoff_end": True,
+                        "contains_all_observation_outputs": True,
+                        "last_output_internal_time_s": 1.00001,
+                    }
+                }
+            },
         )
     )
 
@@ -230,6 +240,51 @@ def test_final_acceptance_requires_strict_three_component_error_gate():
     assert status["strict_error_gate_passed"] is False
     assert status["final_acceptance_passed"] is False
     assert "strict_error_gate_failed" in status["blocking_reasons"]
+
+
+def test_final_acceptance_requires_internal_time_grid_diagnostics():
+    base_kwargs = {
+        "case_type": "noip",
+        "reference_type": "empymod",
+        "threshold": 0.05,
+        "validation_scope": "corrected_model_full",
+    }
+    passing_summary = {
+        "pass_all_components": True,
+        "physical_pass_all_components": True,
+    }
+
+    missing = validation_acceptance_status(
+        np.array([1.0e-5, 1.0e-3, 1.0]),
+        ["Ex", "Ey", "dBzdt"],
+        passing_summary,
+        **base_kwargs,
+    )
+
+    assert missing["internal_time_grid_verified"] is False
+    assert missing["final_acceptance_passed"] is False
+    assert "internal_time_grid_not_verified" in missing["blocking_reasons"]
+
+    verified = validation_acceptance_status(
+        np.array([1.0e-5, 1.0e-3, 1.0]),
+        ["Ex", "Ey", "dBzdt"],
+        passing_summary,
+        diagnostics={
+            "primary_secondary_step_equation": {
+                "internal_time_grid": {
+                    "contains_turnoff_start": True,
+                    "contains_turnoff_end": True,
+                    "contains_all_observation_outputs": True,
+                    "last_output_internal_time_s": 1.00001,
+                }
+            }
+        },
+        **base_kwargs,
+    )
+
+    assert verified["internal_time_grid_verified"] is True
+    assert verified["final_acceptance_passed"] is True
+    assert "internal_time_grid_not_verified" not in verified["blocking_reasons"]
 
 
 def test_validation_rejects_time_table_that_does_not_cover_required_window(tmp_path):

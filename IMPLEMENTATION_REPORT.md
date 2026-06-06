@@ -3504,6 +3504,23 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_full_artifact_set tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_ip_secondary_equation_metadata tests/test_corrected_model_runner.py::test_corrected_model_spec_cli_allows_observation_time_count_override`,
   `python -m pytest -q tests/test_time_grid.py tests/test_primary_secondary_forward.py tests/test_corrected_model_runner.py tests/test_dolfinx_primary_secondary_metadata.py`,
   and `python -m pytest -q`, all with exit code 0.
+- Final acceptance internal-grid evidence checkpoint (2026-06-06): tightened
+  the final `corrected_model_full` acceptance gate so a case cannot claim final
+  acceptance unless diagnostics prove the internal time grid contains the
+  turnoff start, the turnoff end, all `t_off + t_obs` output times, and reaches
+  the required final observation window. Plain CSV validation can still report
+  passing component errors, but without internal-grid diagnostics it is blocked
+  by `internal_time_grid_not_verified`. The corrected-model DOLFINx forward
+  runner now copies JSON-safe adapter diagnostics
+  (`primary_secondary_internal_time_grid`, `primary_secondary_step_equation`,
+  and `dc_result`) back into the validation case before artifact writing, so
+  real primary-secondary DOLFINx runs can provide this final-acceptance
+  evidence. WSL was rechecked and then shut down; `/usr/bin/python3` still lacks
+  `numpy`, `pytest`, `dolfinx.fem`, `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`,
+  and `petsc4py`, and `wsl -l -v` confirmed `Ubuntu Stopped`. Windows
+  verification ran
+  `python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_failure_diagnostics.py tests/test_final_acceptance.py tests/test_corrected_model_runner.py`
+  with exit code 0.
 
 ## Next Steps
 

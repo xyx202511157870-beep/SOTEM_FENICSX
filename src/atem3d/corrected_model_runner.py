@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import importlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import time
@@ -364,6 +365,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     fem_points = interpolation["points"]
     receiver_locations = np.asarray([case_spec["receiver"]], dtype=float)
     components = tuple(str(value) for value in case_spec["components"])
+    forward_diagnostics = case_spec.setdefault("diagnostics", {})
 
     if "leakage_channel" in forward_cfg:
         return _run_dolfinx_leakage_channel_forward(
@@ -395,6 +397,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
             contrast_atol=float(forward_cfg.get("contrast_atol", 1.0e-12)),
             turnoff_time=turnoff_time,
             turnoff_steps=turnoff_steps,
+            diagnostics=forward_diagnostics,
         )
         return operator.forward(np.asarray(case_spec["observation_times"], dtype=float))
 
@@ -431,7 +434,9 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         turnoff_time=turnoff_time,
         turnoff_steps=turnoff_steps,
     )
-    return built["operator"].forward(np.asarray(case_spec["observation_times"], dtype=float))
+    values = built["operator"].forward(np.asarray(case_spec["observation_times"], dtype=float))
+    _copy_dolfinx_forward_diagnostics_to_case_spec(case_spec, built["diagnostics"])
+    return values
 
 
 def _run_dolfinx_leakage_channel_forward(
@@ -509,7 +514,34 @@ def _run_dolfinx_leakage_channel_forward(
         turnoff_time=turnoff_time,
         turnoff_steps=turnoff_steps,
     )
-    return built_operator["operator"].forward(times)
+    values = built_operator["operator"].forward(times)
+    _copy_dolfinx_forward_diagnostics_to_case_spec(case_spec, built_operator["diagnostics"])
+    return values
+
+
+def _copy_dolfinx_forward_diagnostics_to_case_spec(
+    case_spec: dict,
+    forward_diagnostics: dict,
+) -> None:
+    diagnostics = case_spec.setdefault("diagnostics", {})
+    for key in (
+        "primary_secondary_internal_time_grid",
+        "primary_secondary_step_equation",
+        "dc_result",
+    ):
+        if key not in forward_diagnostics:
+            continue
+        value = forward_diagnostics[key]
+        if _is_json_serializable(value):
+            diagnostics[key] = deepcopy(value)
+
+
+def _is_json_serializable(value) -> bool:
+    try:
+        json.dumps(value)
+    except TypeError:
+        return False
+    return True
 
 
 def _leakage_material_from_config(leakage_cfg: dict) -> PronyConductivity:

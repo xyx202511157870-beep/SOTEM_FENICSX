@@ -20,6 +20,7 @@ from atem3d.corrected_model_runner import run_corrected_model_validation
 from atem3d.corrected_model_runner import run_corrected_model_convergence_validation
 from atem3d.corrected_model_runner import _default_forward_runner
 from atem3d.corrected_model_runner import _default_reference_runner
+from atem3d.corrected_model_runner import _copy_dolfinx_forward_diagnostics_to_case_spec
 from atem3d.corrected_model_runner import dolfinx_backend_status
 
 
@@ -203,6 +204,37 @@ def test_default_forward_runner_reports_incomplete_dolfinx_backend(tmp_path, mon
 
     with pytest.raises(ImportError, match="DOLFINx forward backend is unavailable"):
         _default_forward_runner(spec)
+
+
+def test_copy_dolfinx_forward_diagnostics_keeps_only_json_safe_acceptance_evidence():
+    case_spec = {}
+    function_like = object()
+
+    _copy_dolfinx_forward_diagnostics_to_case_spec(
+        case_spec,
+        {
+            "E": function_like,
+            "primary_secondary_internal_time_grid": {
+                "contains_turnoff_start": True,
+                "contains_turnoff_end": True,
+                "contains_all_observation_outputs": True,
+                "last_output_internal_time_s": 1.00001,
+            },
+            "primary_secondary_step_equation": {
+                "case_type": "noip",
+                "dt": 1.0e-6,
+            },
+            "dc_result": {
+                "contrast_is_zero": False,
+            },
+        },
+    )
+
+    diagnostics = case_spec["diagnostics"]
+    assert diagnostics["primary_secondary_internal_time_grid"]["last_output_internal_time_s"] == pytest.approx(1.00001)
+    assert diagnostics["primary_secondary_step_equation"]["case_type"] == "noip"
+    assert diagnostics["dc_result"]["contrast_is_zero"] is False
+    assert "E" not in diagnostics
 
 
 def test_dolfinx_backend_status_reports_runtime_and_test_dependencies(monkeypatch):

@@ -183,7 +183,7 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert float(diagnostic_rows[1]["selected_center_z_mean"]) == pytest.approx(-0.05)
 
 
-def test_dolfinx_validation_artifacts_can_mark_corrected_model_full_acceptance(tmp_path):
+def test_dolfinx_validation_artifacts_requires_internal_grid_evidence_for_final_acceptance(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path)
     times = np.array([1.0e-5, 1.0e-3, 1.0])
@@ -203,10 +203,11 @@ def test_dolfinx_validation_artifacts_can_mark_corrected_model_full_acceptance(t
 
     report = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
     diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
-    assert report["final_acceptance_passed"] is True
-    assert report["acceptance_status"]["blocking_reasons"] == []
-    assert diagnostics["acceptance_status"]["final_acceptance_passed"] is True
-    assert summary["final_acceptance_passed"] is True
+    assert report["pass_all_components"] is True
+    assert report["final_acceptance_passed"] is False
+    assert "internal_time_grid_not_verified" in report["acceptance_status"]["blocking_reasons"]
+    assert diagnostics["acceptance_status"]["final_acceptance_passed"] is False
+    assert summary["final_acceptance_passed"] is False
 
 
 def test_validation_artifacts_report_physical_pass_for_weak_horizontal_component(tmp_path):
