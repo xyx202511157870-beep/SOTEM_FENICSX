@@ -352,6 +352,7 @@ def _leakage_marker_diagnostics_from_forward(forward_cfg: dict, diagnostics_func
         cells=forward["cells"],
         channel_points=leakage["points"],
         radius=float(leakage["radius"]),
+        min_marked_cells=int(leakage.get("min_marked_cells", 0)),
     )
 
 

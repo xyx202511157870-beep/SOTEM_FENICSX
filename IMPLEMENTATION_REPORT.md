@@ -2875,6 +2875,22 @@ source-term substitution inside the existing total-field equation.
   run's max physical error. This lets domain, mesh, and receiver sweeps be
   screened for invalid or underrepresented leakage channels directly from the
   sweep table.
+- Leakage-channel marking now supports a conservative nearest-cell fallback
+  through `min_marked_cells`. The corrected leakage no-IP/IP specs set
+  `min_marked_cells=1`, the DOLFINx leakage forward path uses the same value
+  at runtime, and both convergence preflight diagnostics and the standalone
+  `tdem-ip-forward leakage-marker-diagnostics` CLI report
+  `initial_leakage_cell_count`, `fallback_used`,
+  `fallback_added_cell_count`, and `min_marked_cells`. This prevents a
+  memory-safe coarse diagnostic mesh from silently running with no leakage
+  channel cells, while still recording when the fallback was required.
+- Windows verification after the marker fallback wiring ran
+  `python -m pytest -q tests/test_complex_terrain_leakage_smoke.py tests/test_corrected_model_runner.py`
+  with `21 passed`, followed by `python -m pytest -q` with all tests passing
+  (`703 passed`, `2 skipped`). This verifies the pure marker diagnostics,
+  corrected leakage specs, runner preflight, and CLI diagnostics path; it does
+  not change the current conclusion that nonzero corrected leakage/terrain
+  final 5% acceptance remains unresolved.
 
 ## Next Steps
 

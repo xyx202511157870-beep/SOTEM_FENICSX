@@ -46,6 +46,14 @@ class CellMaterialMap:
         return values
 
 
+@dataclass(frozen=True)
+class LeakageMarkerResult:
+    """Markers plus diagnostics for leakage-channel marking."""
+
+    markers: np.ndarray
+    diagnostics: dict[str, object]
+
+
 def mark_leakage_channel(cell_centers, channel_points, radius: float) -> np.ndarray:
     """Return cells within ``radius`` of an irregular 3D channel polyline."""
 
@@ -56,9 +64,7 @@ def mark_leakage_channel(cell_centers, channel_points, radius: float) -> np.ndar
         raise ValueError("radius must be positive")
     if channel.shape[0] < 2:
         raise ValueError("channel_points must contain at least two points")
-    distances = np.full(centers.shape[0], np.inf, dtype=float)
-    for start, end in zip(channel[:-1], channel[1:]):
-        distances = np.minimum(distances, _distance_to_segment(centers, start, end))
+    distances = _distance_to_channel(centers, channel)
     return distances <= radius
 
 
@@ -72,15 +78,69 @@ def apply_leakage_channel_marker(
 ) -> np.ndarray:
     """Return markers with leakage-channel cells overwritten."""
 
+    return apply_leakage_channel_marker_with_diagnostics(
+        markers,
+        cell_centers,
+        channel_points=channel_points,
+        radius=radius,
+        leakage_marker=leakage_marker,
+    ).markers
+
+
+def apply_leakage_channel_marker_with_diagnostics(
+    markers,
+    cell_centers,
+    *,
+    channel_points,
+    radius: float,
+    leakage_marker: int,
+    min_marked_cells: int = 0,
+) -> LeakageMarkerResult:
+    """Return markers and diagnostics, optionally marking nearest fallback cells."""
+
     values = np.asarray(markers, dtype=int).copy()
     if values.ndim != 1:
         raise ValueError("markers must be a 1D array")
     centers = _as_points(cell_centers, "cell_centers")
     if centers.shape[0] != values.size:
         raise ValueError("cell_centers length must match markers")
-    mask = mark_leakage_channel(centers, channel_points, radius)
+    channel = _as_points(channel_points, "channel_points")
+    radius = float(radius)
+    if radius <= 0.0:
+        raise ValueError("radius must be positive")
+    min_marked_cells = int(min_marked_cells)
+    if min_marked_cells < 0:
+        raise ValueError("min_marked_cells must be nonnegative")
+    distances = _distance_to_channel(centers, channel)
+    mask = distances <= radius
+    initial_count = int(np.count_nonzero(mask))
+    fallback_added = 0
+    if initial_count < min_marked_cells:
+        needed = min(min_marked_cells, values.size) - initial_count
+        if needed > 0:
+            candidates = np.argsort(distances)
+            for index in candidates:
+                if not mask[int(index)]:
+                    mask[int(index)] = True
+                    fallback_added += 1
+                    if fallback_added >= needed:
+                        break
     values[mask] = int(leakage_marker)
-    return values
+    leakage_count = int(np.count_nonzero(mask))
+    diagnostics = {
+        "cell_count": int(values.size),
+        "radius_m": radius,
+        "initial_leakage_cell_count": initial_count,
+        "leakage_cell_count": leakage_count,
+        "leakage_cell_fraction": float(leakage_count / values.size),
+        "nearest_channel_distance_m": float(np.min(distances)),
+        "farthest_channel_distance_m": float(np.max(distances)),
+        "fallback_used": bool(fallback_added > 0),
+        "fallback_added_cell_count": int(fallback_added),
+        "min_marked_cells": int(min_marked_cells),
+        "marked": bool(leakage_count > 0),
+    }
+    return LeakageMarkerResult(markers=values, diagnostics=diagnostics)
 
 
 def structured_box_cell_centers(domain_min, domain_max, cells) -> np.ndarray:
@@ -110,6 +170,7 @@ def leakage_channel_marker_diagnostics(
     cells,
     channel_points,
     radius: float,
+    min_marked_cells: int = 0,
 ) -> dict[str, object]:
     """Return pure preflight diagnostics for structured leakage markers."""
 
@@ -118,10 +179,21 @@ def leakage_channel_marker_diagnostics(
     radius = float(radius)
     if radius <= 0.0:
         raise ValueError("radius must be positive")
-    distances = np.full(centers.shape[0], np.inf, dtype=float)
-    for start, end in zip(channel[:-1], channel[1:]):
-        distances = np.minimum(distances, _distance_to_segment(centers, start, end))
+    distances = _distance_to_channel(centers, channel)
     mask = distances <= radius
+    initial_count = int(np.count_nonzero(mask))
+    min_marked_cells = int(min_marked_cells)
+    if min_marked_cells < 0:
+        raise ValueError("min_marked_cells must be nonnegative")
+    fallback_added = 0
+    if initial_count < min_marked_cells:
+        needed = min(min_marked_cells, centers.shape[0]) - initial_count
+        for index in np.argsort(distances):
+            if not mask[int(index)]:
+                mask[int(index)] = True
+                fallback_added += 1
+                if fallback_added >= needed:
+                    break
     leakage_count = int(np.count_nonzero(mask))
     return {
         "cell_count": int(centers.shape[0]),
@@ -129,12 +201,25 @@ def leakage_channel_marker_diagnostics(
         "domain_min": [float(value) for value in np.asarray(domain_min, dtype=float)],
         "domain_max": [float(value) for value in np.asarray(domain_max, dtype=float)],
         "radius_m": radius,
+        "initial_leakage_cell_count": initial_count,
         "leakage_cell_count": leakage_count,
         "leakage_cell_fraction": float(leakage_count / centers.shape[0]),
         "nearest_channel_distance_m": float(np.min(distances)),
         "farthest_channel_distance_m": float(np.max(distances)),
+        "fallback_used": bool(fallback_added > 0),
+        "fallback_added_cell_count": int(fallback_added),
+        "min_marked_cells": int(min_marked_cells),
         "marked": bool(leakage_count > 0),
     }
+
+
+def _distance_to_channel(centers: np.ndarray, channel: np.ndarray) -> np.ndarray:
+    if channel.shape[0] < 2:
+        raise ValueError("channel_points must contain at least two points")
+    distances = np.full(centers.shape[0], np.inf, dtype=float)
+    for start, end in zip(channel[:-1], channel[1:]):
+        distances = np.minimum(distances, _distance_to_segment(centers, start, end))
+    return distances
 
 
 def _distance_to_segment(points: np.ndarray, start: np.ndarray, end: np.ndarray) -> np.ndarray:

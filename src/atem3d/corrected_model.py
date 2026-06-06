@@ -192,6 +192,7 @@ def build_corrected_leakage_channel_case_specs(
         "leakage_channel": {
             "points": leakage_points,
             "radius": 900.0,
+            "min_marked_cells": 1,
             "sigma": 0.04,
         },
     }
@@ -203,6 +204,7 @@ def build_corrected_leakage_channel_case_specs(
         "leakage_channel": {
             "points": leakage_points,
             "radius": 900.0,
+            "min_marked_cells": 1,
             "sigma_inf": 0.05,
             "delta_sigma_list": [0.015],
             "tau_list": [0.1],

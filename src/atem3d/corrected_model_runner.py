@@ -175,6 +175,7 @@ def _leakage_marker_preflight_for_forward(forward_cfg: dict, diagnostics_func) -
         cells=forward_cfg["cells"],
         channel_points=leakage["points"],
         radius=float(leakage["radius"]),
+        min_marked_cells=int(leakage.get("min_marked_cells", 0)),
     )
 
 
@@ -312,7 +313,7 @@ def _run_dolfinx_leakage_channel_forward(
 ) -> np.ndarray:
     from atem3d.materials.material_map import (
         CellMaterialMap,
-        apply_leakage_channel_marker,
+        apply_leakage_channel_marker_with_diagnostics,
     )
 
     leakage_cfg = dict(forward_cfg["leakage_channel"])
@@ -320,13 +321,16 @@ def _run_dolfinx_leakage_channel_forward(
     background_marker = int(leakage_cfg.get("background_marker", 1))
     leakage_marker = int(leakage_cfg.get("leakage_marker", 7))
     markers = np.full(centers.shape[0], background_marker, dtype=int)
-    markers = apply_leakage_channel_marker(
+    marker_result = apply_leakage_channel_marker_with_diagnostics(
         markers,
         centers,
         channel_points=np.asarray(leakage_cfg["points"], dtype=float),
         radius=float(leakage_cfg["radius"]),
         leakage_marker=leakage_marker,
+        min_marked_cells=int(leakage_cfg.get("min_marked_cells", 0)),
     )
+    markers = marker_result.markers
+    case_spec.setdefault("diagnostics", {})["leakage_marker_runtime"] = marker_result.diagnostics
     if not np.any(markers == leakage_marker):
         raise ValueError("leakage_channel did not mark any mesh cells")
     material_map = CellMaterialMap(

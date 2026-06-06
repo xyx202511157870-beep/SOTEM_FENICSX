@@ -431,6 +431,7 @@ def test_corrected_leakage_channel_case_specs_define_memory_safe_3d_anomaly(tmp_
     assert noip["convergence_reference"]["dolfinx_forward"]["rtol"] == 1.0e-9
     assert len(forward["leakage_channel"]["points"]) == 4
     assert forward["leakage_channel"]["radius"] == 900.0
+    assert forward["leakage_channel"]["min_marked_cells"] == 1
     assert forward["leakage_channel"]["sigma"] == 0.04
     assert ip["dolfinx_forward"]["leakage_channel"]["sigma_inf"] == 0.05
     assert ip["dolfinx_forward"]["leakage_channel"]["delta_sigma_list"] == [0.015]
@@ -460,6 +461,8 @@ def test_corrected_leakage_model_spec_cli_writes_json(tmp_path):
 
 def test_leakage_marker_diagnostics_cli_writes_case_report(tmp_path):
     specs = build_corrected_leakage_channel_case_specs(tmp_path / "run")
+    specs["noip"]["dolfinx_forward"]["domain_min"] = [-3000.0, -3000.0, -1500.0]
+    specs["noip"]["dolfinx_forward"]["domain_max"] = [3000.0, 3000.0, 200.0]
     spec_path = tmp_path / "spec.json"
     output = tmp_path / "marker_diagnostics.json"
     spec_path.write_text(json.dumps(specs), encoding="utf-8")
@@ -478,6 +481,8 @@ def test_leakage_marker_diagnostics_cli_writes_case_report(tmp_path):
     assert exit_code == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["case_type"] == "noip"
-    assert payload["prediction"]["leakage_cell_count"] > 0
+    assert payload["prediction"]["initial_leakage_cell_count"] == 0
+    assert payload["prediction"]["leakage_cell_count"] == 1
+    assert payload["prediction"]["fallback_used"] is True
     assert payload["reference"]["leakage_cell_count"] > payload["prediction"]["leakage_cell_count"]
     assert payload["prediction"]["marked"] is True
