@@ -197,9 +197,12 @@ that nonzero no-IP and IP secondary runs expose this metadata after forward
 stepping.
 
 WSL was checked for direct DOLFINx pytest execution. The WSL Python can import
-`dolfinx`, but currently lacks `pytest` and `mpi4py`, so direct WSL pytest
-smoke execution is not available without environment changes. WSL was then
-shut down and confirmed as `Ubuntu Stopped`.
+the `dolfinx` namespace, but currently lacks `pytest`, `mpi4py`, `petsc4py`,
+`ufl`, `basix`, and `pip`. Passwordless `sudo` is not available, so the missing
+system Python packages cannot be installed with `apt` from this Codex session
+without user-side credentials. Direct WSL pytest smoke execution is therefore
+not available without environment changes. WSL was then shut down and
+confirmed as `Ubuntu Stopped`.
 
 Verification commands run for this checkpoint:
 
