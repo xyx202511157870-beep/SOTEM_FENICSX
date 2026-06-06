@@ -86,6 +86,12 @@ final acceptance.
     spec, including source line, receiver, computational domain, and optional
     leakage-channel polyline.
 
+- `src/atem3d/polarization_effect.py`
+  - `write_polarization_effect_artifacts`
+  - Reads no-IP/IP validation artifact directories and writes IP-minus-noIP
+    polarization-effect response CSV, reference CSV, error CSV, summary JSON,
+    response comparison PNG, and error-curve PNG.
+
 - `src/atem3d/source_diagnostics.py`
   - `diagnose_source_consistency`
   - Reports task-book source residuals:
@@ -369,6 +375,8 @@ final acceptance.
     `error_curves_3comp.png` from validation CSV artifacts.
   - Adds `model-schematic SPEC.json --case noip|ip --output FIG.png` for
     writing model geometry schematics from corrected-model specs.
+  - Adds `polarization-effect NOIP_DIR IP_DIR --output-dir OUT_DIR` for
+    writing dedicated IP-minus-noIP response/error artifacts.
   - Adds `corrected-leakage-model-spec` for writing a corrected-scale,
     memory-safe leakage-channel diagnostic spec before running DOLFINx.
   - Adds `published-paper-model-spec` for writing the published SOTEM paper
@@ -420,6 +428,7 @@ final acceptance.
 - `tests/test_average_receivers.py`
 - `tests/test_public_api.py`
 - `tests/test_model_schematic.py`
+- `tests/test_polarization_effect.py`
 - Existing `tests/test_empymod_validation.py`
 - Existing `tests/test_empymod_validation_cli.py`
 
@@ -1106,6 +1115,31 @@ component policy; the physical failed component is `Ex`. This confirms the
 corrected-scale no-IP and IP leakage-channel diagnostic artifact paths both
 run under WSL on the 32 GB machine, while final 3D anomaly accuracy still
 requires a defensible 3D reference or published response data.
+
+Dedicated IP-minus-noIP polarization-effect artifacts can be written with:
+
+```bash
+tdem-ip-forward polarization-effect dolfinx/runs/corrected_leakage_model_run/noip_3comp dolfinx/runs/corrected_leakage_model_run/ip_3comp --output-dir dolfinx/runs/corrected_leakage_model_run/polarization_effect
+```
+
+The command writes:
+
+```text
+polarization_effect_predictions.csv
+polarization_effect_reference.csv
+polarization_effect_errors.csv
+polarization_effect_summary.json
+polarization_effect_comparison.png
+polarization_effect_error_curves.png
+```
+
+For the current corrected-scale leakage diagnostic, the polarization-effect
+summary reports `definition=ip_minus_noip`, components `Ex`, `Ey`, and
+`dBzdt`, and `pass_all_components=false`. The physical failed components are
+`Ex` and `dBzdt`; weak `Ey` is handled by the weak-component policy. This is
+again a diagnostic artifact because both no-IP/IP responses include the 3D
+leakage channel while the reference effects are computed from the empymod
+background responses.
 
 A WSL CLI smoke completed under:
 

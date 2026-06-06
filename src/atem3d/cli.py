@@ -25,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_plot(argv[1:])
     if argv and argv[0] == "model-schematic":
         return _main_model_schematic(argv[1:])
+    if argv and argv[0] == "polarization-effect":
+        return _main_polarization_effect(argv[1:])
     if argv and argv[0] == "validate-secondary":
         return _main_validate_secondary(argv[1:])
     if argv and argv[0] == "acceptance-report":
@@ -125,6 +127,21 @@ def _main_model_schematic(argv: list[str]) -> int:
     print(f"wrote {args.output}")
     print(f"source_length_m: {info['source_length_m']}")
     print(f"parallel_offset_m: {info['parallel_offset_m']}")
+    return 0
+
+
+def _main_polarization_effect(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write IP-minus-noIP polarization-effect artifacts.")
+    parser.add_argument("noip_dir", type=Path, help="Directory containing no-IP validation artifacts")
+    parser.add_argument("ip_dir", type=Path, help="Directory containing IP validation artifacts")
+    parser.add_argument("--output-dir", type=Path, default=Path("polarization_effect"))
+    args = parser.parse_args(argv)
+
+    from .polarization_effect import write_polarization_effect_artifacts
+
+    summary = write_polarization_effect_artifacts(args.noip_dir, args.ip_dir, args.output_dir)
+    print(f"wrote {args.output_dir}")
+    print(f"pass_all_components: {summary['pass_all_components']}")
     return 0
 
 
