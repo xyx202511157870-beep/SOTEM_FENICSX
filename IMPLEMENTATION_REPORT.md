@@ -2637,6 +2637,11 @@ source-term substitution inside the existing total-field equation.
   in `/home/paidaxin/miniconda3/envs/fenicsx/bin/python` and printed
   `fallback_yaml_load_ok`. WSL was then shut down and `Ubuntu Stopped` was
   confirmed.
+- WSL PyYAML-free task-book inline-list YAML regression:
+  fallback loading of `source.start: [-500.0, 200.0, -0.1]` and
+  `validation.components: [Ex, Ey, dBzdt]` completed in the same FEniCSx
+  environment and printed `fallback_inline_list_yaml_ok`. WSL was then shut
+  down and `Ubuntu Stopped` was confirmed.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
   metadata, including runner/material metadata, and accepts
   `--n-observation-times` for memory-safe reduced diagnostic specs.

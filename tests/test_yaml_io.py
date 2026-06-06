@@ -62,3 +62,28 @@ acceptance:
             "components": ["Ex", "Ey", "dBzdt"],
         }
     }
+
+
+def test_safe_load_yaml_fallback_parses_task_book_inline_lists(monkeypatch):
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yaml":
+            raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    payload = safe_load_yaml(
+        """
+source:
+  start: [-500.0, 200.0, -0.1]
+  end: [500.0, 200.0, -0.1]
+validation:
+  components: [Ex, Ey, dBzdt]
+"""
+    )
+
+    assert payload["source"]["start"] == [-500.0, 200.0, -0.1]
+    assert payload["source"]["end"] == [500.0, 200.0, -0.1]
+    assert payload["validation"]["components"] == ["Ex", "Ey", "dBzdt"]

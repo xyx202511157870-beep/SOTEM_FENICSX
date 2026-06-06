@@ -186,6 +186,11 @@ def _parse_key(value: str) -> str:
 
 
 def _parse_scalar(value: str):
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_scalar(item.strip()) for item in _split_inline_items(inner)]
     if value in {"null", "Null", "NULL", "~"}:
         return None
     if value in {"true", "True", "TRUE"}:
@@ -213,3 +218,29 @@ def _parse_scalar(value: str):
     except ValueError:
         pass
     return value
+
+
+def _split_inline_items(value: str) -> list[str]:
+    items = []
+    start = 0
+    quote = ""
+    escape = False
+    for index, char in enumerate(value):
+        if escape:
+            escape = False
+            continue
+        if char == "\\" and quote == '"':
+            escape = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == ",":
+            items.append(value[start:index])
+            start = index + 1
+    items.append(value[start:])
+    return items
