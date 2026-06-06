@@ -1810,6 +1810,22 @@ spaces. The large value in this small analytic-halfspace smoke is a warning
 that the initial-field interpolation/source transition must be audited before
 treating late/early electric-field errors as only boundary or receiver issues.
 
+I then reran the same small model with `--initial-dc-mode fem` and changed no
+other physics/model setting. The FEM DC initializer produced a near-zero
+discrete initial curl:
+
+```text
+initial_dc_mode      initial_curl_residual    initial_curl_max_abs     Ex peak error   dBzdt peak error
+analytic_halfspace   1.334101112e3           1.321977382e3            58.725%         46.797%
+fem                  2.193462260e-13         7.352684444e-14          104.777%        45.776%
+```
+
+Interpretation: the large `initial_curl_residual` is specific to the analytic
+halfspace field interpolation path on this small mesh; the FEM scalar-potential
+initializer is discretely curl-free. However, the first-output `Ex` and
+`dBzdt` errors remain large in both modes, so the total-field source/DC
+transition and early transient source loading still need deeper treatment.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
