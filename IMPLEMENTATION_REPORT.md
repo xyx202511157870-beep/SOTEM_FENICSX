@@ -186,6 +186,33 @@ python -m pytest -q tests/test_corrected_model_runner.py tests/test_corrected_mo
 
 Results: `2 passed` and `34 passed`.
 
+## P6 DOLFINx Adapter Diagnostics Checkpoint (2026-06-06)
+
+The DOLFINx primary-secondary adapter now records
+`primary_secondary_step_equation` inside its live adapter diagnostics during
+`secondary_state_stepper(...)`. This records the actual runtime `dt`, the
+DOLFINx adapter backend tag, and the same no-IP/IP equation metadata used by
+the corrected-model artifact runner. Existing DOLFINx smoke tests now assert
+that nonzero no-IP and IP secondary runs expose this metadata after forward
+stepping.
+
+WSL was checked for direct DOLFINx pytest execution. The WSL Python can import
+`dolfinx`, but currently lacks `pytest` and `mpi4py`, so direct WSL pytest
+smoke execution is not available without environment changes. WSL was then
+shut down and confirmed as `Ubuntu Stopped`.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_dolfinx_primary_secondary_metadata.py
+python -m pytest -q tests/test_dolfinx_primary_secondary_metadata.py tests/test_dolfinx_primary_secondary_forward_smoke.py tests/test_corrected_model_runner.py tests/test_secondary_zero_contrast.py
+python -m pytest -q
+wsl --shutdown; wsl -l -v
+```
+
+Results: `2 passed`, `29 passed`, full pytest passed, and WSL reported
+`Ubuntu Stopped`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

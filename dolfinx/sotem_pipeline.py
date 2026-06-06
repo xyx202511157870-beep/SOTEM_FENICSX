@@ -4439,6 +4439,26 @@ def _make_dolfinx_secondary_step_solver(
     return solve
 
 
+def _record_primary_secondary_step_equation(
+    diagnostics: dict[str, Any],
+    *,
+    material,
+    sigma_background: float,
+    dt: float,
+) -> dict[str, Any]:
+    from atem3d.solvers import secondary_step_equation_metadata
+
+    metadata = secondary_step_equation_metadata(
+        material=material,
+        sigma_background=float(sigma_background),
+        dt=float(dt),
+    )
+    metadata["adapter_backend"] = "dolfinx_primary_secondary"
+    metadata["dt_source"] = "secondary_state_stepper_runtime_dt"
+    diagnostics["primary_secondary_step_equation"] = metadata
+    return metadata
+
+
 def _make_dolfinx_primary_secondary_forward_adapters(
     msh,
     spaces,
@@ -4602,6 +4622,12 @@ def _make_dolfinx_primary_secondary_forward_adapters(
         dt_value = float(dt)
         if dt_value <= 0.0 or not math.isfinite(dt_value):
             raise ValueError("dt must be finite and positive")
+        _record_primary_secondary_step_equation(
+            latest_secondary,
+            material=material,
+            sigma_background=sigma_b,
+            dt=dt_value,
+        )
         Ep_new_function = sample_to_function(Ep_new)
         if material.terms and len(latest_secondary["chi"]) != len(material.terms):
             latest_secondary["chi"] = [

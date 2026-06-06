@@ -150,6 +150,10 @@ def test_dolfinx_primary_secondary_nonzero_contrast_forward_runs_secondary_path(
     assert np.linalg.norm(predicted - np.array([[10.0, 1.0, 0.0], [5.0, 0.5, 0.0]])) > 0.0
     assert adapters["diagnostics"]["dc_result"] is not None
     assert adapters["diagnostics"]["dc_result"]["contrast_is_zero"] is False
+    equation = adapters["diagnostics"]["primary_secondary_step_equation"]
+    assert equation["case_type"] == "noip"
+    assert equation["adapter_backend"] == "dolfinx_primary_secondary"
+    assert equation["rhs_history"] == "M(deltaJ_old - (sigma - sigma_b) Ep_new)/dt"
 
 
 def test_dolfinx_primary_secondary_variable_contrast_forward_runs_state_stepper():
@@ -332,6 +336,10 @@ def test_dolfinx_primary_secondary_ip_forward_runs_state_stepper():
     assert len(adapters["diagnostics"]["chi"]) == 1
     assert adapters["diagnostics"]["dc_result"] is not None
     assert adapters["diagnostics"]["dc_result"]["contrast_is_zero"] is False
+    equation = adapters["diagnostics"]["primary_secondary_step_equation"]
+    assert equation["case_type"] == "ip"
+    assert equation["adapter_backend"] == "dolfinx_primary_secondary"
+    assert equation["rhs_history"] == "M(deltaJ_old - c_new)/dt"
 
 
 def test_dolfinx_primary_secondary_spatial_ip_forward_uses_state_initializer():
