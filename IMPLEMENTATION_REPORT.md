@@ -996,6 +996,13 @@ differs from the empymod background reference. This connects the leakage-channel
 material-map machinery to the corrected runner, though still on a tiny box
 rather than a production terrain mesh.
 
+The same leakage-channel block now also supports Prony/Debye IP material
+metadata through `sigma_inf`, `delta_sigma_list`, and `tau_list`. A WSL smoke
+verifies that an IP leakage channel runs through the spatial-DG0 Debye material
+path and produces a finite response different from the empymod background
+reference. This exercises IP secondary-anomaly plumbing in the corrected runner
+on a tiny synthetic box.
+
 ## Current Accuracy Status
 
 The current no-IP DOLFINx runs still exceed the 5% target. The corrected

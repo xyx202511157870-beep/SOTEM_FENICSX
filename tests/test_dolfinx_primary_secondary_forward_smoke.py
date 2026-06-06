@@ -629,3 +629,40 @@ def test_corrected_model_default_forward_runner_runs_leakage_channel_smoke():
     assert predicted.shape == (2, 3)
     assert np.all(np.isfinite(predicted))
     assert np.linalg.norm(predicted - reference) > 0.0
+
+
+def test_corrected_model_default_forward_runner_runs_ip_leakage_channel_smoke():
+    from atem3d.corrected_model import (
+        CorrectedModelValidationConfig,
+        build_corrected_model_case_specs,
+    )
+    from atem3d.corrected_model_runner import _default_forward_runner, _default_reference_runner
+
+    config = CorrectedModelValidationConfig(n_observation_times=2)
+    spec = build_corrected_model_case_specs("unused", config=config)["ip"]
+    spec["empymod_kwargs"] = {"srcpts": 3}
+    spec["dolfinx_forward"] = {
+        "domain_min": [-600.0, -400.0, -50.0],
+        "domain_max": [600.0, 300.0, 50.0],
+        "cells": [2, 2, 1],
+        "outer_boundary_mode": "natural",
+        "receiver_evaluation_mode": "first_cell",
+        "ksp_type": "cg",
+        "rtol": 1.0e-8,
+        "atol": 1.0e-10,
+        "max_it": 200,
+        "leakage_channel": {
+            "points": [[-500.0, -300.0, -0.1], [500.0, -300.0, -0.1]],
+            "radius": 260.0,
+            "sigma_inf": 0.05,
+            "delta_sigma_list": [0.015],
+            "tau_list": [0.1],
+        },
+    }
+
+    predicted = _default_forward_runner(spec)
+    reference = _default_reference_runner(spec)
+
+    assert predicted.shape == (2, 3)
+    assert np.all(np.isfinite(predicted))
+    assert np.linalg.norm(predicted - reference) > 0.0

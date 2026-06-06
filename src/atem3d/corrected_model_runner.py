@@ -223,7 +223,7 @@ def _run_dolfinx_leakage_channel_forward(
         markers=markers,
         materials={
             background_marker: PronyConductivity.no_ip(float(sigma_background)),
-            leakage_marker: PronyConductivity.no_ip(float(leakage_cfg["sigma"])),
+            leakage_marker: _leakage_material_from_config(leakage_cfg),
         },
     )
     times = np.asarray(case_spec["observation_times"], dtype=float)
@@ -255,6 +255,22 @@ def _run_dolfinx_leakage_channel_forward(
         debye=built_materials["debye"],
     )
     return built_operator["operator"].forward(times)
+
+
+def _leakage_material_from_config(leakage_cfg: dict) -> PronyConductivity:
+    if "sigma" in leakage_cfg:
+        return PronyConductivity.no_ip(float(leakage_cfg["sigma"]))
+    delta = list(leakage_cfg.get("delta_sigma_list", []))
+    tau = list(leakage_cfg.get("tau_list", []))
+    if len(delta) != len(tau):
+        raise ValueError("leakage_channel delta_sigma_list and tau_list must have the same length")
+    return PronyConductivity(
+        sigma_inf=float(leakage_cfg["sigma_inf"]),
+        terms=[
+            DebyeTerm(delta_sigma=float(delta_i), tau=float(tau_i))
+            for delta_i, tau_i in zip(delta, tau)
+        ],
+    )
 
 
 def _load_sotem_pipeline_module():
