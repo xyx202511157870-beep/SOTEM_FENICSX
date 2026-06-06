@@ -2733,6 +2733,20 @@ source-term substitution inside the existing total-field equation.
   (`divergence_residual_reduction=0.999999999204445`) while preserving the same
   orientation/length diagnostics. WSL was shut down after both runs and
   `Ubuntu Stopped` was confirmed.
+- A memory-safe WSL/FEniCSx corrected-model default background baseline was run
+  with 8 logarithmic observation times spanning `1e-5 s` to `1 s` using
+  `tdem-ip-forward corrected-model-run --case both`. This default run is the
+  zero-secondary primary/reference consistency baseline, not the complex
+  terrain/anomaly validation. It generated complete no-IP and IP artifact sets,
+  then `tdem-ip-forward acceptance-report` produced
+  `final_acceptance_passed=true`. For both no-IP and IP, `Ex`, `Ey`, and
+  `dBzdt` maximum robust relative errors were `0.0`, required components were
+  present, the full observation window was covered, and there were no blocking
+  reasons. Recorded runtimes were approximately `9.19 s` forward and `0.39 s`
+  reference for no-IP, and `7.71 s` forward and `0.39 s` reference for IP.
+  The generated polarization-effect artifact reported `ip_minus_noip` with
+  zero component errors over the same `1e-5 s` to `1 s` window. WSL was shut
+  down and `Ubuntu Stopped` was confirmed after the run.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
@@ -2757,6 +2771,10 @@ source-term substitution inside the existing total-field equation.
 3. Do not continue tuning `source_term_mode=primary_dc` as a total-field
    shortcut. Move primary/background-current accounting into the real
    primary-secondary path.
+   The default corrected-model zero-secondary background baseline now passes
+   no-IP/IP final acceptance against its matched empymod primary/reference, so
+   the remaining validation gap is the nonzero secondary/terrain/leakage and
+   total-field physical path, not the primary/reference artifact chain.
 4. Run a controlled WSL comparison of `biot_current`, `biot_ohmic`, and
    `faraday_integrated` magnetic receiver modes using the persisted
    `dBzdt_curl`/`dBzdt_biot_rate` receiver diagnostics to localize the
