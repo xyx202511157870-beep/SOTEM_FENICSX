@@ -3737,6 +3737,21 @@ source-term substitution inside the existing total-field equation.
   down afterward and `Ubuntu Stopped` was confirmed. Windows verification ran
   `python -m pytest -q tests/test_corrected_model_runner.py tests/test_cli_subcommands.py tests/test_dolfinx_complex_terrain_leakage_forward.py`
   and `python -m pytest -q`, both with exit code 0.
+- Corrected terrain smoke IP CLI checkpoint (2026-06-06): the terrain smoke
+  command now supports `--case noip|ip|both`, and the smoke spec builder writes
+  both no-IP and IP cases. The IP case uses the same Gmsh terrain/leakage
+  artifact path but exercises a Debye leakage-channel material with
+  `sigma_inf = 0.05`, `delta_sigma_list = [0.015]`, and `tau_list = [0.1]`.
+  A WSL `conda activate fenicsx` run
+  `python -u -m atem3d.cli corrected-terrain-smoke-run dolfinx/runs/latest_terrain_smoke_ip_cli --case ip --spec-output dolfinx/runs/latest_terrain_smoke_ip_cli/spec.json`
+  wrote the IP artifact set under `terrain_leakage_ip_smoke` and reported
+  `case_type = ip`, `reference_type = self_convergence`,
+  `final_acceptance_passed = False`, `primary_provider_mode = constant`,
+  terrain mesh mode `small_gmsh_terrain_leakage`, `leakage_cell_count = 20`,
+  and Prony material metadata in `run_config_resolved.yaml`; WSL was shut down
+  afterward and `Ubuntu Stopped` was confirmed. Windows verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py tests/test_cli_subcommands.py tests/test_dolfinx_complex_terrain_leakage_forward.py`
+  and `python -m pytest -q`, both with exit code 0.
 
 ## Next Steps
 

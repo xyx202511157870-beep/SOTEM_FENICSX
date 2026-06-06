@@ -225,15 +225,32 @@ def build_corrected_terrain_smoke_case_spec(
 ) -> dict:
     """Return a memory-safe Gmsh terrain/leakage diagnostic smoke spec."""
 
+    return build_corrected_terrain_smoke_case_specs(output_root, config=config)["noip"]
+
+
+def build_corrected_terrain_smoke_case_specs(
+    output_root: str | Path,
+    config: CorrectedModelValidationConfig | None = None,
+) -> dict[str, dict]:
+    """Return no-IP/IP memory-safe Gmsh terrain/leakage diagnostic smoke specs."""
+
     cfg = config or CorrectedModelValidationConfig(n_observation_times=2, turnoff_steps=1)
     output = Path(output_root)
-    spec = build_corrected_leakage_channel_case_specs(output, config=cfg)["noip"]
+    base_specs = build_corrected_leakage_channel_case_specs(output, config=cfg)
+    return {
+        "noip": _terrain_smoke_case_spec(base_specs["noip"], output, output_name="terrain_leakage_smoke"),
+        "ip": _terrain_smoke_case_spec(base_specs["ip"], output, output_name="terrain_leakage_ip_smoke"),
+    }
+
+
+def _terrain_smoke_case_spec(base_spec: dict, output: Path, *, output_name: str) -> dict:
+    spec = dict(base_spec)
     spec["reference_type"] = "self_convergence"
     spec["validation_scope"] = "corrected_model_terrain_leakage_diagnostic"
     spec["receiver"] = [0.25, 0.25, -0.25]
     spec["observation_times"] = [1.0e-5, 1.0]
     spec["turnoff_steps"] = 1
-    spec["output_dir"] = str(output / "terrain_leakage_smoke")
+    spec["output_dir"] = str(output / output_name)
     runner = dict(spec.get("runner", {}))
     runner["diagnostic"] = "gmsh_terrain_constant_primary_artifact_smoke"
     runner["output_root"] = str(output)
@@ -245,6 +262,22 @@ def build_corrected_terrain_smoke_case_spec(
             "reference_type": "self_convergence",
         }
     }
+    if str(spec.get("case_type")) == "ip":
+        leakage_channel = {
+            "points": [[0.05, 0.5, -0.45], [0.95, 0.5, -0.45]],
+            "radius": 0.35,
+            "min_marked_cells": 1,
+            "sigma_inf": 0.05,
+            "delta_sigma_list": [0.015],
+            "tau_list": [0.1],
+        }
+    else:
+        leakage_channel = {
+            "points": [[0.05, 0.5, -0.45], [0.95, 0.5, -0.45]],
+            "radius": 0.35,
+            "min_marked_cells": 1,
+            "sigma": 0.04,
+        }
     spec["dolfinx_forward"] = {
         "receiver_evaluation_mode": "first_cell",
         "outer_boundary_mode": "natural",
@@ -260,12 +293,7 @@ def build_corrected_terrain_smoke_case_spec(
             "mesh_size": 0.9,
             "msh_name": "terrain_leakage.msh",
         },
-        "leakage_channel": {
-            "points": [[0.05, 0.5, -0.45], [0.95, 0.5, -0.45]],
-            "radius": 0.35,
-            "min_marked_cells": 1,
-            "sigma": 0.04,
-        },
+        "leakage_channel": leakage_channel,
     }
     return spec
 

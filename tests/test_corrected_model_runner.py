@@ -17,6 +17,7 @@ from atem3d.corrected_model import (
     build_corrected_leakage_channel_case_specs,
     build_published_paper_model_target_spec,
     build_corrected_terrain_smoke_case_spec,
+    build_corrected_terrain_smoke_case_specs,
 )
 from atem3d.corrected_model_runner import run_corrected_model_validation
 from atem3d.corrected_model_runner import run_corrected_model_convergence_validation
@@ -957,6 +958,21 @@ def test_corrected_terrain_smoke_case_spec_uses_constant_primary_and_self_conver
     assert spec["runner"]["diagnostic"] == "gmsh_terrain_constant_primary_artifact_smoke"
 
 
+def test_corrected_terrain_smoke_case_specs_include_ip(tmp_path):
+    specs = build_corrected_terrain_smoke_case_specs(tmp_path / "terrain_smoke")
+
+    assert set(specs) == {"noip", "ip"}
+    assert specs["noip"]["case_type"] == "noip"
+    assert specs["ip"]["case_type"] == "ip"
+    assert specs["ip"]["reference_type"] == "self_convergence"
+    assert specs["ip"]["dolfinx_forward"]["primary_provider_mode"] == "constant"
+    leakage = specs["ip"]["dolfinx_forward"]["leakage_channel"]
+    assert leakage["sigma_inf"] == 0.05
+    assert leakage["delta_sigma_list"] == [0.015]
+    assert leakage["tau_list"] == [0.1]
+    assert specs["ip"]["output_dir"].endswith("terrain_leakage_ip_smoke")
+
+
 def test_corrected_terrain_smoke_run_cli_dispatches_self_convergence_runner(tmp_path, monkeypatch):
     calls = []
 
@@ -986,6 +1002,25 @@ def test_corrected_terrain_smoke_run_cli_dispatches_self_convergence_runner(tmp_
     assert len(calls) == 1
     assert calls[0]["reference_type"] == "self_convergence"
     assert calls[0]["dolfinx_forward"]["primary_provider_mode"] == "constant"
+
+
+def test_corrected_terrain_smoke_run_cli_dispatches_both_cases(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(case_spec):
+        calls.append(case_spec["case_type"])
+        output_dir = Path(case_spec["output_dir"])
+        output_dir.mkdir(parents=True)
+        return {"final_acceptance_passed": False, "reference_type": "self_convergence"}
+
+    import atem3d.corrected_model_runner as runner
+
+    monkeypatch.setattr(runner, "run_corrected_model_self_convergence_validation", fake_run)
+
+    exit_code = main(["corrected-terrain-smoke-run", str(tmp_path / "terrain_smoke"), "--case", "both"])
+
+    assert exit_code == 0
+    assert calls == ["noip", "ip"]
 
 
 def test_leakage_marker_diagnostics_cli_writes_case_report(tmp_path):

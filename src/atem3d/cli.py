@@ -357,25 +357,29 @@ def _main_corrected_leakage_model_spec(argv: list[str]) -> int:
 def _main_corrected_terrain_smoke_run(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run a Gmsh terrain/leakage diagnostic artifact smoke.")
     parser.add_argument("output_root", type=Path, help="Root directory for terrain smoke artifacts")
+    parser.add_argument("--case", choices=("noip", "ip", "both"), default="noip")
     parser.add_argument("--spec-output", type=Path, help="Optional path to write the resolved smoke spec JSON")
     args = parser.parse_args(argv)
 
-    from .corrected_model import build_corrected_terrain_smoke_case_spec
+    from .corrected_model import build_corrected_terrain_smoke_case_specs
     from .corrected_model_runner import run_corrected_model_self_convergence_validation
 
-    case_spec = build_corrected_terrain_smoke_case_spec(args.output_root)
+    specs = build_corrected_terrain_smoke_case_specs(args.output_root)
+    selected = specs.items() if args.case == "both" else [(args.case, specs[args.case])]
     if args.spec_output is not None:
         args.spec_output.parent.mkdir(parents=True, exist_ok=True)
-        args.spec_output.write_text(json.dumps(case_spec, indent=2, sort_keys=True), encoding="utf-8")
+        payload = specs if args.case == "both" else dict(selected[0][1])
+        args.spec_output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         print(f"wrote {args.spec_output}")
-    try:
-        summary = run_corrected_model_self_convergence_validation(case_spec)
-    except ImportError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    print(f"wrote {case_spec['output_dir']}")
-    print(f"reference_type: {summary['reference_type']}")
-    print(f"final_acceptance_passed: {summary['final_acceptance_passed']}")
+    for case_name, case_spec in selected:
+        try:
+            summary = run_corrected_model_self_convergence_validation(case_spec)
+        except ImportError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"wrote {case_spec['output_dir']}")
+        print(f"{case_name}: reference_type={summary['reference_type']}")
+        print(f"{case_name}: final_acceptance_passed={summary['final_acceptance_passed']}")
     return 0
 
 
