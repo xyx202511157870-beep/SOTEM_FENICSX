@@ -1491,6 +1491,7 @@ def _make_dolfinx_materials_from_cell_material_map(
             "terms": tuple(representative_terms),
             "delta_functions": delta_functions,
             "polarizable_cells": polarizable_cells,
+            "sigma_infinity": float(representative_material.sigma_inf),
         }
     else:
         representative_material = PronyConductivity.no_ip(float(np.max(sigma_infinity_values)))
@@ -3718,6 +3719,67 @@ def _debye_backward_euler_coefficients(term: DebyeTerm, dt: float) -> tuple[floa
     return tau / denom, dt / denom
 
 
+def _debye_total_field_step_metadata(debye, dt: float) -> dict[str, Any]:
+    """Return the task-book E-form total-field Debye BE convention.
+
+    The DOLFINx total-field IP step uses
+    ``J = sigma_inf E - sum(delta_sigma_k chi_k)`` and
+    ``chi_k_new = alpha_k chi_k_old + beta_k E_new``. Eliminating ``chi`` gives
+    ``[K + R + M(sigma_eff)/dt] E_new =
+    M[J_old + sum(delta_sigma_k alpha_k chi_old_k)]/dt + source``.
+    """
+
+    if debye is None or not debye.get("terms", ()):
+        return {
+            "enabled": False,
+            "time_scheme": "backward_euler",
+            "reason": "no_debye_terms",
+        }
+    dt = float(dt)
+    if dt <= 0.0 or not math.isfinite(dt):
+        raise ValueError("dt must be finite and positive")
+
+    fit = debye.get("fit")
+    if fit is not None:
+        sigma_inf = float(getattr(fit, "sigma_infinity"))
+    elif "sigma_infinity" in debye:
+        sigma_inf = float(debye["sigma_infinity"])
+    else:
+        raise ValueError("Debye metadata requires fit.sigma_infinity or sigma_infinity")
+    terms = tuple(debye.get("terms", ()))
+    alpha: list[float] = []
+    beta: list[float] = []
+    delta_sigma: list[float] = []
+    sigma_eff = sigma_inf
+    for term in terms:
+        alpha_i, beta_i = _debye_backward_euler_coefficients(term, dt)
+        delta_i = float(term.delta_sigma)
+        alpha.append(float(alpha_i))
+        beta.append(float(beta_i))
+        delta_sigma.append(delta_i)
+        sigma_eff -= delta_i * float(beta_i)
+
+    sum_delta = float(sum(delta_sigma))
+    return {
+        "enabled": True,
+        "time_scheme": "backward_euler",
+        "current_convention": "J = sigma_inf E - sum(delta_sigma_k chi_k)",
+        "memory_update": "chi_k_new = alpha_k * chi_k_old + beta_k * E_new",
+        "memory_initial_condition": "chi_k0 = E0",
+        "lhs_operator": "K + R + M(sigma_eff)/dt",
+        "rhs_history": "M[J_old + sum(delta_sigma_k * alpha_k * chi_old_k)]/dt",
+        "sigma_inf": sigma_inf,
+        "sum_delta_sigma": sum_delta,
+        "sigma0": float(sigma_inf - sum_delta),
+        "sigma_eff": float(sigma_eff),
+        "delta_sigma": delta_sigma,
+        "tau": [float(term.tau) for term in terms],
+        "alpha": alpha,
+        "beta": beta,
+        "delta_sigma_zero_degenerates_to_noip": bool(all(value == 0.0 for value in delta_sigma)),
+    }
+
+
 def _matrix_for_effective_conductivity(operators, debye, dt: float):
     from petsc4py import PETSc
 
@@ -4984,6 +5046,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             "time_method": "bdf2" if use_bdf2 else "theta",
             "avg_didt": float(avg_didt),
             "divergence_control_applied": bool(divergence_control_applied),
+            "ip_total_field_equation": _debye_total_field_step_metadata(debye, dt),
         }
         if divergence_control_stats is not None:
             log_item.update(divergence_control_stats)

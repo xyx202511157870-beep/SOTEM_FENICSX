@@ -86,6 +86,31 @@ artifact writer, and diagnostics, but it does not claim the final full
 no-IP/IP DOLFINx production model reaches the task-book `<=5%` empymod/1D
 accuracy target. That target remains part of the later P7 acceptance path.
 
+## P3 Total-Field IP Checkpoint (2026-06-06)
+
+The DOLFINx total-field Debye/Prony branch now records explicit task-book
+equation metadata for each time step in `solver_log` under
+`ip_total_field_equation`. The metadata states the E-form convention:
+
+- `J = sigma_inf E - sum(delta_sigma_k chi_k)`
+- `chi_k_new = alpha_k * chi_k_old + beta_k * E_new`
+- `chi_k0 = E0`
+- `K + R + M(sigma_eff)/dt` on the left-hand side
+- `M[J_old + sum(delta_sigma_k * alpha_k * chi_old_k)]/dt` as the history RHS
+
+The metadata also writes `sigma_inf`, `sigma0`, `sigma_eff`, `delta_sigma`,
+`tau`, `alpha`, `beta`, and whether `delta_sigma=0` degenerates exactly to
+no-IP. This does not alter the numerical matrices or RHS; it makes the
+existing total-field IP branch auditable against the task-book formula.
+
+Verification command run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_dolfinx_total_field_ip.py tests/test_prony.py tests/test_dolfinx_biot_receiver.py tests/test_solver_core.py::test_time_step_solution_satisfies_debye_ip_eliminated_equation
+```
+
+Result: `20 passed`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`
