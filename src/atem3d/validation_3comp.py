@@ -76,7 +76,7 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
     diagnostics.setdefault("reference_type", case.reference_type)
     diagnostics.setdefault("components", component_names)
     diagnostics["acceptance_status"] = acceptance_status
-    diagnostics["validation_failure"] = _automatic_failure_diagnostics(summary)
+    diagnostics["validation_failure"] = _automatic_failure_diagnostics(summary, diagnostics)
     (output_dir / "diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -252,14 +252,21 @@ def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict
     return values
 
 
-def _automatic_failure_diagnostics(summary: dict) -> dict:
+def _automatic_failure_diagnostics(summary: dict, diagnostics: dict | None = None) -> dict:
     failed = not bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
     acceptance_status = dict(summary.get("acceptance_status", {}))
+    diagnostics = dict(diagnostics or {})
+    reason_codes = list(acceptance_status.get("blocking_reasons", []))
+    if failed and "physical_error_gate_failed" not in reason_codes:
+        reason_codes.append("physical_error_gate_failed")
+    if not bool(summary.get("pass_all_components", False)) and "strict_error_gate_failed" not in reason_codes:
+        reason_codes.append("strict_error_gate_failed")
     return {
         "failed": failed,
         "strict_failed": not bool(summary.get("pass_all_components", False)),
         "final_acceptance_passed": bool(summary.get("final_acceptance_passed", False)),
         "acceptance_blocking_reasons": list(acceptance_status.get("blocking_reasons", [])),
+        "reason_codes": reason_codes,
         "failed_components": list(summary.get("failed_components", [])),
         "physical_failed_components": list(
             summary.get("physical_failed_components", summary.get("failed_components", []))
@@ -274,8 +281,93 @@ def _automatic_failure_diagnostics(summary: dict) -> dict:
             "magnetic_recovery_error",
             "ip_memory_error",
         ],
+        "checks": _task_book_failure_checks(summary, diagnostics, failed=failed),
         "weak_component_passed": bool(summary.get("weak_component_passed", True)),
         "weak_components": list(summary.get("weak_components", [])),
+    }
+
+
+def _task_book_failure_checks(summary: dict, diagnostics: dict, *, failed: bool) -> dict[str, dict]:
+    base_status = "needs_evaluation" if failed else "not_required"
+    source_evidence = {}
+    source_evidence.update(dict(diagnostics.get("source_consistency", {})))
+    source_evidence.update(dict(diagnostics.get("source_projection", {})))
+    receiver_evidence = dict(diagnostics.get("receiver_sampling", {}))
+    receiver_evidence.update(
+        {"receiver_vs_reference": dict(diagnostics.get("receiver_vs_reference", {}))}
+    )
+    magnetic_evidence = {
+        "magnetic_quantity": str(summary.get("magnetic_quantity", "")),
+        "magnetic_components": list(summary.get("magnetic_components", [])),
+        "magnetic_receiver_mode": diagnostics.get(
+            "magnetic_receiver_mode",
+            diagnostics.get("magnetic_dbdt_mode", ""),
+        ),
+    }
+    ip_evidence = {
+        key: summary[key]
+        for key in (
+            "sigma0",
+            "sigma_inf",
+            "sum_delta_sigma",
+            "tau_list",
+            "delta_sigma_list",
+            "prony_dc_constraint_error",
+        )
+        if key in summary
+    }
+    return {
+        "time_step_error": _diagnostic_check(
+            status=base_status,
+            evidence={
+                "failed_times": list(summary.get("failed_times", [])),
+                "time_min": dict(summary.get("acceptance_status", {})).get("time_min"),
+                "time_max": dict(summary.get("acceptance_status", {})).get("time_max"),
+            },
+            recommended_action="rerun with denser internal time steps and compare error reduction",
+        ),
+        "mesh_error": _diagnostic_check(
+            status=base_status,
+            evidence=dict(diagnostics.get("mesh", diagnostics.get("mesh_diagnostics", {}))),
+            recommended_action="refine source, receiver, anomaly, and skin-depth controlled cells",
+        ),
+        "boundary_error": _diagnostic_check(
+            status=base_status,
+            evidence=dict(diagnostics.get("boundary", diagnostics.get("boundary_diagnostics", {}))),
+            recommended_action="run domain-size and Robin/absorbing-boundary parameter sweeps",
+        ),
+        "source_term_error": _diagnostic_check(
+            status=base_status,
+            evidence=source_evidence,
+            recommended_action="inspect endpoint balance, DC conservation, initial curl, and waveform integral residuals",
+        ),
+        "receiver_sampling_error": _diagnostic_check(
+            status=base_status,
+            evidence=receiver_evidence,
+            recommended_action="compare point receiver against volume or disk average receiver outputs",
+        ),
+        "magnetic_recovery_error": _diagnostic_check(
+            status=base_status,
+            evidence=magnetic_evidence,
+            recommended_action="compare Biot-Savart, Faraday-integrated H, and curl-derived dB/dt recovery",
+        ),
+        "ip_memory_error": _diagnostic_check(
+            status=base_status if str(summary.get("case_type", "")) == "ip" else "not_applicable",
+            evidence=(
+                ip_evidence
+                if str(summary.get("case_type", "")) == "ip"
+                else {"case_type": summary.get("case_type", "")}
+            ),
+            recommended_action="verify chi0, sigma0, Prony DC constraint, and delta_sigma=0 no-IP degeneration",
+        ),
+    }
+
+
+def _diagnostic_check(*, status: str, evidence: dict, recommended_action: str) -> dict:
+    return {
+        "status": status,
+        "evidence": evidence,
+        "recommended_action": recommended_action,
     }
 
 

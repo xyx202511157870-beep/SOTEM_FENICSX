@@ -358,8 +358,14 @@ final acceptance.
   - Robust relative error and peak-normalized error output through existing metric code.
   - IP Prony metadata in `error_summary.json`.
   - `diagnostics.json` now includes `validation_failure` with failed
-    components/times and the task-book diagnostic check order whenever a
-    validation table is written.
+    components/times, reason codes, and the task-book diagnostic check order
+    whenever a validation table is written.
+  - Failed validations now also write structured diagnostic checks for
+    `time_step_error`, `mesh_error`, `boundary_error`, `source_term_error`,
+    `receiver_sampling_error`, `magnetic_recovery_error`, and
+    `ip_memory_error`. Each check has a status, evidence dictionary, and
+    recommended action so runs that exceed `5%` point directly to the required
+    follow-up diagnostics instead of only reporting `failed`.
 
 - `src/atem3d/cli.py`
   - Keeps legacy simulation run mode.
@@ -2592,6 +2598,9 @@ source-term substitution inside the existing total-field equation.
   exists as the orchestration entry point; its default DOLFINx forward runner
   is currently smoke-tested for no-IP zero-secondary cases only.
 - `tdem-ip-forward acceptance-report` summarizes no-IP/IP validation outputs; it does not create those outputs or repair failing component errors.
+- Validation artifact diagnostics now include task-book failure reason codes
+  and seven structured follow-up checks: time step, mesh, boundary, source
+  term, receiver sampling, magnetic recovery, and IP memory.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
   metadata, including runner/material metadata, and accepts
   `--n-observation-times` for memory-safe reduced diagnostic specs.
