@@ -111,7 +111,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     )
     spaces = sp.build_function_spaces(msh, config)
     material = _forward_material_from_case_spec(case_spec)
-    sigma_background = float(case_spec.get("sigma_background", material.sigma0))
+    sigma_background = float(case_spec.get("sigma_background", _background_sigma_from_case_spec(case_spec)))
     secondary_material = _secondary_material_for_forward(case_spec, material, sigma_background)
     primary = EmpymodPrimaryProvider(
         config=_empymod_primary_config_for_case_spec(case_spec),
@@ -189,6 +189,9 @@ def _load_sotem_pipeline_module():
 
 
 def _forward_material_from_case_spec(case_spec: dict) -> PronyConductivity:
+    forward_cfg = dict(case_spec.get("dolfinx_forward", {}))
+    if str(case_spec.get("case_type")) == "noip" and "secondary_sigma" in forward_cfg:
+        return PronyConductivity.no_ip(float(forward_cfg["secondary_sigma"]))
     ip_material = _material_from_case_spec(case_spec)
     if ip_material is not None:
         return ip_material
@@ -202,6 +205,21 @@ def _forward_material_from_case_spec(case_spec: dict) -> PronyConductivity:
     if resistivities:
         return PronyConductivity.no_ip(1.0 / float(resistivities[-1]))
     raise ValueError("no-IP corrected-model material must define sigma or resistivity")
+
+
+def _background_sigma_from_case_spec(case_spec: dict) -> float:
+    material = dict(case_spec.get("material") or {})
+    if "sigma0" in material:
+        return float(material["sigma0"])
+    if "sigma" in material:
+        return float(material["sigma"])
+    if "resistivity" in material:
+        return 1.0 / float(material["resistivity"])
+    primary = dict(case_spec.get("empymod_primary", {}))
+    resistivities = primary.get("resistivities") or ()
+    if resistivities:
+        return 1.0 / float(resistivities[-1])
+    raise ValueError("corrected-model case must define a background conductivity")
 
 
 def _is_zero_secondary_material(material: PronyConductivity, sigma_background: float) -> bool:

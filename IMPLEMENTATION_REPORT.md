@@ -979,6 +979,14 @@ diagnostics, and final-acceptance plumbing for a primary-background smoke only.
 It still does not validate a resolved production mesh, 3D contrast, terrain,
 leakage channel, or a DOLFINx-computed IP secondary anomaly.
 
+The corrected-model DOLFINx forward runner now also accepts
+`dolfinx_forward.secondary_sigma` for a no-IP nonzero-conductivity-contrast
+smoke. A WSL test verifies that `secondary_sigma=0.02 S/m` with a
+`0.01 S/m` background produces a finite response that differs from the empymod
+background reference. This exercises the DOLFINx secondary adapter through the
+corrected runner, but still on a tiny synthetic box rather than a resolved
+production terrain/leakage mesh.
+
 ## Current Accuracy Status
 
 The current no-IP DOLFINx runs still exceed the 5% target. The corrected
