@@ -476,6 +476,23 @@ Windows Python environment. The first install attempt without `--no-cache-dir`
 failed on a local pip cache permission error for `pymatsolver`; rerunning with
 `--user --no-cache-dir` installed the declared dependencies successfully.
 
+Latest WSL/DOLFINx primary-secondary and leakage smoke audit:
+
+```bash
+PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m pytest -q tests/test_dolfinx_primary_secondary_forward_smoke.py tests/test_dolfinx_complex_terrain_leakage_forward.py
+```
+
+Observed result:
+
+```text
+13 passed
+```
+
+This WSL test set covers DOLFINx primary-secondary forward adapters, corrected
+runner no-IP/IP smoke paths, leakage-channel material mapping, and generated
+Gmsh terrain/leakage forward smoke. WSL was shut down after the run and
+confirmed `Ubuntu Stopped`.
+
 Latest WSL source-only smoke for the corrected explicit geometry:
 
 ```text
