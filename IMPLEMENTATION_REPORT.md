@@ -1271,6 +1271,32 @@ with `validation_scope_not_corrected_model_full` and
 `physical_error_gate_failed`: this is a 3D leakage-channel diagnostic against
 a background empymod reference, not a final 3D anomaly accuracy reference.
 
+The combined acceptance report for this integrated diagnostic was generated
+with:
+
+```bash
+python -m atem3d.cli acceptance-report dolfinx/runs/corrected_leakage_model_both_integrated/acceptance.yaml
+```
+
+It wrote:
+
+```text
+dolfinx/runs/corrected_leakage_model_both_integrated/final_acceptance/final_acceptance_summary.json
+dolfinx/runs/corrected_leakage_model_both_integrated/final_acceptance/final_acceptance_report.txt
+```
+
+Result:
+
+```text
+FINAL_ACCEPTANCE_PASSED=false
+failed_cases=noip,ip
+noip blocking = validation_scope_not_corrected_model_full, physical_error_gate_failed
+ip blocking = validation_scope_not_corrected_model_full, physical_error_gate_failed
+```
+
+This confirms the final gate blocks diagnostic leakage runs from being
+misreported as accepted task-book validation.
+
 An 80-observation-time WSL smoke also completed under:
 
 ```text
