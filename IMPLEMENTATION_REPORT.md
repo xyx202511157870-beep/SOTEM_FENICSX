@@ -2841,6 +2841,18 @@ source-term substitution inside the existing total-field equation.
   separates two effects: magnetic-rate recovery/cell-candidate collapse is
   sensitive to receiver sampling, while the late electric-field convergence
   failure remains unresolved.
+- A default-domain uniform mesh-refinement diagnostic then increased the
+  convergence pair from `[2,2,1] -> [4,4,2]` to `[3,3,1] -> [6,6,2]` while
+  keeping `receiver_evaluation_mode=first_cell`. This also degraded the result:
+  `failed_time_band=broadband`, `physical_failed_components=[Ex,Ey,dBzdt]`,
+  `max_physical_error=485.037`, `max_error_Ex=16.2976`, and
+  `max_error_dBzdt=2.15035`, with runtimes about `50.97 s` coarse and
+  `353.75 s` refined. The combined sweep over first-cell, median, and uniform
+  cells3 still selected the original `[2,2,1] -> [4,4,2]` first-cell run as
+  best by max physical error. Uniform box refinement is therefore not a useful
+  next path for this coarse leakage geometry; the likely problem is the
+  interaction of DG0 leakage marking, cell-center channel representation, and
+  source/receiver coupling rather than a simple global resolution shortage.
 
 ## Next Steps
 
