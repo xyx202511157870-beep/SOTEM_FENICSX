@@ -122,6 +122,20 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     receiver_locations = np.asarray([case_spec["receiver"]], dtype=float)
     components = tuple(str(value) for value in case_spec["components"])
 
+    if "leakage_channel" in forward_cfg:
+        return _run_dolfinx_leakage_channel_forward(
+            sp,
+            msh,
+            spaces,
+            config,
+            case_spec,
+            forward_cfg,
+            primary=primary,
+            receiver_locations=receiver_locations,
+            components=components,
+            sigma_background=sigma_background,
+        )
+
     if _is_zero_secondary_material(secondary_material, sigma_background):
         operator = PrimarySecondaryForwardOperator(
             primary=primary,
@@ -171,6 +185,76 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         sigma_background=sigma_background,
     )
     return built["operator"].forward(np.asarray(case_spec["observation_times"], dtype=float))
+
+
+def _run_dolfinx_leakage_channel_forward(
+    sp,
+    msh,
+    spaces,
+    config,
+    case_spec: dict,
+    forward_cfg: dict,
+    *,
+    primary,
+    receiver_locations: np.ndarray,
+    components: tuple[str, ...],
+    sigma_background: float,
+) -> np.ndarray:
+    from atem3d.materials.material_map import (
+        CellMaterialMap,
+        apply_leakage_channel_marker,
+    )
+
+    leakage_cfg = dict(forward_cfg["leakage_channel"])
+    centers = sp._cell_centers(msh)
+    background_marker = int(leakage_cfg.get("background_marker", 1))
+    leakage_marker = int(leakage_cfg.get("leakage_marker", 7))
+    markers = np.full(centers.shape[0], background_marker, dtype=int)
+    markers = apply_leakage_channel_marker(
+        markers,
+        centers,
+        channel_points=np.asarray(leakage_cfg["points"], dtype=float),
+        radius=float(leakage_cfg["radius"]),
+        leakage_marker=leakage_marker,
+    )
+    if not np.any(markers == leakage_marker):
+        raise ValueError("leakage_channel did not mark any mesh cells")
+    material_map = CellMaterialMap(
+        markers=markers,
+        materials={
+            background_marker: PronyConductivity.no_ip(float(sigma_background)),
+            leakage_marker: PronyConductivity.no_ip(float(leakage_cfg["sigma"])),
+        },
+    )
+    times = np.asarray(case_spec["observation_times"], dtype=float)
+    built_materials = sp._make_dolfinx_materials_from_cell_material_map(
+        msh,
+        spaces,
+        material_map,
+        dt=float(times[0]),
+    )
+    operators = sp.assemble_operators(
+        msh,
+        spaces,
+        built_materials["materials"],
+        facet_tags=None,
+        config=config,
+        debye=built_materials["debye"],
+    )
+    built_operator = sp._make_dolfinx_primary_secondary_forward_operator(
+        msh,
+        spaces,
+        built_materials["materials"],
+        operators,
+        config,
+        primary=primary,
+        receiver_locations=receiver_locations,
+        components=components,
+        material=built_materials["representative_material"],
+        sigma_background=float(sigma_background),
+        debye=built_materials["debye"],
+    )
+    return built_operator["operator"].forward(times)
 
 
 def _load_sotem_pipeline_module():

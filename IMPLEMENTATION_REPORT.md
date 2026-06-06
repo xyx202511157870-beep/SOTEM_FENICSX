@@ -987,6 +987,15 @@ background reference. This exercises the DOLFINx secondary adapter through the
 corrected runner, but still on a tiny synthetic box rather than a resolved
 production terrain/leakage mesh.
 
+The corrected-model runner also accepts a `dolfinx_forward.leakage_channel`
+block with channel points, radius, and leakage conductivity. This path marks
+cells with `apply_leakage_channel_marker`, builds a `CellMaterialMap`, converts
+it with `_make_dolfinx_materials_from_cell_material_map`, and runs the same
+primary-secondary DOLFINx operator. A WSL smoke verifies a finite response that
+differs from the empymod background reference. This connects the leakage-channel
+material-map machinery to the corrected runner, though still on a tiny box
+rather than a production terrain mesh.
+
 ## Current Accuracy Status
 
 The current no-IP DOLFINx runs still exceed the 5% target. The corrected
