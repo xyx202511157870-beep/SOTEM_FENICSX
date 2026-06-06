@@ -8,7 +8,6 @@ from typing import Any, Sequence
 
 import numpy as np
 from scipy.constants import mu_0
-import yaml
 
 from .fit import (
     DebyeFitResult,
@@ -77,6 +76,7 @@ def build_empymod_survey_from_result(
     """Build an empymod survey and column names from an ATEM3D result file."""
 
     import h5py
+    import yaml
 
     with h5py.File(result_path, "r") as h5:
         times = h5["times"][:]

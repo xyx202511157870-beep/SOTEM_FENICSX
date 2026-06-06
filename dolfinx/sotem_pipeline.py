@@ -4358,6 +4358,64 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     }
 
 
+def _make_dolfinx_primary_secondary_forward_operator(
+    msh,
+    spaces,
+    materials,
+    operators,
+    config: PipelineConfig,
+    *,
+    primary,
+    receiver_locations,
+    components,
+    material,
+    sigma_background: float,
+    debye=None,
+):
+    """Build a DOLFINx-wired primary-secondary forward operator.
+
+    This helper is the production bridge from a background primary provider to
+    the pure `PrimarySecondaryForwardOperator`: it samples the provider on the
+    actual local Nedelec physical interpolation points exported from the mesh,
+    then wires the DOLFINx secondary initializer, stepper, and receiver
+    projector.
+    """
+
+    from atem3d.solvers import PrimarySecondaryForwardOperator
+
+    interpolation = _nedelec_interpolation_points(msh, spaces)
+    fem_points = interpolation["points"]
+    adapters = _make_dolfinx_primary_secondary_forward_adapters(
+        msh,
+        spaces,
+        materials,
+        operators,
+        config,
+        fem_points,
+        sigma_background=sigma_background,
+        debye=debye,
+    )
+    operator = PrimarySecondaryForwardOperator(
+        primary=primary,
+        fem_points=fem_points,
+        receiver_locations=receiver_locations,
+        components=components,
+        material=material,
+        sigma_background=sigma_background,
+        secondary_state_initializer=adapters["secondary_state_initializer"],
+        secondary_step_solver=adapters["secondary_step_solver"],
+        secondary_receiver_projector=adapters["secondary_receiver_projector"],
+        secondary_state_stepper=adapters["secondary_state_stepper"],
+    )
+    return {
+        "operator": operator,
+        "fem_points": fem_points,
+        "interpolation": interpolation,
+        "adapters": adapters,
+        "diagnostics": adapters["diagnostics"],
+    }
+
+
 def _update_debye_memories(debye, memories, E_new, dt: float) -> None:
     if debye is None:
         return

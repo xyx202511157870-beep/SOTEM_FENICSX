@@ -437,3 +437,73 @@ def test_dolfinx_primary_secondary_spatial_ip_forward_uses_state_initializer():
     assert len(adapters["diagnostics"]["chi"]) == 1
     assert adapters["diagnostics"]["dc_result"] is not None
     assert adapters["diagnostics"]["dc_result"]["contrast_is_zero"] is False
+
+
+def test_dolfinx_primary_secondary_operator_helper_samples_provider_on_nedelec_points():
+    from atem3d.materials.prony import PronyConductivity
+    from atem3d.primary import ZeroPrimaryProvider
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    config = sp.PipelineConfig(
+        receiver=(0.25, 0.25, 0.25),
+        receiver_evaluation_mode="first_cell",
+        outer_boundary_mode="natural",
+        ksp_type="cg",
+        rtol=1.0e-10,
+        atol=1.0e-12,
+        max_it=400,
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    sigma = fem.Function(spaces["Q"], name="sigma")
+    sigma.x.array[:] = 0.02
+    sigma.x.scatter_forward()
+    mu_inv = fem.Function(spaces["Q"], name="mu_inv")
+    mu_inv.x.array[:] = 1.0
+    mu_inv.x.scatter_forward()
+    materials = {
+        "sigma": sigma,
+        "sigma_initial": sigma,
+        "sigma_infinity": sigma,
+        "mu_inv": mu_inv,
+    }
+    operators = sp.assemble_operators(msh, spaces, materials, facet_tags=None, config=config)
+    expected_points = sp._nedelec_interpolation_points(msh, spaces)["points"]
+    seen = {}
+
+    class RecordingPrimaryProvider(ZeroPrimaryProvider):
+        def get_Ep_on_V(self, t, points):
+            seen.setdefault("transient_points", []).append(np.asarray(points, dtype=float).copy())
+            return np.column_stack((np.ones(len(points)), np.zeros(len(points)), np.zeros(len(points))))
+
+        def get_Ep_dc_on_V(self, points):
+            seen["dc_points"] = np.asarray(points, dtype=float).copy()
+            return np.column_stack((np.ones(len(points)), np.zeros(len(points)), np.zeros(len(points))))
+
+        def get_receiver_E(self, t, receivers):
+            return np.array([[10.0, 1.0, 0.0]])
+
+        def get_receiver_dBdt(self, t, receivers):
+            return np.zeros((1, 3))
+
+    built = sp._make_dolfinx_primary_secondary_forward_operator(
+        msh,
+        spaces,
+        materials,
+        operators,
+        config,
+        primary=RecordingPrimaryProvider(),
+        receiver_locations=np.array([[0.25, 0.25, 0.25]]),
+        components=("Ex", "Ey", "dBzdt"),
+        material=PronyConductivity.no_ip(0.02),
+        sigma_background=0.01,
+    )
+
+    predicted = built["operator"].forward(np.array([1.0e-5]))
+
+    assert predicted.shape == (1, 3)
+    np.testing.assert_allclose(seen["dc_points"], expected_points)
+    np.testing.assert_allclose(seen["transient_points"][0], expected_points)
+    np.testing.assert_allclose(built["fem_points"], expected_points)
