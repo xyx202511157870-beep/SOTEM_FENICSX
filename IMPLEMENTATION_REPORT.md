@@ -3564,6 +3564,31 @@ source-term substitution inside the existing total-field equation.
   shut down; `/usr/bin/python3` still lacks `numpy`, `pytest`, `dolfinx.fem`,
   `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`, and `petsc4py`, and
   `wsl -l -v` confirmed `Ubuntu Stopped`.
+- WSL FEniCSx environment correction checkpoint (2026-06-06): the earlier WSL
+  runtime checks were using the system Python (`/usr/bin/python3`), not the
+  user's conda FEniCSx environment. After explicitly sourcing
+  `~/miniconda3/etc/profile.d/conda.sh` and running `conda activate fenicsx`,
+  the active interpreter is
+  `/home/paidaxin/miniconda3/envs/fenicsx/bin/python` with Python 3.10.20, and
+  `numpy`, `pytest`, `dolfinx.fem`, `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`,
+  and `petsc4py` all import successfully. The repository backend check
+  `python -m atem3d.cli dolfinx-backend-check --output /tmp/atem3d_backend_status.json`
+  reported `available: true` under that environment. A real DOLFINx smoke
+  regression exposed that
+  `test_dolfinx_primary_secondary_nonzero_contrast_forward_runs_secondary_path`
+  was manually constructing the primary-secondary operator without the
+  adapter's `secondary_state_stepper`, so it was not using the same runtime
+  path that records `primary_secondary_step_equation`. The test wiring was
+  corrected to pass `secondary_state_stepper=adapters["secondary_state_stepper"]`.
+  WSL verification under `conda activate fenicsx` then passed:
+  `python -u -m pytest -vv tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_zero_contrast_forward_returns_primary_response`,
+  `python -u -m pytest -vv tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_nonzero_contrast_forward_runs_secondary_path`,
+  `python -u -m pytest -vv tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_nonzero_contrast_forward_runs_secondary_path tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_ip_forward_runs_state_stepper tests/test_dolfinx_primary_secondary_forward_smoke.py::test_corrected_model_default_forward_runner_runs_noip_nonzero_contrast_smoke tests/test_dolfinx_primary_secondary_forward_smoke.py::test_corrected_model_default_forward_runner_runs_leakage_channel_smoke`,
+  and
+  `python -u -m pytest -vv tests/test_dolfinx_primary_secondary_forward_smoke.py::test_corrected_model_default_forward_runner_runs_ip_leakage_channel_smoke`.
+  Each WSL run was followed by `wsl --shutdown`, and `wsl -l -v` confirmed
+  `Ubuntu Stopped`. Windows verification after the test-wiring correction ran
+  `python -m pytest -q` with exit code 0.
 
 ## Next Steps
 

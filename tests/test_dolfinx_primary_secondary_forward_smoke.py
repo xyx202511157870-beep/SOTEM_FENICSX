@@ -141,6 +141,7 @@ def test_dolfinx_primary_secondary_nonzero_contrast_forward_runs_secondary_path(
         secondary_field_solver=adapters["secondary_field_solver"],
         secondary_step_solver=adapters["secondary_step_solver"],
         secondary_receiver_projector=adapters["secondary_receiver_projector"],
+        secondary_state_stepper=adapters["secondary_state_stepper"],
     )
 
     predicted = operator.forward(times)
