@@ -1726,6 +1726,51 @@ but it is not the dominant source of the early electric-field disagreement.
 The remaining Ex error points back to source loading, primary/background
 field consistency, or the total-field formulation.
 
+## P2 Magnetic Receiver Mode Audit
+
+I ran a controlled one-output WSL audit on the corrected latest geometry using
+the same mesh/time/source settings and changing only:
+
+```text
+--magnetic-receiver-mode biot_current|biot_ohmic|faraday_integrated
+```
+
+The output directories are intentionally under ignored `dolfinx/runs/`:
+
+```text
+dolfinx/runs/y200_rxminus300_magnetic_mode_biot_current_onepoint
+dolfinx/runs/y200_rxminus300_magnetic_mode_biot_ohmic_onepoint
+dolfinx/runs/y200_rxminus300_magnetic_mode_faraday_integrated_onepoint
+```
+
+All three runs used the corrected model consistency checks:
+
+```text
+source: (-500, 200, -0.1) -> (500, 200, -0.1)
+receiver: (0, -300, -0.1)
+expected source length: 1000 m
+expected parallel offset: 500 m
+stop-after-outputs: 1
+```
+
+First-output results at `t_obs=1e-5 s`:
+
+```text
+mode                 Hz pred          Hz ref           Hz peak error   dBzdt peak error   Ex peak error
+biot_current         -2.2265429e-3    -2.1976186e-3    1.316%          23.317%            44.154%
+biot_ohmic           -2.2265429e-3    -2.1976186e-3    1.316%          23.317%            44.154%
+faraday_integrated   -2.2201369e-3    -2.1976186e-3    1.025%          23.317%            44.154%
+```
+
+Interpretation: `biot_current` and `biot_ohmic` are identical at this first
+after-ramp output for this non-polarizable one-point audit. The new
+`faraday_integrated` receiver mode runs in WSL and gives a slightly better
+`Hz` value than Biot-Savart recovery, but the dominant errors are unchanged:
+`Ex` is about `44%` and `dBzdt` is about `23%`. This supports the current
+diagnosis that the remaining short-window failure is not mainly a Biot `Hz`
+recovery problem; it is tied to electric/source/receiver-curl consistency in
+the total-field E-form path.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
