@@ -8,10 +8,10 @@ import csv
 import json
 
 import numpy as np
-import yaml
 
 from atem3d.materials.prony import PronyConductivity
 from atem3d.metrics import robust_component_errors
+from atem3d.yaml_io import safe_dump_yaml
 
 REQUIRED_TIME_MIN = 1.0e-5
 REQUIRED_TIME_MAX = 1.0
@@ -83,7 +83,7 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
         encoding="utf-8",
     )
     (output_dir / "run_config_resolved.yaml").write_text(
-        yaml.safe_dump(_resolved_config(case, component_names), sort_keys=True),
+        safe_dump_yaml(_resolved_config(case, component_names), sort_keys=True),
         encoding="utf-8",
     )
     _plot_comparison(

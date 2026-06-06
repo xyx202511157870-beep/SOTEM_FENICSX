@@ -69,6 +69,12 @@ final acceptance.
     `validation_failure.reason_codes` plus structured diagnostic check status
     into `failure_diagnostics_by_case` in the combined final report.
 
+- `src/atem3d/yaml_io.py`
+  - `safe_dump_yaml`
+  - Uses `PyYAML` when available and falls back to a small built-in YAML
+    writer for dictionaries/lists/scalars when the WSL FEniCSx environment
+    does not provide `yaml`.
+
 - `src/atem3d/corrected_model.py`
   - `CorrectedModelValidationConfig`
   - `build_corrected_model_case_specs`
@@ -2616,9 +2622,15 @@ source-term substitution inside the existing total-field equation.
   and seven structured follow-up checks: time step, mesh, boundary, source
   term, receiver sampling, magnetic recovery, and IP memory.
 - Validation artifact `run_config_resolved.yaml` files are now emitted as
-  YAML text and remain readable by `yaml.safe_load`.
+  YAML text and remain readable by `yaml.safe_load`; writing does not require
+  `PyYAML` in the runtime environment.
 - Corrected-model orchestration `acceptance.yaml` files are now emitted as
-  YAML text and remain readable by `yaml.safe_load`.
+  YAML text and remain readable by `yaml.safe_load`; writing does not require
+  `PyYAML` in the runtime environment.
+- WSL DOLFINx smoke regression after the YAML fallback fix:
+  `PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m pytest -q tests/test_dolfinx_primary_secondary_forward_smoke.py tests/test_dolfinx_complex_terrain_leakage_forward.py`
+  completed with `13 passed`. WSL was then shut down and `Ubuntu Stopped` was
+  confirmed.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
   metadata, including runner/material metadata, and accepts
   `--n-observation-times` for memory-safe reduced diagnostic specs.

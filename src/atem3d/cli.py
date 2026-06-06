@@ -497,7 +497,7 @@ def _selected_corrected_model_specs(config: dict, *, case: str) -> list[tuple[st
 
 
 def _write_corrected_model_acceptance_config(output_root: Path, output_dirs: dict[str, Path]) -> Path:
-    import yaml
+    from .yaml_io import safe_dump_yaml
 
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -511,7 +511,7 @@ def _write_corrected_model_acceptance_config(output_root: Path, output_dirs: dic
         }
     }
     path = output_root / "acceptance.yaml"
-    path.write_text(yaml.safe_dump(payload, sort_keys=True), encoding="utf-8")
+    path.write_text(safe_dump_yaml(payload, sort_keys=True), encoding="utf-8")
     return path
 
 
