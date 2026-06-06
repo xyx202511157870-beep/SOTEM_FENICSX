@@ -2831,6 +2831,16 @@ source-term substitution inside the existing total-field equation.
   the 3D leakage diagnostic; the next useful step is local/skin-depth
   refinement or receiver/source sampling diagnostics rather than another
   coarse domain expansion.
+- A receiver-evaluation diagnostic reran the default corrected leakage no-IP
+  convergence case with `receiver_evaluation_mode=median` instead of
+  `first_cell`. The median receiver collapse improved the late `dBzdt`
+  convergence error from `0.130271` to `0.003392` and made `dBzdt` pass the
+  5% gate, but it worsened late `Ex` from `0.623831` to `3.02928`.
+  `physical_failed_components` changed from `[Ex,dBzdt]` to `[Ex]`, and the
+  sweep report still selected `first_cell` as best by max physical error. This
+  separates two effects: magnetic-rate recovery/cell-candidate collapse is
+  sensitive to receiver sampling, while the late electric-field convergence
+  failure remains unresolved.
 
 ## Next Steps
 
