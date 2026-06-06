@@ -64,7 +64,7 @@ ip   max_error_Ex=0, max_error_Ey=0, max_error_dBzdt=0
 | 渗漏通道 cell marking | 已有 preflight 和 transient smoke | 只证明材料标记和 DOLFINx path 可运行 |
 | no-IP/IP terrain smoke CLI | 已实现 `corrected-terrain-smoke-run --case noip/ip/both` | 使用 constant primary 与 `self_convergence` |
 | 非零二次场收敛诊断 | 已记录 secondary-effect 非零性 | `dolfinx_refined`/`self_convergence` 不允许通过最终验收门 |
-| 论文模型 metadata/曲线产物框架 | 已提取 Song et al. 2025 模型参数；Fig. 2/3/7/8/12/15 的 PDF 页码、单位、面板、图注和裁剪框已写入 digitization target；`published-paper-figure-pages --crop-figures` 可从本地 PDF 渲染目标页和单图 PNG；`published-paper-curve-artifacts --paper-spec --model-key` 可自动选择对应 Ex/Hz 图号并从数字化 CSV 写出 `paper_response_overlay.png`, `paper_relative_error_curves.png`, `runtime_diagnostics.json` | 真实曲线数值仍需数字化或获得表格数据 |
+| 论文模型 metadata/曲线产物框架 | 已提取 Song et al. 2025 模型参数；Fig. 2/3/7/8/12/15 的 PDF 页码、单位、面板、图注和裁剪框已写入 digitization target；`published-paper-figure-pages --crop-figures` 可从本地 PDF 渲染目标页和单图 PNG；`published-paper-digitization-audit` 可检查数字化 CSV 覆盖性；`published-paper-curve-artifacts --paper-spec --model-key` 可自动选择对应 Ex/Hz 图号并从数字化 CSV 写出 `paper_response_overlay.png`, `paper_relative_error_curves.png`, `runtime_diagnostics.json` | 真实曲线数值仍需数字化或获得表格数据 |
 
 ## WSL 复现实用命令
 

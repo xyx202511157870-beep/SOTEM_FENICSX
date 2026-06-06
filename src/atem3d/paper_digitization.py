@@ -288,6 +288,73 @@ def write_published_paper_curve_artifacts(
     return summary
 
 
+def write_published_paper_digitization_audit(
+    *,
+    predictions_csv: str | Path,
+    digitized_csv: str | Path,
+    output: str | Path,
+    curve_label: str,
+    component_figures: dict[str, str] | None = None,
+    model_key: str | None = None,
+) -> dict:
+    """Write a machine-readable completeness audit for digitized paper curves."""
+
+    times, component_names, _predictions = _read_prediction_csv(predictions_csv)
+    figures = dict(component_figures or {"Ex": "Fig. 12", "Hz": "Fig. 15"})
+    selected_components = [name for name in component_names if name in figures]
+    missing_records = []
+    schema_valid = True
+    missing_columns: list[str] = []
+    records = []
+    try:
+        records = _read_digitized_records(digitized_csv)
+    except ValueError as exc:
+        schema_valid = False
+        message = str(exc)
+        if "digitized_csv missing columns:" in message:
+            missing_columns = [
+                value.strip().strip("'")
+                for value in message.split(":", 1)[1].strip(" []").split(",")
+                if value.strip()
+            ]
+    table = _digitized_value_table(
+        records,
+        components=selected_components,
+        curve_label=curve_label,
+        component_figures=figures,
+    ) if schema_valid else {}
+    for component in selected_components:
+        for time in times:
+            if _matching_digitized_key(table, component, float(time)) is None:
+                missing_records.append(
+                    {
+                        "figure": figures[component],
+                        "component": component,
+                        "curve_label": str(curve_label),
+                        "time_obs": float(time),
+                    }
+                )
+    audit = {
+        "artifact_type": "published_paper_digitization_audit",
+        "complete": bool(schema_valid and selected_components and not missing_records),
+        "schema_valid": bool(schema_valid),
+        "missing_columns": missing_columns,
+        "prediction_time_count": int(times.size),
+        "selected_components": selected_components,
+        "component_figures": {name: figures[name] for name in selected_components},
+        "curve_label": str(curve_label),
+        "model_key": "" if model_key is None else str(model_key),
+        "missing_record_count": len(missing_records),
+        "missing_records": missing_records,
+        "predictions_csv": str(Path(predictions_csv)),
+        "digitized_csv": str(Path(digitized_csv)),
+    }
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(audit, indent=2, sort_keys=True), encoding="utf-8")
+    return audit
+
+
 def _write_published_curve_alias_artifacts(output_dir: Path) -> None:
     """Write paper-reproduction filenames promised by the paper target spec."""
 
@@ -432,23 +499,13 @@ def _read_digitized_reference(
     curve_label: str,
     component_figures: dict[str, str],
 ) -> np.ndarray:
-    with Path(path).open(encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        required = {"figure", "component", "curve_label", "time_obs", "value"}
-        missing = sorted(required.difference(reader.fieldnames or ()))
-        if missing:
-            raise ValueError(f"digitized_csv missing columns: {missing}")
-        records = list(reader)
-    table: dict[tuple[str, float], float] = {}
-    for row in records:
-        component = str(row["component"])
-        if component not in components:
-            continue
-        if str(row["curve_label"]) != str(curve_label):
-            continue
-        if str(row["figure"]) != str(component_figures[component]):
-            continue
-        table[(component, float(row["time_obs"]))] = float(row["value"])
+    records = _read_digitized_records(path)
+    table = _digitized_value_table(
+        records,
+        components=components,
+        curve_label=curve_label,
+        component_figures=component_figures,
+    )
     columns = []
     for component in components:
         values = []
@@ -461,6 +518,36 @@ def _read_digitized_reference(
             values.append(table[key])
         columns.append(values)
     return np.column_stack(columns)
+
+
+def _read_digitized_records(path: str | Path) -> list[dict]:
+    with Path(path).open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"figure", "component", "curve_label", "time_obs", "value"}
+        missing = sorted(required.difference(reader.fieldnames or ()))
+        if missing:
+            raise ValueError(f"digitized_csv missing columns: {missing}")
+        return list(reader)
+
+
+def _digitized_value_table(
+    records: list[dict],
+    *,
+    components: list[str],
+    curve_label: str,
+    component_figures: dict[str, str],
+) -> dict[tuple[str, float], float]:
+    table: dict[tuple[str, float], float] = {}
+    for row in records:
+        component = str(row["component"])
+        if component not in components:
+            continue
+        if str(row["curve_label"]) != str(curve_label):
+            continue
+        if str(row["figure"]) != str(component_figures[component]):
+            continue
+        table[(component, float(row["time_obs"]))] = float(row["value"])
+    return table
 
 
 def _matching_digitized_key(

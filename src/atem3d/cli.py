@@ -35,6 +35,7 @@ _TOP_LEVEL_COMMANDS = (
     ("published-paper-model-spec", "Write the published-paper reproduction target spec."),
     ("published-paper-digitization-template", "Write paper-curve digitization templates."),
     ("published-paper-figure-pages", "Write/render published-paper target figure page assets."),
+    ("published-paper-digitization-audit", "Audit digitized paper response CSV completeness."),
     ("published-paper-curve-artifacts", "Compare predictions against digitized paper curves."),
     ("published-paper-prony-materials", "Write Prony materials fitted from paper Cole-Cole models."),
 )
@@ -79,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_published_paper_digitization_template(argv[1:])
     if argv and argv[0] == "published-paper-figure-pages":
         return _main_published_paper_figure_pages(argv[1:])
+    if argv and argv[0] == "published-paper-digitization-audit":
+        return _main_published_paper_digitization_audit(argv[1:])
     if argv and argv[0] == "published-paper-curve-artifacts":
         return _main_published_paper_curve_artifacts(argv[1:])
     if argv and argv[0] == "published-paper-prony-materials":
@@ -344,6 +347,49 @@ def _main_published_paper_curve_artifacts(argv: list[str]) -> int:
     print(f"reference_type: {summary['reference_type']}")
     print(f"final_acceptance_passed: {summary['final_acceptance_passed']}")
     return 0
+
+
+def _main_published_paper_digitization_audit(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Audit digitized paper response CSV coverage.")
+    parser.add_argument("predictions_csv", type=Path, help="Prediction CSV with time_obs and component columns")
+    parser.add_argument("digitized_csv", type=Path, help="Long-form digitized paper response CSV")
+    parser.add_argument("--output", type=Path, default=Path("paper_digitization_audit.json"))
+    parser.add_argument("--curve-label", default="paper_ip")
+    parser.add_argument("--paper-spec", type=Path, help="Optional paper model spec for inferring figures")
+    parser.add_argument("--model-key", help="Paper model key used with --paper-spec to infer figures")
+    parser.add_argument(
+        "--component-figure",
+        action="append",
+        default=[],
+        help="Component-to-figure mapping such as Ex=Fig. 12; may be repeated",
+    )
+    args = parser.parse_args(argv)
+
+    from .paper_digitization import (
+        component_figures_for_model_key,
+        write_published_paper_digitization_audit,
+    )
+
+    component_figures = _parse_component_figure_args(args.component_figure)
+    inferred_model_key = None
+    if not component_figures and (args.paper_spec is not None or args.model_key is not None):
+        if args.paper_spec is None or args.model_key is None:
+            parser.error("--paper-spec and --model-key must be provided together")
+        paper_spec = _load_yaml(args.paper_spec)
+        component_figures = component_figures_for_model_key(paper_spec, args.model_key)
+        inferred_model_key = args.model_key
+    audit = write_published_paper_digitization_audit(
+        predictions_csv=args.predictions_csv,
+        digitized_csv=args.digitized_csv,
+        output=args.output,
+        curve_label=args.curve_label,
+        component_figures=component_figures or None,
+        model_key=inferred_model_key,
+    )
+    print(f"wrote {args.output}")
+    print(f"complete: {audit['complete']}")
+    print(f"missing_record_count: {audit['missing_record_count']}")
+    return 0 if bool(audit["complete"]) else 1
 
 
 def _main_published_paper_prony_materials(argv: list[str]) -> int:

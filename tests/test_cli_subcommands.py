@@ -33,6 +33,7 @@ def test_cli_top_level_help_lists_task_book_subcommands(capsys):
         "published-paper-model-spec",
         "published-paper-digitization-template",
         "published-paper-figure-pages",
+        "published-paper-digitization-audit",
         "published-paper-curve-artifacts",
         "published-paper-prony-materials",
     ]:

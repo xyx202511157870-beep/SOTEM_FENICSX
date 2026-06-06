@@ -1024,6 +1024,73 @@ def test_published_paper_curve_artifacts_cli_infers_figures_from_model_key(tmp_p
     assert diagnostics["published_response_curve"]["model_key"] == "layered_polarization_model"
 
 
+def test_published_paper_digitization_audit_cli_reports_missing_records(tmp_path):
+    spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
+    spec_path = tmp_path / "paper_model_target.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    predictions = tmp_path / "predictions.csv"
+    predictions.write_text(
+        "\n".join(
+            [
+                "time_obs,Ex,Hz",
+                "1e-05,1.02,2.04e-09",
+                "0.001,0.51,1.02e-09",
+                "1.0,0.102,2.04e-10",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    digitized = tmp_path / "digitized.csv"
+    digitized.write_text(
+        "\n".join(
+            [
+                "figure,model_key,component,curve_label,time_obs,value,notes",
+                "Fig. 7,layered_polarization_model,Ex,paper_ip,1e-05,1.0,",
+                "Fig. 7,layered_polarization_model,Ex,paper_ip,0.001,0.5,",
+                "Fig. 7,layered_polarization_model,Ex,paper_ip,1.0,0.1,",
+                "Fig. 8,layered_polarization_model,Hz,paper_ip,1e-05,2.0e-09,",
+                "Fig. 8,layered_polarization_model,Hz,paper_ip,0.001,1.0e-09,",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "audit.json"
+
+    exit_code = main(
+        [
+            "published-paper-digitization-audit",
+            str(predictions),
+            str(digitized),
+            "--output",
+            str(output),
+            "--curve-label",
+            "paper_ip",
+            "--paper-spec",
+            str(spec_path),
+            "--model-key",
+            "layered_polarization_model",
+        ]
+    )
+
+    assert exit_code == 1
+    audit = json.loads(output.read_text(encoding="utf-8"))
+    assert audit["complete"] is False
+    assert audit["schema_valid"] is True
+    assert audit["component_figures"] == {"Ex": "Fig. 7", "Hz": "Fig. 8"}
+    assert audit["model_key"] == "layered_polarization_model"
+    assert audit["missing_record_count"] == 1
+    assert audit["missing_records"] == [
+        {
+            "figure": "Fig. 8",
+            "component": "Hz",
+            "curve_label": "paper_ip",
+            "time_obs": 1.0,
+        }
+    ]
+
+
 def test_published_paper_prony_materials_cli_writes_fit_json(tmp_path):
     spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
     spec_path = tmp_path / "paper_model_target.json"

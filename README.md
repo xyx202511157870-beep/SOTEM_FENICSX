@@ -43,6 +43,7 @@ Prepare the published-paper digitization package:
 python -m atem3d.cli published-paper-model-spec dolfinx/paper_reproduction --output dolfinx/paper_reproduction/spec.json
 python -m atem3d.cli published-paper-digitization-template dolfinx/paper_reproduction/spec.json --output-dir dolfinx/paper_reproduction/digitization
 python -m atem3d.cli published-paper-figure-pages dolfinx/paper_reproduction/spec.json --pdf "Song 等 - 2025 - Analysis of 3D induced polarization effects of SOTEM.pdf" --output-dir dolfinx/paper_reproduction/figure_pages --crop-figures
+python -m atem3d.cli published-paper-digitization-audit predictions.csv digitized.csv --paper-spec dolfinx/paper_reproduction/spec.json --model-key three_dimensional_polarized_body --curve-label paper_ip --output dolfinx/paper_reproduction/digitization_audit.json
 python -m atem3d.cli published-paper-curve-artifacts predictions.csv digitized.csv --paper-spec dolfinx/paper_reproduction/spec.json --model-key three_dimensional_polarized_body --curve-label paper_ip --output-dir dolfinx/paper_reproduction/curve_artifacts
 ```
 
