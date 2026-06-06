@@ -51,6 +51,8 @@ def initialize_dc_secondary(
         raise ValueError("sigma0 must be positive")
     if sigma_background <= 0.0:
         raise ValueError("sigma_background must be positive")
+    if not np.isclose(sigma0, material.sigma0, rtol=1.0e-12, atol=1.0e-15):
+        raise ValueError("sigma0 must match material.sigma0")
     if contrast_atol < 0.0:
         raise ValueError("contrast_atol must be nonnegative")
 

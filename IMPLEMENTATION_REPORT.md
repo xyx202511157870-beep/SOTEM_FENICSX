@@ -111,6 +111,29 @@ python -m pytest -q tests/test_dolfinx_total_field_ip.py tests/test_prony.py tes
 
 Result: `20 passed`.
 
+## P5 DC Secondary Consistency Checkpoint (2026-06-06)
+
+The reusable DC secondary initializer now enforces the task-book IP
+initialization convention that the supplied DC conductivity equals the Prony
+material DC conductivity:
+
+```text
+sigma0 = sigma_inf - sum(delta_sigma_k)
+```
+
+`initialize_dc_secondary(...)` raises a `ValueError` if `sigma0` does not
+match `material.sigma0`, preventing inconsistent DC secondary fields and
+Debye memory states. This guards the P5 initialization path before it is used
+by the full primary-secondary transient solver.
+
+Verification command run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_dc_initialization.py tests/test_primary_provider.py tests/test_secondary_zero_contrast.py tests/test_prony.py tests/test_dolfinx_total_field_ip.py
+```
+
+Result: `43 passed`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

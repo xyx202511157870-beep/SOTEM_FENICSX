@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from atem3d.materials.prony import DebyeTerm, PronyConductivity
 from atem3d.primary import CachedPrimaryProvider, PrimaryFEMInterpolator
@@ -44,6 +45,23 @@ def test_dc_secondary_initializes_ip_memory_from_total_field():
     expected_delta_j = material.current_density(result.Etotal0, result.chi0) - 0.01 * Ep0
     np.testing.assert_allclose(result.deltaJ0, expected_delta_j)
     np.testing.assert_allclose(result.phi_s, np.array([3.0]))
+
+
+def test_dc_secondary_rejects_sigma0_that_does_not_match_material_dc_conductivity():
+    Ep0 = np.array([[1.0, 0.0, 0.0]])
+    material = PronyConductivity(
+        sigma_inf=0.02,
+        terms=[DebyeTerm(delta_sigma=0.005, tau=0.1)],
+    )
+
+    with pytest.raises(ValueError, match="sigma0 must match material.sigma0"):
+        initialize_dc_secondary(
+            Ep0=Ep0,
+            sigma0=0.02,
+            sigma_background=0.01,
+            material=material,
+            secondary_field_solver=lambda rhs: (None, np.zeros_like(rhs)),
+        )
 
 
 def test_dc_secondary_passes_contrast_current_to_injected_solver():
