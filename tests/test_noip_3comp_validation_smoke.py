@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pytest
+import yaml
 
 from atem3d.validation_3comp import (
     ThreeComponentValidationInput,
@@ -58,7 +59,9 @@ def test_noip_3comp_validation_smoke_writes_required_artifacts(tmp_path):
         "time_obs,component,pred,ref,abs_error,ordinary_relative_error,"
         "relative_error_with_floor,peak_normalized_error,pass_5pct"
     )
-    resolved = json.loads((tmp_path / "run_config_resolved.yaml").read_text(encoding="utf-8"))
+    resolved_text = (tmp_path / "run_config_resolved.yaml").read_text(encoding="utf-8")
+    assert not resolved_text.lstrip().startswith("{")
+    resolved = yaml.safe_load(resolved_text)
     assert resolved["case_type"] == "noip"
     assert resolved["component_names"] == ["Ex", "Ey", "dBzdt"]
     assert payload["final_acceptance_passed"] is False

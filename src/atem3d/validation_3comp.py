@@ -8,6 +8,7 @@ import csv
 import json
 
 import numpy as np
+import yaml
 
 from atem3d.materials.prony import PronyConductivity
 from atem3d.metrics import robust_component_errors
@@ -82,7 +83,7 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
         encoding="utf-8",
     )
     (output_dir / "run_config_resolved.yaml").write_text(
-        json.dumps(_resolved_config(case, component_names), indent=2, sort_keys=True),
+        yaml.safe_dump(_resolved_config(case, component_names), sort_keys=True),
         encoding="utf-8",
     )
     _plot_comparison(

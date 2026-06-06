@@ -357,7 +357,8 @@ final acceptance.
   - Enforces the task-book validation window coverage:
     `1e-5 s <= t_obs <= 1 s`.
   - Required no-IP/IP validation CSV/JSON/PNG output names.
-  - `run_config_resolved.yaml` resolved validation configuration output.
+  - `run_config_resolved.yaml` resolved validation configuration output, now
+    written as YAML rather than JSON text with a YAML extension.
   - Robust relative error and peak-normalized error output through existing metric code.
   - IP Prony metadata in `error_summary.json`.
   - `diagnostics.json` now includes `validation_failure` with failed
@@ -2612,6 +2613,8 @@ source-term substitution inside the existing total-field equation.
 - Validation artifact diagnostics now include task-book failure reason codes
   and seven structured follow-up checks: time step, mesh, boundary, source
   term, receiver sampling, magnetic recovery, and IP memory.
+- Validation artifact `run_config_resolved.yaml` files are now emitted as
+  YAML text and remain readable by `yaml.safe_load`.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
   metadata, including runner/material metadata, and accepts
   `--n-observation-times` for memory-safe reduced diagnostic specs.
