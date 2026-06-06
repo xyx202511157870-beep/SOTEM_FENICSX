@@ -58,6 +58,7 @@ class PrimarySecondaryForwardOperator:
     secondary_state_initializer: SecondaryStateInitializer | None = None
     secondary_state_stepper: SecondaryStateStepper | None = None
     contrast_atol: float = 0.0
+    turnoff_time: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fem_points", as_points(self.fem_points, "fem_points"))
@@ -79,11 +80,16 @@ class PrimarySecondaryForwardOperator:
         object.__setattr__(self, "sigma_background", sigma_background)
         if self.contrast_atol < 0.0:
             raise ValueError("contrast_atol must be nonnegative")
+        turnoff_time = float(self.turnoff_time)
+        if not np.isfinite(turnoff_time) or turnoff_time < 0.0:
+            raise ValueError("turnoff_time must be finite and nonnegative")
+        object.__setattr__(self, "turnoff_time", turnoff_time)
 
     def forward(self, times: Sequence[float]) -> np.ndarray:
         """Return flattened receiver data for the requested observation times."""
 
-        time_array = _as_strictly_increasing_times(times)
+        observation_times = _as_strictly_increasing_times(times)
+        internal_times = observation_times + float(self.turnoff_time)
         primary_fem = PrimaryFEMInterpolator(provider=self.primary, points=self.fem_points)
         if self.secondary_state_initializer is None:
             initialization = initialize_dc_secondary_from_primary(
@@ -105,11 +111,11 @@ class PrimarySecondaryForwardOperator:
         previous_time = 0.0
         rows: list[np.ndarray] = []
 
-        for time_value in time_array:
-            dt = float(time_value - previous_time)
+        for internal_time in internal_times:
+            dt = float(internal_time - previous_time)
             if dt <= 0.0:
-                raise ValueError("times must be greater than initial time 0")
-            Ep_new = primary_fem.sample_Ep(float(time_value))
+                raise ValueError("internal times must be greater than initial time 0")
+            Ep_new = primary_fem.sample_Ep(float(internal_time))
             if self.secondary_state_stepper is not None:
                 state = self.secondary_state_stepper(
                     state,
@@ -141,9 +147,9 @@ class PrimarySecondaryForwardOperator:
                     secondary_solver=self.secondary_step_solver,
                     contrast_atol=self.contrast_atol,
                 )
-            rows.append(self._receiver_row(state, Ep_new, float(time_value), dt))
+            rows.append(self._receiver_row(state, Ep_new, float(internal_time), dt))
             Ep_old = Ep_new
-            previous_time = float(time_value)
+            previous_time = float(internal_time)
 
         return np.vstack(rows)
 

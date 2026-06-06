@@ -123,6 +123,7 @@ def build_corrected_model_case_specs(
         "source_end": list(cfg.source_end),
         "receiver": list(cfg.receiver),
         "source_current": float(cfg.source_current),
+        "ramp_off_time": float(cfg.ramp_off_time),
         "observation_times": [float(value) for value in cfg.observation_times()],
         "empymod_primary": cfg.empymod_primary_config(),
         "runner": runner,

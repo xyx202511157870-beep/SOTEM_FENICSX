@@ -4709,6 +4709,7 @@ def _make_dolfinx_primary_secondary_forward_operator(
     material,
     sigma_background: float,
     debye=None,
+    turnoff_time: float = 0.0,
 ):
     """Build a DOLFINx-wired primary-secondary forward operator.
 
@@ -4744,6 +4745,7 @@ def _make_dolfinx_primary_secondary_forward_operator(
         secondary_step_solver=adapters["secondary_step_solver"],
         secondary_receiver_projector=adapters["secondary_receiver_projector"],
         secondary_state_stepper=adapters["secondary_state_stepper"],
+        turnoff_time=turnoff_time,
     )
     return {
         "operator": operator,

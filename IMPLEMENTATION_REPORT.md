@@ -3464,6 +3464,20 @@ source-term substitution inside the existing total-field equation.
   and `python -m pytest -q`, all with exit code 0. A direct Windows backend
   check wrote `.tmp/dolfinx_backend_status_windows.json` and reported missing
   `dolfinx.fem`, `dolfinx.mesh`, `mpi4py.MPI`, `ufl`, `basix`, and `petsc4py`.
+- Primary-secondary observation/internal time checkpoint (2026-06-06):
+  updated `PrimarySecondaryForwardOperator` so `forward(times)` still accepts
+  task-book observation times `t_obs`, but advances and samples the primary
+  provider at internal times `t_internal = turnoff_time + t_obs`. The corrected
+  model spec now writes top-level `ramp_off_time`, the runner records
+  `turnoff_time_s`, `first_observation_time_s`, `first_internal_time_s`, and
+  `dt_source=turnoff_time_plus_first_observation_time`, and the DOLFINx
+  pipeline bridge passes `turnoff_time` into the pure forward operator. This
+  removes the previous metadata/runtime ambiguity where the first step was
+  reported as `first_observation_step_from_initial_time_zero`. Windows
+  verification ran
+  `python -m pytest -q tests/test_primary_secondary_forward.py::test_primary_secondary_forward_samples_internal_times_after_turnoff tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_full_artifact_set tests/test_corrected_model_runner.py::test_corrected_model_spec_cli_allows_observation_time_count_override`,
+  `python -m pytest -q tests/test_primary_secondary_forward.py tests/test_corrected_model_runner.py tests/test_cli_subcommands.py tests/test_dolfinx_primary_secondary_metadata.py tests/test_dolfinx_validation_artifacts.py`,
+  and `python -m pytest -q`, all with exit code 0.
 
 ## Next Steps
 

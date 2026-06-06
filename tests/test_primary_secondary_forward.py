@@ -107,3 +107,62 @@ def test_primary_secondary_forward_adds_2d_secondary_receiver_projection():
     assert seen["receiver_time"] == 1.0e-5
     assert seen["receiver_dt"] == 1.0e-5
     assert seen["receiver_components"] == ("Ex", "Ey", "dBzdt")
+
+
+def test_primary_secondary_forward_samples_internal_times_after_turnoff():
+    points = np.array([[0.0, 0.0, 0.0]])
+    receivers = np.array([[0.0, -300.0, -0.1]])
+    observation_times = np.array([1.0e-5, 2.0e-5])
+    turnoff_time = 1.0e-5
+    internal_times = turnoff_time + observation_times
+    provider = CachedPrimaryProvider(
+        times=internal_times,
+        points=points,
+        receivers=receivers,
+        Ep_on_V=np.array(
+            [
+                [[2.0, 0.0, 0.0]],
+                [[3.0, 0.0, 0.0]],
+            ]
+        ),
+        receiver_E=np.array(
+            [
+                [[20.0, 2.0, 0.0]],
+                [[30.0, 3.0, 0.0]],
+            ]
+        ),
+        receiver_dBdt=np.array(
+            [
+                [[0.0, 0.0, -2.0]],
+                [[0.0, 0.0, -3.0]],
+            ]
+        ),
+        Ep_dc_on_V=np.array([[10.0, 0.0, 0.0]]),
+    )
+    seen = {"step_dt": [], "receiver_time": []}
+
+    def state_stepper(state, Ep_old, Ep_new, material, sigma_background, dt):
+        seen["step_dt"].append(dt)
+        return state
+
+    def receiver_projector(state, Ep_new, time_value, dt, components):
+        seen["receiver_time"].append(time_value)
+        return np.zeros((1, 3))
+
+    operator = PrimarySecondaryForwardOperator(
+        primary=provider,
+        fem_points=points,
+        receiver_locations=receivers,
+        components=("Ex", "Ey", "dBzdt"),
+        material=PronyConductivity(sigma_inf=0.01, terms=[]),
+        sigma_background=0.01,
+        secondary_state_stepper=state_stepper,
+        secondary_receiver_projector=receiver_projector,
+        turnoff_time=turnoff_time,
+    )
+
+    predicted = operator.forward(observation_times)
+
+    np.testing.assert_allclose(predicted, [[20.0, 2.0, -2.0], [30.0, 3.0, -3.0]])
+    np.testing.assert_allclose(seen["step_dt"], [2.0e-5, 1.0e-5])
+    np.testing.assert_allclose(seen["receiver_time"], internal_times)

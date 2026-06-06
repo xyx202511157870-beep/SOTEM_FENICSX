@@ -262,6 +262,13 @@ def _import_dolfinx_backend():
     return fem, mesh, MPI
 
 
+def _turnoff_time_from_case_spec(case_spec: dict) -> float:
+    value = float(case_spec.get("ramp_off_time", case_spec.get("ramp_off_time_s", 0.0)))
+    if not np.isfinite(value) or value < 0.0:
+        raise ValueError("ramp_off_time must be finite and nonnegative")
+    return value
+
+
 def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: np.ndarray) -> dict:
     forward_material = _forward_material_from_case_spec(case_spec)
     sigma_background = float(case_spec.get("sigma_background", _background_sigma_from_case_spec(case_spec)))
@@ -273,12 +280,18 @@ def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: n
     time_array = np.asarray(times, dtype=float)
     if time_array.ndim != 1 or time_array.size == 0:
         raise ValueError("observation times must be a non-empty 1D array")
+    turnoff_time = _turnoff_time_from_case_spec(case_spec)
+    first_observation_time = float(time_array[0])
+    first_internal_time = turnoff_time + first_observation_time
     metadata = secondary_step_equation_metadata(
         material=secondary_material,
         sigma_background=sigma_background,
-        dt=float(time_array[0]),
+        dt=first_internal_time,
     )
-    metadata["dt_source"] = "first_observation_step_from_initial_time_zero"
+    metadata["dt_source"] = "turnoff_time_plus_first_observation_time"
+    metadata["turnoff_time_s"] = turnoff_time
+    metadata["first_observation_time_s"] = first_observation_time
+    metadata["first_internal_time_s"] = first_internal_time
     metadata["primary_includes_ip_background"] = bool(
         dict(case_spec.get("dolfinx_forward", {})).get("primary_includes_ip_background", True)
     )
@@ -287,7 +300,7 @@ def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: n
         metadata["original_ip_material"] = secondary_step_equation_metadata(
             material=forward_material,
             sigma_background=sigma_background,
-            dt=float(time_array[0]),
+            dt=first_internal_time,
         )
     else:
         metadata["secondary_material_reason"] = "case_material"
@@ -324,6 +337,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     material = _forward_material_from_case_spec(case_spec)
     sigma_background = float(case_spec.get("sigma_background", _background_sigma_from_case_spec(case_spec)))
     secondary_material = _secondary_material_for_forward(case_spec, material, sigma_background)
+    turnoff_time = _turnoff_time_from_case_spec(case_spec)
     primary = EmpymodPrimaryProvider(
         config=_empymod_primary_config_for_case_spec(case_spec),
         empymod_kwargs=dict(case_spec.get("empymod_kwargs", {})),
@@ -361,6 +375,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
                 config,
             ),
             contrast_atol=float(forward_cfg.get("contrast_atol", 1.0e-12)),
+            turnoff_time=turnoff_time,
         )
         return operator.forward(np.asarray(case_spec["observation_times"], dtype=float))
 
@@ -394,6 +409,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         components=components,
         material=secondary_material,
         sigma_background=sigma_background,
+        turnoff_time=turnoff_time,
     )
     return built["operator"].forward(np.asarray(case_spec["observation_times"], dtype=float))
 
@@ -441,11 +457,12 @@ def _run_dolfinx_leakage_channel_forward(
         },
     )
     times = np.asarray(case_spec["observation_times"], dtype=float)
+    turnoff_time = _turnoff_time_from_case_spec(case_spec)
     built_materials = sp._make_dolfinx_materials_from_cell_material_map(
         msh,
         spaces,
         material_map,
-        dt=float(times[0]),
+        dt=float(turnoff_time + times[0]),
     )
     operators = sp.assemble_operators(
         msh,
@@ -467,6 +484,7 @@ def _run_dolfinx_leakage_channel_forward(
         material=built_materials["representative_material"],
         sigma_background=float(sigma_background),
         debye=built_materials["debye"],
+        turnoff_time=turnoff_time,
     )
     return built_operator["operator"].forward(times)
 
