@@ -2747,6 +2747,26 @@ source-term substitution inside the existing total-field equation.
   The generated polarization-effect artifact reported `ip_minus_noip` with
   zero component errors over the same `1e-5 s` to `1 s` window. WSL was shut
   down and `Ubuntu Stopped` was confirmed after the run.
+- A memory-safe WSL/FEniCSx corrected leakage/terrain diagnostic run was
+  executed with 3 logarithmic observation times spanning `1e-5 s` to `1 s`
+  using `tdem-ip-forward corrected-leakage-model-spec` followed by
+  `tdem-ip-forward corrected-model-run --case both`. The run generated complete
+  no-IP/IP artifacts and a final acceptance summary, proving the corrected-scale
+  leakage-channel diagnostic path can run within the 32 GB workstation budget
+  on a coarse mesh. As expected for a nonzero secondary leakage/channel model
+  compared against a 1D empymod background reference, final acceptance failed:
+  no-IP max errors were `Ex=32.6629`, `Ey=2.2549293e7`, `dBzdt=0.0155062`;
+  IP max errors were `Ex=60.5018`, `Ey=2.3441279e7`, `dBzdt=0.0140841`.
+  Peak-normalized `Ex` and `dBzdt` were small (`~2.6e-3` and `~3.6e-7` for
+  no-IP; `~2.35e-3` and `~3.0e-7` for IP), while `Ey` remains a weak/near-zero
+  component with large floor-relative error. The reported blocking reasons for
+  both cases were `validation_scope_not_corrected_model_full` and
+  `physical_error_gate_failed`; reason codes also included
+  `strict_error_gate_failed`. Runtime was about `33.39 s` forward and `0.42 s`
+  reference for no-IP, and `30.86 s` forward and `0.39 s` reference for IP.
+  The generated `ip_minus_noip` polarization-effect artifact also failed the
+  5% component gate over `1e-5 s` to `1 s`. WSL was shut down and
+  `Ubuntu Stopped` was confirmed after the run.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
@@ -2787,3 +2807,7 @@ source-term substitution inside the existing total-field equation.
 9. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
 10. Continue P8 by scaling the generated Gmsh terrain/leakage smoke toward the
     corrected source/receiver geometry and writing full validation artifacts.
+    A coarse corrected leakage/terrain diagnostic run now generates full
+    no-IP/IP artifacts and failure diagnostics over `1e-5 s` to `1 s`; the next
+    P8 step is to improve the physical reference/secondary validation strategy
+    instead of treating this 1D-background comparison as an expected 5% pass.
