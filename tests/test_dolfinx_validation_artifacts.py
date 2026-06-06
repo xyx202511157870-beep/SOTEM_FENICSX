@@ -64,6 +64,8 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
                 "Ey": 0.0,
                 "Hz": np.nan,
                 "dBzdt": 1.0,
+                "dBzdt_curl": 1.0,
+                "dBzdt_biot_rate": 0.9,
                 "sample_count": 1,
                 "candidate_count_min": 2,
                 "candidate_count_max": 2,
@@ -86,6 +88,8 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
                 "Ey": 0.0,
                 "Hz": np.nan,
                 "dBzdt": 1.8,
+                "dBzdt_curl": 1.8,
+                "dBzdt_biot_rate": np.nan,
                 "sample_count": 5,
                 "candidate_count_min": 1,
                 "candidate_count_max": 3,
@@ -155,6 +159,8 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     diagnostic_rows = list(csv.DictReader((tmp_path / "receiver_diagnostics.csv").open("r", encoding="utf-8", newline="")))
     assert {"sample_count", "candidate_count_min", "candidate_count_max", "candidate_count_mean"} <= set(diagnostic_rows[0])
     assert {
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
         "multi_candidate_sample_count",
         "candidate_center_distance_min",
         "candidate_center_distance_max",

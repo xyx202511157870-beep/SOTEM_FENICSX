@@ -2945,6 +2945,8 @@ def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time
                 "Ey": float(rec.get("Ey", np.nan)),
                 "Hz": float(rec.get("Hz", np.nan)),
                 "dBzdt": float(rec.get("dBzdt", np.nan)),
+                "dBzdt_curl": float(rec.get("dBzdt_curl", np.nan)),
+                "dBzdt_biot_rate": float(rec.get("dBzdt_biot_rate", np.nan)),
                 "sample_count": int(rec.get("sample_count", 0)),
                 "candidate_count_min": int(rec.get("candidate_count_min", 0)),
                 "candidate_count_max": int(rec.get("candidate_count_max", 0)),
@@ -3972,12 +3974,14 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         if is_output:
             dbdt = compute_dbdt(E_new, spaces)
             rec = evaluate_receivers(E_new, dbdt, msh, config)
+            rec["dBzdt_curl"] = float(rec.get("dBzdt", np.nan))
+            rec["dBzdt_biot_rate"] = float("nan")
             if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
                 _assign_biot_receiver_hz(rec, H_new_receiver)
+                biot_rate = float(_biot_receiver_dbdt_from_h(H_new_receiver, H_old_receiver, dt=dt)[2])
+                rec["dBzdt_biot_rate"] = biot_rate
                 if magnetic_dbdt_mode == "biot_rate":
-                    rec["dBzdt"] = float(
-                        _biot_receiver_dbdt_from_h(H_new_receiver, H_old_receiver, dt=dt)[2]
-                    )
+                    rec["dBzdt"] = biot_rate
             rows.append([rec[name] for name in components])
             receiver_diagnostic_rows.extend(
                 _evaluate_receiver_diagnostics(
@@ -6142,6 +6146,8 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
             "receiver_diagnostic_types": np.asarray([], dtype="<U1"),
             "receiver_diagnostic_radii": np.empty(0, dtype=float),
             "receiver_diagnostic_values": np.empty((0, 4), dtype=float),
+            "receiver_diagnostic_dbdt_curl": np.empty(0, dtype=float),
+            "receiver_diagnostic_dbdt_biot_rate": np.empty(0, dtype=float),
             "receiver_diagnostic_sample_counts": np.empty(0, dtype=int),
             "receiver_diagnostic_candidate_count_min": np.empty(0, dtype=int),
             "receiver_diagnostic_candidate_count_max": np.empty(0, dtype=int),
@@ -6171,6 +6177,12 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
                 for row in rows
             ],
             dtype=float,
+        ),
+        "receiver_diagnostic_dbdt_curl": np.asarray(
+            [float(row.get("dBzdt_curl", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_dbdt_biot_rate": np.asarray(
+            [float(row.get("dBzdt_biot_rate", np.nan)) for row in rows], dtype=float
         ),
         "receiver_diagnostic_sample_counts": np.asarray(
             [int(row.get("sample_count", 0)) for row in rows], dtype=int
@@ -6223,6 +6235,8 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
     types = [str(item) for item in np.asarray(payload["receiver_diagnostic_types"]).tolist()]
     radii = np.asarray(payload["receiver_diagnostic_radii"], dtype=float)
     values = np.asarray(payload["receiver_diagnostic_values"], dtype=float)
+    dbdt_curl = np.asarray(payload["receiver_diagnostic_dbdt_curl"], dtype=float) if "receiver_diagnostic_dbdt_curl" in payload.files else np.full(times.size, np.nan, dtype=float)
+    dbdt_biot_rate = np.asarray(payload["receiver_diagnostic_dbdt_biot_rate"], dtype=float) if "receiver_diagnostic_dbdt_biot_rate" in payload.files else np.full(times.size, np.nan, dtype=float)
     sample_counts = np.asarray(payload["receiver_diagnostic_sample_counts"], dtype=int) if "receiver_diagnostic_sample_counts" in payload.files else np.zeros(times.size, dtype=int)
     candidate_min = np.asarray(payload["receiver_diagnostic_candidate_count_min"], dtype=int) if "receiver_diagnostic_candidate_count_min" in payload.files else np.zeros(times.size, dtype=int)
     candidate_max = np.asarray(payload["receiver_diagnostic_candidate_count_max"], dtype=int) if "receiver_diagnostic_candidate_count_max" in payload.files else np.zeros(times.size, dtype=int)
@@ -6247,6 +6261,8 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
                 "Ey": float(values[i, 1]) if i < values.shape[0] else float("nan"),
                 "Hz": float(values[i, 2]) if i < values.shape[0] else float("nan"),
                 "dBzdt": float(values[i, 3]) if i < values.shape[0] else float("nan"),
+                "dBzdt_curl": float(dbdt_curl[i]) if i < dbdt_curl.size else float("nan"),
+                "dBzdt_biot_rate": float(dbdt_biot_rate[i]) if i < dbdt_biot_rate.size else float("nan"),
                 "sample_count": int(sample_counts[i]) if i < sample_counts.size else 0,
                 "candidate_count_min": int(candidate_min[i]) if i < candidate_min.size else 0,
                 "candidate_count_max": int(candidate_max[i]) if i < candidate_max.size else 0,
@@ -6284,6 +6300,8 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
         "Ey",
         "Hz",
         "dBzdt",
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
         "sample_count",
         "candidate_count_min",
         "candidate_count_max",
@@ -6311,6 +6329,8 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
                     "Ey": float(row.get("Ey", math.nan)),
                     "Hz": float(row.get("Hz", math.nan)),
                     "dBzdt": float(row.get("dBzdt", math.nan)),
+                    "dBzdt_curl": float(row.get("dBzdt_curl", math.nan)),
+                    "dBzdt_biot_rate": float(row.get("dBzdt_biot_rate", math.nan)),
                     "sample_count": int(row.get("sample_count", 0)),
                     "candidate_count_min": int(row.get("candidate_count_min", 0)),
                     "candidate_count_max": int(row.get("candidate_count_max", 0)),

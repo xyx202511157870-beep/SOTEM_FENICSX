@@ -1737,6 +1737,10 @@ field consistency, or the total-field formulation.
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.
   H-form diagnostic output still writes only the main receiver response.
+- E-form receiver diagnostics now persist both `dBzdt_curl` from `-curl(E)`
+  and `dBzdt_biot_rate` from finite-difference Biot-Savart `Hz` when a Biot
+  magnetic receiver mode is active. This is a diagnostic split only; it does
+  not by itself establish full-window 5% agreement.
 - Receiver point cell-candidate selection affects short-window `dBzdt`
   substantially on the corrected latest model, but all tested selection modes
   leave `Ex` near 67% peak-normalized error, so receiver sampling alone does
@@ -1796,7 +1800,7 @@ field consistency, or the total-field formulation.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.
-3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, and add a dedicated dBzdt receiver-recovery diagnostic.
+3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, then use the persisted `dBzdt_curl`/`dBzdt_biot_rate` receiver diagnostics to localize the magnetic-rate recovery error.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 5. Continue P4/P5 by wiring the `PrimaryFEMInterpolator`/`TabulatedVectorField` adapter through `_interpolate_vector_callable_to_nedelec_function` for primary-secondary DC initialization and time stepping.
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.

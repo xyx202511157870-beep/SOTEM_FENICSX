@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 def _load_pipeline_module():
@@ -134,6 +135,8 @@ def test_save_forward_partial_writes_receiver_diagnostics(tmp_path):
             "Ey": 2.0,
             "Hz": np.nan,
             "dBzdt": 3.0,
+            "dBzdt_curl": 3.0,
+            "dBzdt_biot_rate": 2.8,
         },
         {
             "time_obs": 1.0e-5,
@@ -143,6 +146,8 @@ def test_save_forward_partial_writes_receiver_diagnostics(tmp_path):
             "Ey": 2.1,
             "Hz": np.nan,
             "dBzdt": 3.1,
+            "dBzdt_curl": 3.1,
+            "dBzdt_biot_rate": np.nan,
         },
     ]
 
@@ -159,12 +164,18 @@ def test_save_forward_partial_writes_receiver_diagnostics(tmp_path):
     assert [str(item) for item in data["receiver_diagnostic_types"]] == ["point", "disk_average"]
     np.testing.assert_allclose(data["receiver_diagnostic_times"], np.asarray([1.0e-5, 1.0e-5]))
     np.testing.assert_allclose(data["receiver_diagnostic_values"][:, [0, 1, 3]], np.asarray([[1.0, 2.0, 3.0], [1.1, 2.1, 3.1]]))
+    np.testing.assert_allclose(data["receiver_diagnostic_dbdt_curl"], np.asarray([3.0, 3.1]))
+    np.testing.assert_allclose(data["receiver_diagnostic_dbdt_biot_rate"], np.asarray([2.8, np.nan]), equal_nan=True)
 
     csv_text = config.receiver_diagnostics_csv().read_text(encoding="utf-8")
-    assert "time_obs,receiver_type,radius,Ex,Ey,Hz,dBzdt" in csv_text
+    assert "time_obs,receiver_type,radius,Ex,Ey,Hz,dBzdt,dBzdt_curl,dBzdt_biot_rate" in csv_text
     assert "disk_average" in csv_text
     assert config.receiver_diagnostics_png().is_file()
     assert config.receiver_diagnostics_png().stat().st_size > 0
+
+    loaded = sp._load_forward_partial(config)
+    assert loaded["receiver_diagnostic_rows"][0]["dBzdt_curl"] == pytest.approx(3.0)
+    assert loaded["receiver_diagnostic_rows"][0]["dBzdt_biot_rate"] == pytest.approx(2.8)
 
 
 def test_receiver_diagnostic_summary_quantifies_point_average_difference():
