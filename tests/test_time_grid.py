@@ -45,3 +45,15 @@ def test_time_grid_from_turnoff_matches_waveform_grid():
     np.testing.assert_allclose(from_turnoff, build_internal_time_grid(observation_times, waveform))
     np.testing.assert_allclose(from_turnoff[:11], np.linspace(0.0, 1.0e-5, 11))
     np.testing.assert_allclose(from_turnoff[-3:], 1.0e-5 + observation_times)
+
+
+def test_time_grid_from_turnoff_is_exported_at_package_top_level():
+    import atem3d
+
+    grid = atem3d.build_internal_time_grid_from_turnoff(
+        [1.0e-5],
+        turnoff_time=1.0e-5,
+        turnoff_steps=10,
+    )
+
+    np.testing.assert_allclose(grid[:11], np.linspace(0.0, 1.0e-5, 11))

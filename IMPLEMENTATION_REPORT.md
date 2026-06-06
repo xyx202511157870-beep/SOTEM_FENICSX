@@ -3485,7 +3485,9 @@ source-term substitution inside the existing total-field equation.
   turnoff-grid construction when only `turnoff_time` and `turnoff_steps` are
   available. `PrimarySecondaryForwardOperator` now reuses this helper and
   drops only the initial `t=0` sample for its stepping loop, so the solver path
-  and waveform diagnostics use the same grid semantics. Corrected-model
+  and waveform diagnostics use the same grid semantics. The helper is exported
+  at package top level as `atem3d.build_internal_time_grid_from_turnoff(...)`.
+  Corrected-model
   diagnostics now include an `internal_time_grid` summary with turnoff-grid
   point count, output point count, total internal point count, first/last
   internal time, last output internal time, and explicit flags confirming that

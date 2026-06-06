@@ -32,6 +32,7 @@ from .waveforms import (
     TabulatedWaveform,
     Waveform,
     build_internal_time_grid,
+    build_internal_time_grid_from_turnoff,
 )
 
 __all__ = [
@@ -46,6 +47,7 @@ __all__ = [
     "absolute_linf",
     "build_corrected_model_case_specs",
     "build_internal_time_grid",
+    "build_internal_time_grid_from_turnoff",
     "build_receiver",
     "fit_linear_response_components",
     "relative_l2",
