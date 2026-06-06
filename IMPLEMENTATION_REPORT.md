@@ -160,6 +160,14 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
   - Zero-contrast no-IP response returns the primary receiver `Ex`, `Ey`, and
     `dBdt` components without requiring a secondary solve.
 
+- `src/atem3d/solvers/receiver_projection.py`
+  - `SecondaryReceiverProjection`
+  - Pure adapter from injected secondary electric-field and `dB/dt` receiver
+    samplers to ordered component tables such as `Ex`, `Ey`, and `dBzdt`.
+  - Intended DOLFINx hook point for projecting secondary FEM fields into the
+    primary-secondary forward core without embedding DOLFINx imports in the
+    reusable solver package.
+
 - `src/atem3d/receivers.py`
   - `PointReceiver`
   - `AverageReceiver` for deterministic `disk_average` and `volume_average`
@@ -257,6 +265,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_dc_initialization.py`
 - `tests/test_secondary_zero_contrast.py`
 - `tests/test_primary_secondary_forward.py`
+- `tests/test_secondary_receiver_projection.py`
 - `tests/test_noip_3comp_validation_smoke.py`
 - `tests/test_ip_3comp_validation_smoke.py`
 - `tests/test_complex_terrain_leakage_smoke.py`
@@ -1924,7 +1933,7 @@ source-term substitution inside the existing total-field equation.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a uniform-halfspace analytic grounded-wire DC backend, a provider-to-FEM-point interpolation adapter, a DOLFINx-style tabulated callable assembler, and a shared DOLFINx Nedelec callable interpolation helper; wiring primary provider outputs into the full primary-secondary solver remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver and a provider-driven entry point that consumes `E_p,dc` samples; DOLFINx scalar Poisson assembly for `phi_s` remains pending.
-- P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, and a pure primary-secondary forward orchestration core. DOLFINx curl-curl/mass/Robin operator assembly and real secondary receiver projection remain pending.
+- P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, a pure primary-secondary forward orchestration core, and a reusable secondary receiver projection adapter. DOLFINx curl-curl/mass/Robin operator assembly and DOLFINx field sampler wiring remain pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.

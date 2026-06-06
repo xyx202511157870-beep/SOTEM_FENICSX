@@ -6,6 +6,7 @@ from .dc_secondary import (
     initialize_dc_secondary_from_primary,
 )
 from .primary_secondary_forward import PrimarySecondaryForwardOperator
+from .receiver_projection import SecondaryReceiverProjection
 from .tdem_secondary import (
     SecondaryState,
     secondary_state_from_dc_initialization,
@@ -16,6 +17,7 @@ from .tdem_secondary import (
 __all__ = [
     "DCSecondaryInitialization",
     "PrimarySecondaryForwardOperator",
+    "SecondaryReceiverProjection",
     "SecondaryState",
     "initialize_dc_secondary",
     "initialize_dc_secondary_from_primary",
