@@ -456,6 +456,26 @@ Latest observed in WSL `Ubuntu` / `fenicsx` conda environment on 2026-06-06:
 - pipeline reports regularized volume source fallback unless explicitly overridden.
 - WSL was shut down after the check and confirmed `Stopped` with `wsl -l -v`.
 
+Full Windows/Python test audit:
+
+```bash
+python -m pip install --user --no-cache-dir -e .
+python -m pytest -q
+```
+
+Observed result after installing the declared project dependencies:
+
+```text
+all collected tests passed
+2 skipped
+```
+
+The two skipped tests are optional Pardiso solver tests in
+`tests/test_solver_core.py`, skipped because `pydiso` is not installed in the
+Windows Python environment. The first install attempt without `--no-cache-dir`
+failed on a local pip cache permission error for `pymatsolver`; rerunning with
+`--user --no-cache-dir` installed the declared dependencies successfully.
+
 Latest WSL source-only smoke for the corrected explicit geometry:
 
 ```text

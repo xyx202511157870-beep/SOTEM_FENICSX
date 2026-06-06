@@ -417,6 +417,8 @@ def _main_validate_secondary(argv: list[str]) -> int:
         json.dumps(diagnostics, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    import yaml
+
     (output_dir / "run_config_resolved.yaml").write_text(
         yaml.safe_dump(cfg, sort_keys=True),
         encoding="utf-8",

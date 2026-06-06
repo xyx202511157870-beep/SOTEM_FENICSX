@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from discretize import TensorMesh
 from scipy.constants import mu_0
 
@@ -1098,6 +1099,7 @@ def test_cg_linear_solver_mode_matches_direct_solution_for_small_problem():
 
 
 def test_pardiso_linear_solver_mode_matches_direct_solution_for_small_problem():
+    pytest.importorskip("pydiso")
     mesh = _mesh()
     source = GroundedWireSource(
         start=(-1.5, 0.0, 0.0),
@@ -1119,6 +1121,7 @@ def test_pardiso_linear_solver_mode_matches_direct_solution_for_small_problem():
 
 
 def test_pardiso_linear_solver_supports_active_cpml_for_small_problem():
+    pytest.importorskip("pydiso")
     mesh = TensorMesh([np.ones(5), np.ones(5), np.ones(4)], origin=(-2.5, -2.5, -2.0))
     source = GroundedWireSource(
         start=(-1.5, 0.0, 0.0),
