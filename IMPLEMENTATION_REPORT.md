@@ -952,6 +952,11 @@ artifact summaries report `final_acceptance_passed=true` with zero error, but
 this is a plumbing/primary-background consistency check only. It is not the
 production corrected-model full-window run with a resolved mesh, terrain,
 leakage channel, or 3D IP anomaly.
+When both cases are run, `corrected-model-run` now writes
+`acceptance.yaml`, and `tdem-ip-forward acceptance-report` can consume it to
+write `final_acceptance/final_acceptance_summary.json` and
+`final_acceptance_report.txt`. The same two-time WSL smoke exercised this
+chain successfully.
 
 ## Current Accuracy Status
 

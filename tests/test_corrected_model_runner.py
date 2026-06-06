@@ -118,6 +118,59 @@ def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch
     assert calls == [("ip", str(tmp_path / "override" / "ip_3comp"))]
 
 
+def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_path, monkeypatch):
+    specs = build_corrected_model_case_specs(tmp_path / "from_spec")
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(specs), encoding="utf-8")
+    output_root = tmp_path / "override"
+
+    def fake_run(case_spec):
+        output_dir = tmp_path / case_spec["case_type"]
+        output_dir.mkdir()
+        (output_dir / "error_summary.json").write_text(
+            json.dumps(
+                {
+                    "case_type": case_spec["case_type"],
+                    "reference_type": "empymod",
+                    "magnetic_quantity": "dBzdt",
+                    "final_acceptance_passed": True,
+                    "acceptance_status": {"blocking_reasons": []},
+                }
+            ),
+            encoding="utf-8",
+        )
+        case_spec["output_dir"] = str(output_dir)
+        return {"final_acceptance_passed": True}
+
+    import atem3d.corrected_model_runner as runner
+
+    monkeypatch.setattr(runner, "run_corrected_model_validation", fake_run)
+
+    exit_code = main(
+        [
+            "corrected-model-run",
+            str(spec_path),
+            "--case",
+            "both",
+            "--output-root",
+            str(output_root),
+        ]
+    )
+
+    assert exit_code == 0
+    acceptance = _load_yaml(output_root / "acceptance.yaml")
+    assert acceptance == {
+        "acceptance": {
+            "noip_summary_json": str(tmp_path / "noip" / "error_summary.json"),
+            "ip_summary_json": str(tmp_path / "ip" / "error_summary.json"),
+            "output_dir": str(output_root / "final_acceptance"),
+        }
+    }
+    assert main(["acceptance-report", str(output_root / "acceptance.yaml")]) == 0
+    final_summary = _load_yaml(output_root / "final_acceptance" / "final_acceptance_summary.json")
+    assert final_summary["final_acceptance_passed"] is True
+
+
 def test_main_without_argv_uses_process_arguments_for_corrected_model_run(tmp_path, monkeypatch):
     specs = build_corrected_model_case_specs(tmp_path / "from_spec")
     spec_path = tmp_path / "spec.json"

@@ -151,6 +151,7 @@ def _main_corrected_model_run(argv: list[str]) -> int:
     config = _load_yaml(args.config)
     specs = _selected_corrected_model_specs(config, case=args.case)
     summaries = []
+    output_dirs: dict[str, Path] = {}
     for case_name, spec in specs:
         case_spec = dict(spec)
         if args.output_root is not None:
@@ -160,10 +161,15 @@ def _main_corrected_model_run(argv: list[str]) -> int:
             case_spec["runner"] = runner
         summary = run_corrected_model_validation(case_spec)
         summaries.append(summary)
+        output_dirs[case_name] = Path(case_spec["output_dir"])
         print(f"wrote {case_spec['output_dir']}")
         print(
             f"{case_name}: final_acceptance_passed={summary['final_acceptance_passed']}"
         )
+    if {"noip", "ip"}.issubset(output_dirs):
+        acceptance_root = args.output_root or output_dirs["noip"].parent
+        acceptance_path = _write_corrected_model_acceptance_config(acceptance_root, output_dirs)
+        print(f"wrote {acceptance_path}")
     return 0 if all(bool(summary["final_acceptance_passed"]) for summary in summaries) else 1
 
 
@@ -404,6 +410,21 @@ def _selected_corrected_model_specs(config: dict, *, case: str) -> list[tuple[st
     if case_name != case:
         raise ValueError(f"single corrected-model spec has case_type={case_name!r}, not {case!r}")
     return [(case_name, dict(config))]
+
+
+def _write_corrected_model_acceptance_config(output_root: Path, output_dirs: dict[str, Path]) -> Path:
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "acceptance": {
+            "noip_summary_json": str(output_dirs["noip"] / "error_summary.json"),
+            "ip_summary_json": str(output_dirs["ip"] / "error_summary.json"),
+            "output_dir": str(output_root / "final_acceptance"),
+        }
+    }
+    path = output_root / "acceptance.yaml"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return path
 
 
 def _response_component_names(path: Path) -> list[str]:
