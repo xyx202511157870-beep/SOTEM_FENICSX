@@ -2976,6 +2976,30 @@ def _make_secondary_receiver_projector_from_evaluate_receivers(
     return projector
 
 
+def _make_dolfinx_zero_secondary_receiver_projector(msh, spaces, config: PipelineConfig):
+    """Return a DOLFINx receiver projector for zero secondary fields."""
+
+    from dolfinx import fem
+
+    zero_E = fem.Function(spaces["V"], name="E_secondary_zero")
+    zero_E.x.array[:] = 0.0
+    zero_E.x.scatter_forward()
+    zero_dbdt = compute_dbdt(zero_E, spaces)
+
+    def electric_getter(_state, _Ep_new, _time_value, _dt):
+        return zero_E
+
+    def dbdt_getter(_state, _Ep_new, _time_value, _dt):
+        return zero_dbdt
+
+    return _make_secondary_receiver_projector_from_evaluate_receivers(
+        electric_getter,
+        dbdt_getter,
+        msh=msh,
+        config=config,
+    )
+
+
 def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time_obs: float, main_record=None):
     import numpy as np
 
