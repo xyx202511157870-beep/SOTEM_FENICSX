@@ -1003,6 +1003,27 @@ path and produces a finite response different from the empymod background
 reference. This exercises IP secondary-anomaly plumbing in the corrected runner
 on a tiny synthetic box.
 
+An IP leakage artifact smoke completed under:
+
+```text
+dolfinx/runs/corrected_model_ip_leakage_smoke/ip_3comp
+```
+
+It wrote the full CSV/JSON/PNG artifact set for two observation times. Because
+the reference is still the 1D/background empymod response while the prediction
+contains a 3D IP leakage anomaly, the validation correctly failed the physical
+gate with `physical_error_gate_failed`. Recorded runtime was:
+
+```text
+IP leakage forward 22.822 s, reference 0.291 s, artifact 0.987 s
+```
+
+The summary reported `max_peak_normalized_error_Ex=0.0088655`,
+`max_peak_normalized_error_dBzdt=4.3165e-06`, and a weak near-zero `Ey`
+component handled by the weak-component policy. This is an artifact/diagnostic
+smoke for 3D IP anomaly output, not an acceptance comparison against a 3D
+reference.
+
 ## Current Accuracy Status
 
 The current no-IP DOLFINx runs still exceed the 5% target. The corrected
