@@ -130,3 +130,36 @@ def test_nedelec_solution_sampler_returns_values_at_points():
     values = sampler(field, np.zeros((2, 3)))
 
     np.testing.assert_allclose(values, [[2.0, -1.0, 0.5], [2.0, -1.0, 0.5]], atol=1.0e-12)
+
+
+def test_nedelec_interpolation_points_support_nonconstant_tabulated_rhs():
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    config = sp.PipelineConfig()
+    spaces = sp.build_function_spaces(msh, config)
+    interpolation = sp._nedelec_interpolation_points(msh, spaces)
+    points = interpolation["points"]
+    values = np.column_stack(
+        (
+            points[:, 0] + points[:, 1],
+            points[:, 1] + points[:, 2],
+            points[:, 2] + points[:, 0],
+        )
+    )
+    rhs_to_function = sp._make_nedelec_rhs_interpolator_from_samples(
+        spaces,
+        sample_points=points,
+    )
+    sampler = sp._make_nedelec_solution_sampler_at_points(msh, points[:3])
+
+    field = rhs_to_function(values)
+    sampled = sampler(field, values[:3])
+
+    assert points.shape[1] == 3
+    assert points.shape[0] > 0
+    assert np.all(np.isfinite(points))
+    assert sampled.shape == (3, 3)
+    assert np.all(np.isfinite(sampled))

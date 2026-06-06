@@ -1588,6 +1588,45 @@ def _cell_geometry(msh, cell: int):
     return msh.geometry.x[vertices]
 
 
+def _nedelec_interpolation_points(msh, spaces):
+    """Return physical Nedelec interpolation points for local cells.
+
+    The returned table is intended for primary-provider sampling before
+    interpolating tabulated primary fields back into the same Nedelec space.
+    It currently assumes affine tetrahedral geometry, which is the mesh type
+    used by the production Gmsh pipeline and the WSL smokes.
+    """
+
+    import numpy as np
+
+    V = spaces["V"]
+    reference_points = np.asarray(V.element.interpolation_points(), dtype=float)
+    if reference_points.ndim != 2 or reference_points.shape[1] != 3:
+        raise ValueError("Nedelec interpolation points must have shape (n_points_per_cell, 3)")
+    tdim = msh.topology.dim
+    n_local = msh.topology.index_map(tdim).size_local
+    points = []
+    cells = []
+    for cell in range(n_local):
+        coords = _cell_geometry(msh, cell)
+        if coords.shape[0] != 4:
+            raise ValueError("Nedelec interpolation point export currently requires tetrahedral cells")
+        origin = coords[0]
+        jacobian = np.column_stack((coords[1] - origin, coords[2] - origin, coords[3] - origin))
+        physical = origin + reference_points @ jacobian.T
+        points.append(physical)
+        cells.extend([cell] * reference_points.shape[0])
+    if points:
+        point_array = np.vstack(points)
+    else:
+        point_array = np.empty((0, 3), dtype=float)
+    return {
+        "points": point_array,
+        "cells": np.asarray(cells, dtype=np.int32),
+        "points_per_cell": int(reference_points.shape[0]),
+    }
+
+
 def _manual_line_source_quadrature_count(length: float, config: PipelineConfig) -> int:
     """Return Gauss points for the discontinuous cellwise line-source integrand."""
 
