@@ -3634,6 +3634,31 @@ source-term substitution inside the existing total-field equation.
   new diagnostic fields into `diagnostics.json` and returned
   `final_acceptance_passed=True`; the WSL run was followed by `wsl --shutdown`,
   and `wsl -l -v` confirmed `Ubuntu Stopped`.
+- Nonzero leakage secondary-effect diagnostics checkpoint (2026-06-06):
+  corrected-model convergence validation now writes
+  `secondary_effect_diagnostic` for `dolfinx_refined` diagnostic runs. The
+  block compares both the prediction and refined DOLFINx reference against the
+  matched empymod/1D background primary response and records
+  `max_abs_prediction_minus_primary_by_component`,
+  `max_abs_reference_minus_primary_by_component`,
+  `max_abs_prediction_minus_reference_by_component`,
+  `prediction_secondary_effect_nonzero`,
+  `reference_secondary_effect_nonzero`, and `secondary_effect_nonzero`.
+  This prevents a coarse-vs-refined convergence artifact from looking useful
+  when both runs are effectively primary-only. The convergence sweep report
+  also surfaces these nonzero-secondary flags and per-component secondary
+  effect amplitudes. Verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py::test_run_corrected_model_convergence_validation_records_nonzero_secondary_effect tests/test_convergence_sweep_report.py::test_write_convergence_sweep_report_summarizes_runs`,
+  `python -m pytest -q tests/test_dolfinx_complex_terrain_leakage_forward.py tests/test_corrected_model_runner.py tests/test_convergence_sweep_report.py`,
+  and a real WSL `conda activate fenicsx` DOLFINx check:
+  `python -u -m pytest -vv tests/test_dolfinx_complex_terrain_leakage_forward.py::test_corrected_leakage_convergence_runner_writes_dolfinx_refined_artifacts`.
+  The WSL test passed in about 103 s and asserted that
+  `secondary_effect_diagnostic` exists with nonzero prediction and refined
+  secondary effects; WSL was then shut down and `Ubuntu Stopped` was
+  confirmed. A separate 2-time CLI convergence run to
+  `dolfinx/runs/latest_leakage_convergence_secondary_diag_2t` exceeded the
+  300 s command limit and only wrote `spec.json`, so that long CLI artifact is
+  not used as evidence for this checkpoint.
 
 ## Next Steps
 

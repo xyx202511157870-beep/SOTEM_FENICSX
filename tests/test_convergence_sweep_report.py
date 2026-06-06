@@ -49,6 +49,11 @@ def test_write_convergence_sweep_report_summarizes_runs(tmp_path):
     assert json_payload["runs"][0]["prediction_min_marked_cells"] == 1
     assert json_payload["runs"][0]["leakage_cell_count_ratio"] == 0.125
     assert json_payload["runs"][0]["leakage_marker_issue"] == "fallback_used"
+    assert json_payload["runs"][0]["prediction_secondary_effect_nonzero"] is True
+    assert json_payload["runs"][0]["reference_secondary_effect_nonzero"] is True
+    assert json_payload["runs"][0]["secondary_effect_nonzero"] is True
+    assert json_payload["runs"][0]["max_prediction_secondary_effect_Ex"] == 0.2
+    assert json_payload["runs"][0]["max_reference_secondary_effect_dBzdt"] == 0.18
 
     with (tmp_path / "sweep" / "convergence_sweep_summary.csv").open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
@@ -59,6 +64,11 @@ def test_write_convergence_sweep_report_summarizes_runs(tmp_path):
     assert rows[0]["prediction_marker_fallback_used"] == "True"
     assert rows[0]["leakage_cell_count_ratio"] == "0.125"
     assert rows[0]["leakage_marker_issue"] == "fallback_used"
+    assert rows[0]["prediction_secondary_effect_nonzero"] == "True"
+    assert rows[0]["reference_secondary_effect_nonzero"] == "True"
+    assert rows[0]["secondary_effect_nonzero"] == "True"
+    assert rows[0]["max_prediction_secondary_effect_Ex"] == "0.2"
+    assert rows[0]["max_reference_secondary_effect_dBzdt"] == "0.18"
     assert rows[1]["max_physical_error"] == "0.21"
 
 
@@ -165,6 +175,23 @@ def _write_run(
                         "fallback_added_cell_count": 0,
                         "min_marked_cells": 1,
                         "marked": True,
+                    },
+                },
+                "secondary_effect_diagnostic": {
+                    "reference_type": "dolfinx_refined",
+                    "component_names": ["Ex", "Ey", "dBzdt"],
+                    "prediction_secondary_effect_nonzero": True,
+                    "reference_secondary_effect_nonzero": True,
+                    "secondary_effect_nonzero": True,
+                    "max_abs_prediction_minus_primary_by_component": {
+                        "Ex": 0.2,
+                        "Ey": 0.0,
+                        "dBzdt": 0.12,
+                    },
+                    "max_abs_reference_minus_primary_by_component": {
+                        "Ex": 0.3,
+                        "Ey": 0.0,
+                        "dBzdt": 0.18,
                     },
                 },
             }

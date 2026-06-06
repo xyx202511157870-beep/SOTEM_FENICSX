@@ -22,6 +22,7 @@ from atem3d.validation_3comp import (
 from atem3d.waveforms import summarize_internal_time_grid
 
 ResponseRunner = Callable[[dict], np.ndarray]
+DiagnosticsBuilder = Callable[[dict, np.ndarray, np.ndarray], dict]
 
 
 def run_corrected_model_validation(
@@ -29,6 +30,7 @@ def run_corrected_model_validation(
     *,
     forward_runner: ResponseRunner | None = None,
     reference_runner: ResponseRunner | None = None,
+    diagnostics_builder: DiagnosticsBuilder | None = None,
     output_dir: str | Path | None = None,
 ) -> dict:
     """Run one corrected-model case and write validation artifacts.
@@ -66,6 +68,8 @@ def run_corrected_model_validation(
     diagnostics["primary_secondary_step_equation"] = (
         _primary_secondary_step_equation_metadata_for_case(spec, times)
     )
+    if diagnostics_builder is not None:
+        diagnostics.update(dict(diagnostics_builder(spec, predictions, reference_values)))
     artifact_t0 = time.perf_counter()
     case = ThreeComponentValidationInput(
         output_dir=spec["output_dir"],
@@ -98,6 +102,8 @@ def run_corrected_model_convergence_validation(
     output_dir: str | Path | None = None,
     forward_runner: ResponseRunner | None = None,
     reference_runner: ResponseRunner | None = None,
+    primary_runner: ResponseRunner | None = None,
+    secondary_effect_atol: float = 1.0e-15,
 ) -> dict:
     """Run a coarse-vs-refined DOLFINx convergence validation artifact set.
 
@@ -114,15 +120,87 @@ def run_corrected_model_convergence_validation(
     )
     runner = forward_runner or _default_forward_runner
     reference = reference_runner or runner
+    primary = primary_runner or _default_reference_runner
 
     def run_refined_reference(_prediction_case_spec: dict) -> np.ndarray:
         return reference(refined_spec)
+
+    def build_secondary_effect_diagnostics(
+        prediction_case_spec: dict,
+        predictions: np.ndarray,
+        refined_reference: np.ndarray,
+    ) -> dict:
+        times = np.asarray(prediction_case_spec["observation_times"], dtype=float)
+        components = [str(value) for value in prediction_case_spec["components"]]
+        primary_t0 = time.perf_counter()
+        primary_values = _validate_response_table(
+            primary(prediction_case_spec),
+            times,
+            components,
+            "primary_runner",
+        )
+        primary_runtime = time.perf_counter() - primary_t0
+        return {
+            "secondary_effect_diagnostic": _secondary_effect_diagnostic(
+                predictions,
+                refined_reference,
+                primary_values,
+                components,
+                reference_type=str(prediction_case_spec.get("reference_type", "dolfinx_refined")),
+                nonzero_atol=float(secondary_effect_atol),
+                primary_runtime_s=float(primary_runtime),
+            )
+        }
 
     return run_corrected_model_validation(
         prediction_spec,
         forward_runner=runner,
         reference_runner=run_refined_reference,
+        diagnostics_builder=build_secondary_effect_diagnostics,
     )
+
+
+def _secondary_effect_diagnostic(
+    predictions: np.ndarray,
+    refined_reference: np.ndarray,
+    primary_values: np.ndarray,
+    component_names: list[str],
+    *,
+    reference_type: str,
+    nonzero_atol: float,
+    primary_runtime_s: float,
+) -> dict:
+    prediction_delta = np.asarray(predictions, dtype=float) - np.asarray(primary_values, dtype=float)
+    reference_delta = np.asarray(refined_reference, dtype=float) - np.asarray(primary_values, dtype=float)
+    coarse_fine_delta = np.asarray(predictions, dtype=float) - np.asarray(refined_reference, dtype=float)
+    prediction_by_component = _max_abs_by_component(prediction_delta, component_names)
+    reference_by_component = _max_abs_by_component(reference_delta, component_names)
+    coarse_fine_by_component = _max_abs_by_component(coarse_fine_delta, component_names)
+    prediction_nonzero = any(value > float(nonzero_atol) for value in prediction_by_component.values())
+    reference_nonzero = any(value > float(nonzero_atol) for value in reference_by_component.values())
+    return {
+        "reference_type": str(reference_type),
+        "primary_reference_type": "empymod_or_1d_background",
+        "component_names": [str(name) for name in component_names],
+        "nonzero_atol": float(nonzero_atol),
+        "primary_background_runtime_s": float(primary_runtime_s),
+        "max_abs_prediction_minus_primary_by_component": prediction_by_component,
+        "max_abs_reference_minus_primary_by_component": reference_by_component,
+        "max_abs_prediction_minus_reference_by_component": coarse_fine_by_component,
+        "prediction_secondary_effect_nonzero": bool(prediction_nonzero),
+        "reference_secondary_effect_nonzero": bool(reference_nonzero),
+        "secondary_effect_nonzero": bool(prediction_nonzero and reference_nonzero),
+    }
+
+
+def _max_abs_by_component(values: np.ndarray, component_names: list[str]) -> dict[str, float]:
+    table = np.asarray(values, dtype=float)
+    if table.ndim != 2 or table.shape[1] != len(component_names):
+        raise ValueError("secondary-effect diagnostic values must have shape (n_times, n_components)")
+    return {
+        str(component): float(np.max(np.abs(table[:, index]))) if table.shape[0] else 0.0
+        for index, component in enumerate(component_names)
+    }
 
 
 def _build_dolfinx_refined_reference_specs(

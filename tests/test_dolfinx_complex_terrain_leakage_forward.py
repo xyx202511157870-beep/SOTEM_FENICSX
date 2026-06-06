@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -226,3 +227,10 @@ def test_corrected_leakage_convergence_runner_writes_dolfinx_refined_artifacts(t
     assert (tmp_path / "noip_convergence" / "predictions.csv").is_file()
     assert (tmp_path / "noip_convergence" / "reference_empymod_or_1d.csv").is_file()
     assert (tmp_path / "noip_convergence" / "diagnostics.json").is_file()
+    diagnostics = json.loads((tmp_path / "noip_convergence" / "diagnostics.json").read_text(encoding="utf-8"))
+    secondary = diagnostics["secondary_effect_diagnostic"]
+    assert secondary["reference_type"] == "dolfinx_refined"
+    assert secondary["component_names"] == ["Ex", "Ey", "dBzdt"]
+    assert secondary["prediction_secondary_effect_nonzero"] is True
+    assert secondary["reference_secondary_effect_nonzero"] is True
+    assert secondary["secondary_effect_nonzero"] is True

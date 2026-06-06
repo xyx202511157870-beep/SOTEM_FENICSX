@@ -52,6 +52,9 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
     marker_reference = dict(marker.get("reference", {}))
     prediction_marker_count = int(marker_prediction.get("leakage_cell_count", 0))
     reference_marker_count = int(marker_reference.get("leakage_cell_count", 0))
+    secondary = dict(diagnostics.get("secondary_effect_diagnostic", {}))
+    prediction_secondary = dict(secondary.get("max_abs_prediction_minus_primary_by_component", {}))
+    reference_secondary = dict(secondary.get("max_abs_reference_minus_primary_by_component", {}))
     runtime = dict(diagnostics.get("runtime_seconds", {}))
     physical_failed = [
         str(component)
@@ -105,6 +108,19 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
         "reference_nearest_channel_distance_m": float(
             marker_reference.get("nearest_channel_distance_m", 0.0)
         ),
+        "prediction_secondary_effect_nonzero": bool(
+            secondary.get("prediction_secondary_effect_nonzero", False)
+        ),
+        "reference_secondary_effect_nonzero": bool(
+            secondary.get("reference_secondary_effect_nonzero", False)
+        ),
+        "secondary_effect_nonzero": bool(secondary.get("secondary_effect_nonzero", False)),
+        "max_prediction_secondary_effect_Ex": float(prediction_secondary.get("Ex", 0.0)),
+        "max_prediction_secondary_effect_Ey": float(prediction_secondary.get("Ey", 0.0)),
+        "max_prediction_secondary_effect_dBzdt": float(prediction_secondary.get("dBzdt", 0.0)),
+        "max_reference_secondary_effect_Ex": float(reference_secondary.get("Ex", 0.0)),
+        "max_reference_secondary_effect_Ey": float(reference_secondary.get("Ey", 0.0)),
+        "max_reference_secondary_effect_dBzdt": float(reference_secondary.get("dBzdt", 0.0)),
         "max_error_Ex": float(summary.get("max_error_Ex", 0.0)),
         "max_error_Ey": float(summary.get("max_error_Ey", 0.0)),
         "max_error_dBzdt": float(summary.get("max_error_dBzdt", summary.get("max_error_Hz_or_dBzdt", 0.0))),
@@ -172,6 +188,15 @@ def _write_sweep_csv(path: Path, runs: list[dict]) -> None:
         "leakage_marker_issue",
         "prediction_nearest_channel_distance_m",
         "reference_nearest_channel_distance_m",
+        "prediction_secondary_effect_nonzero",
+        "reference_secondary_effect_nonzero",
+        "secondary_effect_nonzero",
+        "max_prediction_secondary_effect_Ex",
+        "max_prediction_secondary_effect_Ey",
+        "max_prediction_secondary_effect_dBzdt",
+        "max_reference_secondary_effect_Ex",
+        "max_reference_secondary_effect_Ey",
+        "max_reference_secondary_effect_dBzdt",
         "max_error_Ex",
         "max_error_Ey",
         "max_error_dBzdt",

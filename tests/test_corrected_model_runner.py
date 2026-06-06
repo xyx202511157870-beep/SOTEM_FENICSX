@@ -173,6 +173,67 @@ def test_run_corrected_model_convergence_validation_uses_refined_reference_case(
     )
 
 
+def test_run_corrected_model_convergence_validation_records_nonzero_secondary_effect(tmp_path):
+    config = CorrectedModelValidationConfig(n_observation_times=3)
+    spec = build_corrected_leakage_channel_case_specs(tmp_path, config=config)["noip"]
+    spec["dolfinx_forward"]["cells"] = [2, 2, 1]
+    spec["convergence_reference"] = {
+        "dolfinx_forward": {
+            "cells": [4, 4, 2],
+        }
+    }
+    times = np.asarray(spec["observation_times"], dtype=float)
+    primary = np.column_stack(
+        [
+            np.ones(times.size),
+            2.0 * np.ones(times.size),
+            3.0 * np.ones(times.size),
+        ]
+    )
+
+    def fake_forward(case_spec):
+        cells = tuple(case_spec["dolfinx_forward"]["cells"])
+        if cells == (4, 4, 2):
+            return primary + np.array(
+                [
+                    [0.20, 0.00, 0.10],
+                    [0.10, 0.00, 0.05],
+                    [0.05, 0.00, 0.02],
+                ]
+            )
+        return primary + np.array(
+            [
+                [0.18, 0.00, 0.08],
+                [0.09, 0.00, 0.04],
+                [0.04, 0.00, 0.015],
+            ]
+        )
+
+    def fake_primary(case_spec):
+        assert case_spec["reference_type"] == "dolfinx_refined"
+        return primary
+
+    run_corrected_model_convergence_validation(
+        spec,
+        output_dir=tmp_path / "convergence_noip",
+        forward_runner=fake_forward,
+        primary_runner=fake_primary,
+    )
+
+    diagnostics = json.loads((tmp_path / "convergence_noip" / "diagnostics.json").read_text(encoding="utf-8"))
+    secondary = diagnostics["secondary_effect_diagnostic"]
+    assert secondary["reference_type"] == "dolfinx_refined"
+    assert secondary["component_names"] == ["Ex", "Ey", "dBzdt"]
+    assert secondary["prediction_secondary_effect_nonzero"] is True
+    assert secondary["reference_secondary_effect_nonzero"] is True
+    assert secondary["secondary_effect_nonzero"] is True
+    assert secondary["nonzero_atol"] == pytest.approx(1.0e-15)
+    assert secondary["max_abs_prediction_minus_primary_by_component"]["Ex"] == pytest.approx(0.18)
+    assert secondary["max_abs_reference_minus_primary_by_component"]["Ex"] == pytest.approx(0.20)
+    assert secondary["max_abs_prediction_minus_primary_by_component"]["Ey"] == pytest.approx(0.0)
+    assert secondary["max_abs_prediction_minus_reference_by_component"]["dBzdt"] == pytest.approx(0.02)
+
+
 def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):
     from atem3d import empymod_compare
 
