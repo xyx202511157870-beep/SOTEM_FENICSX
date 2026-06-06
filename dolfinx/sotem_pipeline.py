@@ -3895,6 +3895,93 @@ def _solve_dc_secondary_field(
     }
 
 
+def _make_dolfinx_secondary_step_solver(
+    spaces,
+    operators,
+    config: PipelineConfig,
+    *,
+    rhs_to_function=None,
+    solution_to_samples=None,
+):
+    """Return a DOLFINx-backed secondary step solver callable.
+
+    The returned callable matches ``atem3d.solvers.SecondarySolver``.  The
+    optional hooks convert between pure sample tables and DOLFINx Functions.
+    The zero-RHS path is handled without hooks and is used by zero-contrast
+    primary-secondary validation.
+    """
+
+    import numpy as np
+    from dolfinx import fem
+    from petsc4py import PETSc
+
+    V = spaces["V"]
+    solution = fem.Function(V, name="E_secondary_step")
+    solver_context = {"ksp": None}
+
+    def solve(rhs_density, sigma_eff: float, dt: float):
+        rhs_array = np.asarray(rhs_density, dtype=float)
+        dt_value = float(dt)
+        if dt_value <= 0.0 or not math.isfinite(dt_value):
+            raise ValueError("dt must be finite and positive")
+        if float(sigma_eff) <= 0.0 or not math.isfinite(float(sigma_eff)):
+            raise ValueError("sigma_eff must be finite and positive")
+        A = _copy_and_combine_matrix(operators["K"], operators["M"], 1.0 / dt_value)
+        if str(config.outer_boundary_mode).strip().lower() == "robin":
+            B_robin = operators.get("B_robin")
+            if B_robin is None:
+                A.destroy()
+                raise RuntimeError("Robin outer boundary mode requires B_robin operator")
+            A.axpy(
+                _outer_boundary_robin_admittance(config, dt_value),
+                B_robin,
+                structure=PETSc.Mat.Structure.SUBSET_NONZERO_PATTERN,
+            )
+            A.assemble()
+        _zero_rows_columns(A, operators["bc_global"], diag=1.0)
+
+        b = solution.x.petsc_vec.duplicate()
+        if np.allclose(rhs_array, 0.0, rtol=0.0, atol=0.0):
+            b.set(0.0)
+        else:
+            if rhs_to_function is None:
+                b.destroy()
+                A.destroy()
+                raise ValueError("rhs_to_function is required for nonzero secondary RHS samples")
+            rhs_function = rhs_to_function(rhs_array)
+            operators["M"].mult(rhs_function.x.petsc_vec, b)
+        b.assemble()
+        _zero_rhs_entries(b, operators["bc_global"])
+
+        if solver_context["ksp"] is None:
+            solver_context["ksp"] = configure_ams_solver(A, spaces, config)
+        else:
+            solver_context["ksp"]["ksp"].setOperators(A)
+        solution.x.array[:] = 0.0
+        solver_context["ksp"]["ksp"].solve(b, solution.x.petsc_vec)
+        solution.x.scatter_forward()
+        reason = int(solver_context["ksp"]["ksp"].getConvergedReason())
+        residual = float(solver_context["ksp"]["ksp"].getResidualNorm())
+        if reason < 0:
+            b.destroy()
+            A.destroy()
+            raise RuntimeError(f"secondary step solve failed, reason={reason}, residual={residual:.6e}")
+
+        if solution_to_samples is not None:
+            result = np.asarray(solution_to_samples(solution, rhs_array), dtype=float)
+        elif np.allclose(rhs_array, 0.0, rtol=0.0, atol=0.0):
+            result = np.zeros_like(rhs_array)
+        else:
+            b.destroy()
+            A.destroy()
+            raise ValueError("solution_to_samples is required for nonzero secondary solves")
+        b.destroy()
+        A.destroy()
+        return result
+
+    return solve
+
+
 def _update_debye_memories(debye, memories, E_new, dt: float) -> None:
     if debye is None:
         return
