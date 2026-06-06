@@ -114,6 +114,28 @@ def test_write_final_acceptance_report_requires_case_artifact_set(tmp_path):
     assert summary["cases"]["noip"]["artifact_status"]["missing"] == ["comparison_3comp.png"]
 
 
+def test_write_final_acceptance_report_rejects_invalid_png_artifacts(tmp_path):
+    noip_path = tmp_path / "noip" / "error_summary.json"
+    ip_path = tmp_path / "ip" / "error_summary.json"
+    noip_path.parent.mkdir()
+    ip_path.parent.mkdir()
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    ip_path.write_text(json.dumps(_summary("ip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    _write_required_case_artifacts(noip_path.parent)
+    _write_required_case_artifacts(ip_path.parent)
+    (noip_path.parent / "comparison_3comp.png").write_text("not a png", encoding="utf-8")
+
+    summary = write_final_acceptance_report(
+        noip_summary_json=noip_path,
+        ip_summary_json=ip_path,
+        output_dir=tmp_path / "acceptance",
+    )
+
+    assert summary["final_acceptance_passed"] is False
+    assert summary["blocking_reasons_by_case"]["noip"] == ["validation_artifacts_invalid"]
+    assert summary["cases"]["noip"]["artifact_status"]["invalid"] == ["comparison_3comp.png"]
+
+
 def test_write_final_acceptance_report_requires_polarization_effect_artifacts(tmp_path):
     noip_path = tmp_path / "noip" / "error_summary.json"
     ip_path = tmp_path / "ip" / "error_summary.json"
@@ -223,7 +245,10 @@ def _write_required_case_artifacts(directory, *, omit=None):
     ):
         if name in omit:
             continue
-        (directory / name).write_text("placeholder", encoding="utf-8")
+        if name.endswith(".png"):
+            (directory / name).write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
+        else:
+            (directory / name).write_text("placeholder", encoding="utf-8")
 
 
 def _write_required_polarization_effect_artifacts(directory, *, omit=None):
@@ -239,4 +264,7 @@ def _write_required_polarization_effect_artifacts(directory, *, omit=None):
     ):
         if name in omit:
             continue
-        (directory / name).write_text("placeholder", encoding="utf-8")
+        if name.endswith(".png"):
+            (directory / name).write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
+        else:
+            (directory / name).write_text("placeholder", encoding="utf-8")

@@ -3531,7 +3531,10 @@ source-term substitution inside the existing total-field equation.
   `polarization_effect_comparison.png`, and
   `polarization_effect_error_curves.png`. Missing polarization-effect files
   now block the combined report with
-  `polarization_effect_artifacts_missing`. WSL was
+  `polarization_effect_artifacts_missing`. Required PNG plot artifacts are now
+  checked for a PNG file signature as well; invalid plot files block with
+  `validation_artifacts_invalid` or `polarization_effect_artifacts_invalid`.
+  WSL was
   rechecked and then shut down; `/usr/bin/python3` still lacks
   `numpy`, `pytest`, `dolfinx.fem`, `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`,
   and `petsc4py`, and `wsl -l -v` confirmed `Ubuntu Stopped`. Windows

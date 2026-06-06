@@ -24,6 +24,7 @@ REQUIRED_POLARIZATION_EFFECT_ARTIFACTS = (
     "polarization_effect_comparison.png",
     "polarization_effect_error_curves.png",
 )
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 def summarize_final_acceptance(
@@ -54,7 +55,13 @@ def summarize_final_acceptance(
     )
     global_blocking_reasons = []
     if not bool(effect_status.get("complete", True)):
-        global_blocking_reasons.append("polarization_effect_artifacts_missing")
+        global_blocking_reasons.append(
+            _artifact_blocking_reason(
+                effect_status,
+                missing_reason="polarization_effect_artifacts_missing",
+                invalid_reason="polarization_effect_artifacts_invalid",
+            )
+        )
 
     for case in REQUIRED_CASES:
         if case in missing_cases:
@@ -80,8 +87,13 @@ def summarize_final_acceptance(
             artifact_status = artifacts_by_case.get(case, {"complete": True, "missing": []})
             if passed and not bool(artifact_status.get("complete", False)):
                 passed = False
-                if "validation_artifacts_missing" not in reasons:
-                    reasons.append("validation_artifacts_missing")
+                artifact_reason = _artifact_blocking_reason(
+                    artifact_status,
+                    missing_reason="validation_artifacts_missing",
+                    invalid_reason="validation_artifacts_invalid",
+                )
+                if artifact_reason not in reasons:
+                    reasons.append(artifact_reason)
         if passed:
             passed_cases.append(case)
         else:
@@ -202,13 +214,17 @@ def _case_artifact_status(
 ) -> dict:
     directory = Path(summary_json).parent
     missing = []
+    invalid = []
     for name in REQUIRED_CASE_ARTIFACTS:
         path = Path(diagnostics_json) if name == "diagnostics.json" and diagnostics_json is not None else directory / name
         if not path.exists():
             missing.append(name)
+        elif _requires_png_signature(name) and not _has_png_signature(path):
+            invalid.append(name)
     return {
-        "complete": not missing,
+        "complete": not missing and not invalid,
         "missing": missing,
+        "invalid": invalid,
         "required": list(REQUIRED_CASE_ARTIFACTS),
         "directory": str(directory),
     }
@@ -216,18 +232,44 @@ def _case_artifact_status(
 
 def _polarization_effect_artifact_status(directory: Path) -> dict:
     directory = Path(directory)
-    missing = [
-        name
-        for name in REQUIRED_POLARIZATION_EFFECT_ARTIFACTS
-        if not (directory / name).exists()
-    ]
+    missing = []
+    invalid = []
+    for name in REQUIRED_POLARIZATION_EFFECT_ARTIFACTS:
+        path = directory / name
+        if not path.exists():
+            missing.append(name)
+        elif _requires_png_signature(name) and not _has_png_signature(path):
+            invalid.append(name)
     return {
         "enabled": True,
-        "complete": not missing,
+        "complete": not missing and not invalid,
         "missing": missing,
+        "invalid": invalid,
         "required": list(REQUIRED_POLARIZATION_EFFECT_ARTIFACTS),
         "directory": str(directory),
     }
+
+
+def _artifact_blocking_reason(
+    status: dict,
+    *,
+    missing_reason: str,
+    invalid_reason: str,
+) -> str:
+    if status.get("missing"):
+        return missing_reason
+    if status.get("invalid"):
+        return invalid_reason
+    return missing_reason
+
+
+def _requires_png_signature(name: str) -> bool:
+    return str(name).lower().endswith(".png")
+
+
+def _has_png_signature(path: Path) -> bool:
+    with Path(path).open("rb") as handle:
+        return handle.read(len(PNG_SIGNATURE)) == PNG_SIGNATURE
 
 
 def _blocking_reasons(summary: dict) -> list[str]:

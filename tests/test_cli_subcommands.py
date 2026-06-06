@@ -301,4 +301,7 @@ def _write_required_acceptance_artifacts(directory):
         "diagnostics.json",
         "run_config_resolved.yaml",
     ):
-        (directory / name).write_text("placeholder", encoding="utf-8")
+        if name.endswith(".png"):
+            (directory / name).write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
+        else:
+            (directory / name).write_text("placeholder", encoding="utf-8")
