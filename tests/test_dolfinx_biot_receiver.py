@@ -116,6 +116,30 @@ def test_biot_receiver_preserves_instantaneous_dbdt():
     assert receiver["dBzdt"] == 3.0
 
 
+def test_faraday_receiver_hz_update_uses_backward_euler_dbdt():
+    sp = _load_pipeline_module()
+
+    updated = sp._advance_faraday_receiver_hz(
+        previous_hz=2.0,
+        dbzdt_new=4.0e-6,
+        dt=0.25,
+        mu=2.0e-6,
+    )
+
+    assert updated == 2.5
+
+
+def test_faraday_integrated_receiver_mode_outputs_hz_component():
+    sp = _load_pipeline_module()
+
+    config = sp.PipelineConfig(magnetic_receiver_mode="faraday_integrated")
+
+    diagnostics = sp.validate_model_consistency(config)
+
+    assert diagnostics["magnetic_receiver_mode"] == "faraday_integrated"
+    assert sp._forward_components(config) == ["Ex", "Ey", "Hz", "dBzdt"]
+
+
 def test_cole_cole_debye_fit_preserves_dc_conductivity():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(

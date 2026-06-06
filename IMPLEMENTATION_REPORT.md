@@ -84,6 +84,13 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     - `--magnetic-dbdt-mode curl` keeps the original E-form `-curl(E)` output.
     - `--magnetic-dbdt-mode biot_rate` uses the finite-difference rate of the
       Biot-Savart receiver `H` as a diagnostic `dBzdt` path.
+  - Added optional receiver magnetic-field recovery mode:
+    - `--magnetic-receiver-mode faraday_integrated` initializes receiver `Hz`
+      from the existing total-current Biot-Savart value and advances it with
+      backward-Euler `B^{n+1}=B^n+dt*dBzdt(E^{n+1})`.
+    - This mode exposes a direct Faraday-integrated `Hz` diagnostic path for
+      comparison against Biot-Savart recovery; it is not yet a full-window
+      acceptance result.
   - Validation summaries now distinguish strict component-wise acceptance from
     physical acceptance:
     - `pass_all_components` remains the strict per-component robust-error gate.
@@ -1745,7 +1752,9 @@ field consistency, or the total-field formulation.
   substantially on the corrected latest model, but all tested selection modes
   leave `Ex` near 67% peak-normalized error, so receiver sampling alone does
   not fix the early no-IP validation failure.
-- Faraday-integrated `Hz` recovery is not implemented in this round.
+- Faraday-integrated receiver `Hz` recovery is implemented as an E-form
+  diagnostic output mode. It still needs a controlled WSL validation run on the
+  corrected latest model before it can be used in an accuracy claim.
 - Late-diffusion diagnostics now report finite-domain coverage separately from
   the local refinement box. Existing artifacts generated before this fix may
   still show the old ambiguous `actual radius/depth` wording until
@@ -1800,7 +1809,10 @@ field consistency, or the total-field formulation.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.
-3. Add Faraday-integrated magnetic recovery as an alternative to Biot-Savart `Hz`, then use the persisted `dBzdt_curl`/`dBzdt_biot_rate` receiver diagnostics to localize the magnetic-rate recovery error.
+3. Run a controlled WSL comparison of `biot_current`, `biot_ohmic`, and
+   `faraday_integrated` magnetic receiver modes using the persisted
+   `dBzdt_curl`/`dBzdt_biot_rate` receiver diagnostics to localize the
+   magnetic-rate recovery error.
 4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 5. Continue P4/P5 by wiring the `PrimaryFEMInterpolator`/`TabulatedVectorField` adapter through `_interpolate_vector_callable_to_nedelec_function` for primary-secondary DC initialization and time stepping.
 6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.

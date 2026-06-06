@@ -114,7 +114,7 @@ class PipelineConfig:
     source_term_mode: str = "impressed_current"  # impressed_current, primary_dc
     formulation: str = "e"  # e, h
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
-    magnetic_receiver_mode: str = "curl"  # curl, biot_current, biot_ohmic
+    magnetic_receiver_mode: str = "curl"  # curl, biot_current, biot_ohmic, faraday_integrated
     magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
     divergence_cleaning: str = "none"  # none, conductivity
@@ -492,8 +492,10 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     if source_projection_mode not in {"charge_conserving", "raw"}:
         raise ValueError("source_projection_mode must be 'charge_conserving' or 'raw'")
     magnetic_receiver_mode = str(config.magnetic_receiver_mode).strip().lower()
-    if magnetic_receiver_mode not in {"curl", "biot_current", "biot_ohmic"}:
-        raise ValueError("magnetic_receiver_mode must be 'curl', 'biot_current', or 'biot_ohmic'")
+    if magnetic_receiver_mode not in {"curl", "biot_current", "biot_ohmic", "faraday_integrated"}:
+        raise ValueError(
+            "magnetic_receiver_mode must be 'curl', 'biot_current', 'biot_ohmic', or 'faraday_integrated'"
+        )
     magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
     if magnetic_dbdt_mode not in {"curl", "biot_rate"}:
         raise ValueError("magnetic_dbdt_mode must be 'curl' or 'biot_rate'")
@@ -3248,7 +3250,7 @@ def _forward_components(config: PipelineConfig) -> list[str]:
     components = ["Ex", "Ey"]
     magnetic_mode = str(config.magnetic_receiver_mode).strip().lower()
     formulation = str(config.formulation).strip().lower()
-    if formulation == "h" or magnetic_mode in {"biot_current", "biot_ohmic"}:
+    if formulation == "h" or magnetic_mode in {"biot_current", "biot_ohmic", "faraday_integrated"}:
         components.append("Hz")
     components.append("dBzdt")
     return components
@@ -3620,6 +3622,24 @@ def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> N
     receiver_values["Hz"] = float(h_receiver[2])
 
 
+def _advance_faraday_receiver_hz(
+    *,
+    previous_hz: float,
+    dbzdt_new: float,
+    dt: float,
+    mu: float = 1.2566370614359173e-6,
+) -> float:
+    """Backward-Euler receiver Hz update from dBz/dt = -curl(E)."""
+
+    dt_value = float(dt)
+    mu_value = float(mu)
+    if not math.isfinite(dt_value) or dt_value <= 0.0:
+        raise ValueError("dt must be positive")
+    if not math.isfinite(mu_value) or mu_value <= 0.0:
+        raise ValueError("mu must be positive")
+    return float(previous_hz) + dt_value * float(dbzdt_new) / mu_value
+
+
 def _biot_receiver_dbdt_from_h(h_new, h_old, *, dt: float, mu: float = 1.2566370614359173e-6):
     import numpy as np
 
@@ -3788,14 +3808,17 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
     if memories:
         _initialise_debye_memories_to_field(memories, E_old)
     magnetic_receiver_mode = str(config.magnetic_receiver_mode).strip().lower()
-    if magnetic_receiver_mode not in {"curl", "biot_current", "biot_ohmic"}:
-        raise ValueError("magnetic_receiver_mode must be 'curl', 'biot_current', or 'biot_ohmic'")
+    if magnetic_receiver_mode not in {"curl", "biot_current", "biot_ohmic", "faraday_integrated"}:
+        raise ValueError(
+            "magnetic_receiver_mode must be 'curl', 'biot_current', 'biot_ohmic', or 'faraday_integrated'"
+        )
     magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
     if magnetic_dbdt_mode not in {"curl", "biot_rate"}:
         raise ValueError("magnetic_dbdt_mode must be 'curl' or 'biot_rate'")
     if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     H_old_receiver = None
+    faraday_receiver_hz = None
     if magnetic_receiver_mode == "biot_current":
         H_old_receiver = _biot_savart_total_h_at_receiver(
             E_old,
@@ -3808,6 +3831,17 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         )
     elif magnetic_receiver_mode == "biot_ohmic":
         H_old_receiver = _biot_savart_cell_current_h_at_receiver(E_old, msh, materials, config)
+    elif magnetic_receiver_mode == "faraday_integrated":
+        faraday_initial_h = _biot_savart_total_h_at_receiver(
+            E_old,
+            msh,
+            materials,
+            config,
+            _source_current(0.0, config),
+            debye=debye,
+            memories=memories,
+        )
+        faraday_receiver_hz = float(faraday_initial_h[2])
 
     rows = []
     receiver_diagnostic_rows = []
@@ -3845,6 +3879,10 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
                 H_old_receiver = h_old
             else:
                 raise ValueError("forward checkpoint is missing a finite magnetic receiver state for Biot mode")
+        elif magnetic_receiver_mode == "faraday_integrated" and rows:
+            component_names = _forward_components(config)
+            if "Hz" in component_names:
+                faraday_receiver_hz = float(rows[-1][component_names.index("Hz")])
         log(
             f"[resume] loaded forward checkpoint {config.forward_checkpoint_npz()} at completed_step="
             f"{checkpoint['completed_step']} previous_time={previous_time:.6e} rows={len(rows)}",
@@ -3970,10 +4008,28 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         else:
             H_new_receiver = None
 
+        faraday_step_dbdt = None
+        faraday_step_record = None
+        if magnetic_receiver_mode == "faraday_integrated":
+            faraday_step_dbdt = compute_dbdt(E_new, spaces)
+            faraday_step_record = evaluate_receivers(E_new, faraday_step_dbdt, msh, config)
+            faraday_step_record["dBzdt_curl"] = float(faraday_step_record.get("dBzdt", np.nan))
+            faraday_step_record["dBzdt_biot_rate"] = float("nan")
+            faraday_receiver_hz = _advance_faraday_receiver_hz(
+                previous_hz=float(faraday_receiver_hz),
+                dbzdt_new=float(faraday_step_record["dBzdt"]),
+                dt=dt,
+            )
+            faraday_step_record["Hz"] = float(faraday_receiver_hz)
+
         is_output = step in output_step_indices
         if is_output:
-            dbdt = compute_dbdt(E_new, spaces)
-            rec = evaluate_receivers(E_new, dbdt, msh, config)
+            if magnetic_receiver_mode == "faraday_integrated":
+                dbdt = faraday_step_dbdt
+                rec = dict(faraday_step_record)
+            else:
+                dbdt = compute_dbdt(E_new, spaces)
+                rec = evaluate_receivers(E_new, dbdt, msh, config)
             rec["dBzdt_curl"] = float(rec.get("dBzdt", np.nan))
             rec["dBzdt_biot_rate"] = float("nan")
             if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
@@ -7011,7 +7067,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-term-mode", choices=["impressed_current", "primary_dc"], default="impressed_current")
     parser.add_argument("--formulation", choices=["e", "h"], default="e")
     parser.add_argument("--initial-dc-mode", choices=["fem", "analytic_halfspace"], default="fem")
-    parser.add_argument("--magnetic-receiver-mode", choices=["curl", "biot_current", "biot_ohmic"], default="curl")
+    parser.add_argument(
+        "--magnetic-receiver-mode",
+        choices=["curl", "biot_current", "biot_ohmic", "faraday_integrated"],
+        default="curl",
+    )
     parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate"], default="curl")
     parser.add_argument("--outer-boundary-mode", choices=["pec", "natural", "robin"], default="pec")
     parser.add_argument("--outer-boundary-robin-scale", type=float, default=1.0)
