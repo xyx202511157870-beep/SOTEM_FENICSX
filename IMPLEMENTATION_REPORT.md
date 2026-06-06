@@ -2863,6 +2863,12 @@ source-term substitution inside the existing total-field equation.
   (`nearest=1385.97 m > radius=900 m`), enlarged-domain `[3,3,1]` marked
   `1/5` cells, and default-domain `[3,3,1]` marked `3/20` cells. This gives a
   cheap pre-run guard for leakage-channel representation problems.
+- Corrected-model convergence validation now embeds this marker preflight
+  automatically into each `diagnostics.json` as
+  `leakage_marker_preflight`, with separate prediction and refined-reference
+  marker counts. This makes future convergence artifacts self-contained: a
+  failed leakage run can be audited for cell-center channel representation
+  without rerunning the standalone marker CLI.
 
 ## Next Steps
 

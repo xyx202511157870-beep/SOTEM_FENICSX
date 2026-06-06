@@ -141,8 +141,41 @@ def _build_dolfinx_refined_reference_specs(
         "reference_cells": reference_cells,
         "overrides": reference_overrides,
     }
+    marker_preflight = _leakage_marker_preflight(prediction_spec, reference_spec)
+    if marker_preflight:
+        diagnostics["leakage_marker_preflight"] = marker_preflight
     prediction_spec["diagnostics"] = diagnostics
     return prediction_spec, reference_spec
+
+
+def _leakage_marker_preflight(prediction_spec: dict, reference_spec: dict) -> dict:
+    prediction_forward = dict(prediction_spec.get("dolfinx_forward", {}))
+    reference_forward = dict(reference_spec.get("dolfinx_forward", {}))
+    if "leakage_channel" not in prediction_forward or "leakage_channel" not in reference_forward:
+        return {}
+    from atem3d.materials.material_map import leakage_channel_marker_diagnostics
+
+    return {
+        "prediction": _leakage_marker_preflight_for_forward(
+            prediction_forward,
+            leakage_channel_marker_diagnostics,
+        ),
+        "reference": _leakage_marker_preflight_for_forward(
+            reference_forward,
+            leakage_channel_marker_diagnostics,
+        ),
+    }
+
+
+def _leakage_marker_preflight_for_forward(forward_cfg: dict, diagnostics_func) -> dict:
+    leakage = dict(forward_cfg["leakage_channel"])
+    return diagnostics_func(
+        domain_min=forward_cfg["domain_min"],
+        domain_max=forward_cfg["domain_max"],
+        cells=forward_cfg["cells"],
+        channel_points=leakage["points"],
+        radius=float(leakage["radius"]),
+    )
 
 
 def _deep_merge_dict(base: dict, overrides: dict) -> dict:

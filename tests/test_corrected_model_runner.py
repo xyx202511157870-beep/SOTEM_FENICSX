@@ -114,6 +114,11 @@ def test_run_corrected_model_convergence_validation_uses_refined_reference_case(
     assert diagnostics["convergence_reference"]["reference_type"] == "dolfinx_refined"
     assert diagnostics["convergence_reference"]["prediction_cells"] == [2, 2, 1]
     assert diagnostics["convergence_reference"]["reference_cells"] == [4, 4, 2]
+    assert diagnostics["leakage_marker_preflight"]["prediction"]["leakage_cell_count"] > 0
+    assert (
+        diagnostics["leakage_marker_preflight"]["reference"]["leakage_cell_count"]
+        > diagnostics["leakage_marker_preflight"]["prediction"]["leakage_cell_count"]
+    )
 
 
 def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):
