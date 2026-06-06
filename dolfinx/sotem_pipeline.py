@@ -3787,6 +3787,29 @@ def _make_nedelec_rhs_interpolator_from_samples(
     return convert
 
 
+def _make_nedelec_solution_sampler_at_points(msh, sample_points):
+    """Return a sampler that evaluates a Nedelec Function at physical points."""
+
+    import numpy as np
+
+    points = np.asarray(sample_points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] == 0:
+        raise ValueError("sample_points must have shape (n_samples, 3)")
+    cells = []
+    for point in points:
+        point_cells = _find_cells_for_point(msh, point)
+        if len(point_cells) == 0:
+            raise RuntimeError(f"sample point {point.tolist()} was not found in a local cell")
+        cells.append(int(point_cells[0]))
+    cell_array = np.asarray(cells, dtype=np.int32)
+
+    def sample(solution, _rhs_samples=None):
+        values = np.asarray(solution.eval(points, cell_array), dtype=float)
+        return values.reshape(points.shape[0], 3)
+
+    return sample
+
+
 def _solve_initial_dc_field(msh, spaces, materials, facet_tags, config: PipelineConfig):
     """Solve charge-conserving DC potential and interpolate E0=-grad(phi)."""
 

@@ -117,6 +117,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     secondary RHS sample tables into Nedelec Functions. Constant sample tables
     are supported directly; non-constant tables require explicit sample
     coordinates.
+  - Added `_make_nedelec_solution_sampler_at_points` for sampling DOLFINx
+    Nedelec Functions back to `(n_samples, 3)` tables. The secondary step smoke
+    now exercises `rhs_to_function` plus this production `solution_to_samples`
+    path with nonzero RHS.
   - Validation summaries now distinguish strict component-wise acceptance from
     physical acceptance:
     - `pass_all_components` remains the strict per-component robust-error gate.
@@ -1954,7 +1958,7 @@ source-term substitution inside the existing total-field equation.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a uniform-halfspace analytic grounded-wire DC backend, a provider-to-FEM-point interpolation adapter, a DOLFINx-style tabulated callable assembler, and a shared DOLFINx Nedelec callable interpolation helper; wiring primary provider outputs into the full primary-secondary solver remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver, a provider-driven entry point that consumes `E_p,dc` samples, and a DOLFINx scalar secondary-potential solver with a WSL zero-contrast smoke test. Nonzero-contrast DC secondary validation and integration into a full DOLFINx primary-secondary run remain pending.
-- P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, a pure primary-secondary forward orchestration core, a reusable secondary receiver projection adapter, and a DOLFINx-backed secondary step solver with WSL zero-RHS and nonzero constant-RHS PETSc smoke tests. Non-constant RHS sample coordinates, production `solution_to_samples`, and complete DOLFINx primary-secondary forward wiring remain pending.
+- P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, a pure primary-secondary forward orchestration core, a reusable secondary receiver projection adapter, and a DOLFINx-backed secondary step solver with WSL zero-RHS and nonzero constant-RHS PETSc smoke tests. The nonzero RHS smoke now uses production point sampling for `solution_to_samples`. Non-constant RHS sample coordinates and complete DOLFINx primary-secondary forward wiring remain pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
