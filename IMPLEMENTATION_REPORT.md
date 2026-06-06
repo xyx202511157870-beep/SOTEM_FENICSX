@@ -958,6 +958,27 @@ write `final_acceptance/final_acceptance_summary.json` and
 `final_acceptance_report.txt`. The same two-time WSL smoke exercised this
 chain successfully.
 
+An 80-observation-time WSL smoke also completed under:
+
+```text
+dolfinx/runs/corrected_model_noip_ip_80pt_smoke
+```
+
+It used `1e-5 s <= t_obs <= 1 s`, the same tiny one-cell-per-axis DOLFINx box,
+and `EmpymodPrimaryProvider(srcpts=3)`. Both no-IP and IP artifact summaries
+reported `final_acceptance_passed=true`, zero component error, and the final
+acceptance report passed. Recorded runtimes were:
+
+```text
+no-IP forward 214.619 s, reference 10.690 s, artifact 0.981 s
+IP    forward 207.851 s, reference 10.777 s, artifact 0.700 s
+```
+
+This validates the 80-point corrected-model orchestration, plotting, runtime
+diagnostics, and final-acceptance plumbing for a primary-background smoke only.
+It still does not validate a resolved production mesh, 3D contrast, terrain,
+leakage channel, or a DOLFINx-computed IP secondary anomaly.
+
 ## Current Accuracy Status
 
 The current no-IP DOLFINx runs still exceed the 5% target. The corrected
