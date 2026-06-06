@@ -71,9 +71,10 @@ final acceptance.
 
 - `src/atem3d/yaml_io.py`
   - `safe_dump_yaml`
-  - Uses `PyYAML` when available and falls back to a small built-in YAML
-    writer for dictionaries/lists/scalars when the WSL FEniCSx environment
-    does not provide `yaml`.
+  - `safe_load_yaml`
+  - Uses `PyYAML` when available and falls back to small built-in YAML
+    writer/reader helpers for dictionaries/lists/scalars when the WSL FEniCSx
+    environment does not provide `yaml`.
 
 - `src/atem3d/corrected_model.py`
   - `CorrectedModelValidationConfig`
@@ -2630,6 +2631,11 @@ source-term substitution inside the existing total-field equation.
 - WSL DOLFINx smoke regression after the YAML fallback fix:
   `PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m pytest -q tests/test_dolfinx_primary_secondary_forward_smoke.py tests/test_dolfinx_complex_terrain_leakage_forward.py`
   completed with `13 passed`. WSL was then shut down and `Ubuntu Stopped` was
+  confirmed.
+- WSL PyYAML-free YAML read regression:
+  a fallback-written `acceptance.yaml` was read through `atem3d.cli._load_yaml`
+  in `/home/paidaxin/miniconda3/envs/fenicsx/bin/python` and printed
+  `fallback_yaml_load_ok`. WSL was then shut down and `Ubuntu Stopped` was
   confirmed.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
   metadata, including runner/material metadata, and accepts

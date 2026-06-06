@@ -20,6 +20,19 @@ def safe_dump_yaml(data, *, sort_keys: bool = True) -> str:
     return _fallback_dump(data, sort_keys=sort_keys)
 
 
+def safe_load_yaml(text: str):
+    """Load simple YAML text, using PyYAML when available and a small fallback otherwise."""
+
+    try:
+        import yaml
+
+        return yaml.safe_load(text)
+    except ModuleNotFoundError as exc:
+        if exc.name != "yaml":
+            raise
+    return _fallback_load(text)
+
+
 def _fallback_dump(value, *, sort_keys: bool) -> str:
     lines = _dump_value(value, indent=0, sort_keys=sort_keys)
     return "\n".join(lines) + "\n"
@@ -99,3 +112,104 @@ def _plain_string(value: str) -> str:
 
 def _quoted(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _fallback_load(text: str):
+    lines = []
+    for raw in str(text).splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        lines.append((indent, raw.strip()))
+    if not lines:
+        return None
+    value, index = _parse_block(lines, 0, lines[0][0])
+    if index != len(lines):
+        raise ValueError("unsupported YAML structure")
+    return value
+
+
+def _parse_block(lines: list[tuple[int, str]], index: int, indent: int):
+    if lines[index][1].startswith("-"):
+        return _parse_sequence(lines, index, indent)
+    return _parse_mapping(lines, index, indent)
+
+
+def _parse_mapping(lines: list[tuple[int, str]], index: int, indent: int):
+    values = {}
+    while index < len(lines):
+        line_indent, text = lines[index]
+        if line_indent < indent:
+            break
+        if line_indent != indent or text.startswith("-"):
+            break
+        key, separator, rest = text.partition(":")
+        if not separator:
+            raise ValueError(f"unsupported YAML mapping line: {text!r}")
+        key = _parse_key(key.strip())
+        rest = rest.strip()
+        index += 1
+        if rest:
+            values[key] = _parse_scalar(rest)
+        elif index < len(lines) and (
+            lines[index][0] > indent
+            or (lines[index][0] == indent and lines[index][1].startswith("-"))
+        ):
+            values[key], index = _parse_block(lines, index, lines[index][0])
+        else:
+            values[key] = None
+    return values, index
+
+
+def _parse_sequence(lines: list[tuple[int, str]], index: int, indent: int):
+    values = []
+    while index < len(lines):
+        line_indent, text = lines[index]
+        if line_indent < indent:
+            break
+        if line_indent != indent or not text.startswith("-"):
+            break
+        rest = text[1:].strip()
+        index += 1
+        if rest:
+            values.append(_parse_scalar(rest))
+        elif index < len(lines) and lines[index][0] > indent:
+            item, index = _parse_block(lines, index, lines[index][0])
+            values.append(item)
+        else:
+            values.append(None)
+    return values, index
+
+
+def _parse_key(value: str) -> str:
+    return str(_parse_scalar(value))
+
+
+def _parse_scalar(value: str):
+    if value in {"null", "Null", "NULL", "~"}:
+        return None
+    if value in {"true", "True", "TRUE"}:
+        return True
+    if value in {"false", "False", "FALSE"}:
+        return False
+    if value in {".nan", ".NaN", ".NAN"}:
+        return float("nan")
+    if value in {".inf", ".Inf", ".INF"}:
+        return float("inf")
+    if value in {"-.inf", "-.Inf", "-.INF"}:
+        return float("-inf")
+    if (value.startswith('"') and value.endswith('"')) or (
+        value.startswith("'") and value.endswith("'")
+    ):
+        inner = value[1:-1]
+        if value.startswith('"'):
+            return inner.replace('\\"', '"').replace("\\\\", "\\")
+        return inner
+    try:
+        if re.fullmatch(r"[-+]?[0-9]+", value):
+            return int(value)
+        if re.fullmatch(r"[-+]?([0-9]*\.[0-9]+|[0-9]+\.?)([eE][-+]?[0-9]+)?", value):
+            return float(value)
+    except ValueError:
+        pass
+    return value

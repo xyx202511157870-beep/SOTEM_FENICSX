@@ -254,6 +254,37 @@ def test_corrected_model_json_config_load_does_not_require_pyyaml(tmp_path, monk
     assert _load_yaml(config_path) == {"noip": {"case_type": "noip"}}
 
 
+def test_corrected_model_yaml_config_load_has_pyyaml_free_fallback(tmp_path, monkeypatch):
+    config_path = tmp_path / "acceptance.yaml"
+    config_path.write_text(
+        """
+acceptance:
+  noip_summary_json: outputs/noip/error_summary.json
+  ip_summary_json: outputs/ip/error_summary.json
+  final_acceptance_passed: false
+""",
+        encoding="utf-8",
+    )
+    original_import = builtins.__import__
+    import atem3d.cli as cli_module
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yaml":
+            raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.delattr(cli_module, "yaml", raising=False)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert _load_yaml(config_path) == {
+        "acceptance": {
+            "noip_summary_json": "outputs/noip/error_summary.json",
+            "ip_summary_json": "outputs/ip/error_summary.json",
+            "final_acceptance_passed": False,
+        }
+    }
+
+
 def test_published_paper_model_target_spec_records_public_reference_metadata(tmp_path):
     spec = build_published_paper_model_target_spec(tmp_path)
 

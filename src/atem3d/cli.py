@@ -466,13 +466,13 @@ def _write_response_csv(
 
 
 def _load_yaml(path: Path) -> dict:
+    from .yaml_io import safe_load_yaml
+
     text = Path(path).read_text(encoding="utf-8")
     try:
         config = json.loads(text)
     except json.JSONDecodeError:
-        import yaml
-
-        config = yaml.safe_load(text)
+        config = safe_load_yaml(text)
     if not isinstance(config, dict):
         raise ValueError("configuration root must be a mapping")
     return config
