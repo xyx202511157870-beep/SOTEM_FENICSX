@@ -363,6 +363,31 @@ def test_manual_line_integration_points_use_mesh_segments_when_available():
     assert float(np.sum(weights)) == pytest.approx(2.0)
 
 
+def test_manual_line_integration_points_report_line_orientation_diagnostics():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        source_start=(-500.0, 200.0, -0.1),
+        source_end=(500.0, 200.0, -0.1),
+        source_mesh_size=100.0,
+    )
+
+    _points, _weights, _svals, diagnostics = sp._manual_line_source_integration_points(config)
+
+    orientation = diagnostics["line_orientation"]
+    assert orientation["source_length_m"] == pytest.approx(1000.0)
+    assert orientation["expected_displacement_m"] == pytest.approx([1000.0, 0.0, 0.0])
+    assert orientation["integrated_displacement_m"] == pytest.approx([1000.0, 0.0, 0.0])
+    assert orientation["quadrature_weight_sum_m"] == pytest.approx(1000.0)
+    assert orientation["signed_parallel_projection_m"] == pytest.approx(1000.0)
+    assert orientation["relative_parallel_length_error"] < 1.0e-12
+    assert orientation["transverse_residual_m"] < 1.0e-12
+    assert orientation["orientation_cosine"] == pytest.approx(1.0)
+    assert orientation["s_parameter_min"] >= 0.0
+    assert orientation["s_parameter_max"] <= 1.0
+    assert orientation["s_parameter_monotonic"] is True
+    assert orientation["reversed_orientation"] is False
+
+
 def test_transient_source_projection_uses_unit_current_shape():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(source_current=10.0)

@@ -2584,6 +2584,14 @@ source-term substitution inside the existing total-field equation.
   transverse residual, orientation cosine, relative parallel length error, and
   reversed-orientation status. `source-geometry-audit` includes this as
   `source_vector.edge_orientation` for E-form/edge runs.
+- The DOLFINx `manual_line` source path now records a line-integration
+  orientation audit in `local_projection_diagnostics.line_orientation`. The
+  audit checks the quadrature weight sum against the physical source length,
+  records the integrated displacement along `source_start -> source_end`,
+  signed parallel projection, transverse residual, orientation cosine,
+  s-parameter range/monotonicity, and reversed-orientation status. This gives
+  the corrected-model source-only diagnostics a direct check of the actual
+  FEniCSx line-integration path before transient stepping.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.
@@ -2696,6 +2704,11 @@ source-term substitution inside the existing total-field equation.
   the pure source diagnostic, the source geometry audit JSON integration, and
   existing source/primary-secondary regressions; it does not prove the final
   full-window no-IP/IP 5% physical acceptance gate.
+- Windows verification after the DOLFINx manual-line orientation audit ran
+  `python -m pytest -q` with all tests passing (`2 skipped`). A WSL/FEniCSx
+  smoke ran
+  `PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m pytest -q tests/test_dolfinx_model_consistency.py::test_manual_line_integration_points_report_line_orientation_diagnostics tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_zero_contrast_forward_returns_primary_response`
+  with `2 passed`; WSL was then shut down and `Ubuntu Stopped` was confirmed.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.

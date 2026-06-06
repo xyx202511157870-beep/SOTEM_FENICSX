@@ -1959,6 +1959,11 @@ def _manual_line_source_integration_points(config: PipelineConfig, *, mesh_segme
                 "quadrature_points_per_segment_mean": float(sum(segment_rule_points) / len(segment_rule_points)),
                 "quadrature_points": int(points.shape[0]),
             }
+            diagnostics["line_orientation"] = _manual_line_orientation_diagnostics(
+                config,
+                weights=np.asarray(weights, dtype=float),
+                svals=np.asarray(svals, dtype=float),
+            )
             return points[order], weights[order], svals[order], diagnostics
 
     npts = _manual_line_source_quadrature_count(length, config)
@@ -1976,7 +1981,64 @@ def _manual_line_source_integration_points(config: PipelineConfig, *, mesh_segme
         "quadrature_points_per_segment": 0,
         "quadrature_points": int(npts),
     }
+    diagnostics["line_orientation"] = _manual_line_orientation_diagnostics(
+        config,
+        weights=weights,
+        svals=svals,
+    )
     return points, weights, svals, diagnostics
+
+
+def _manual_line_orientation_diagnostics(config: PipelineConfig, *, weights, svals):
+    """Return source-line quadrature orientation diagnostics for manual_line."""
+
+    import numpy as np
+
+    p0 = np.asarray(config.source_start, dtype=float)
+    p1 = np.asarray(config.source_end, dtype=float)
+    displacement = p1 - p0
+    source_length = float(np.linalg.norm(displacement))
+    if source_length <= 0.0:
+        raise ValueError("source_start and source_end must be distinct")
+    tangent = displacement / source_length
+    weights = np.asarray(weights, dtype=float).reshape(-1)
+    svals = np.asarray(svals, dtype=float).reshape(-1)
+    if weights.size != svals.size:
+        raise ValueError("weights and svals must have the same size")
+    if weights.size == 0:
+        raise ValueError("source line orientation diagnostics require at least one quadrature point")
+    weight_sum = float(np.sum(weights))
+    integrated = tangent * weight_sum
+    signed_parallel = float(np.dot(integrated, tangent))
+    transverse = integrated - signed_parallel * tangent
+    integrated_norm = float(np.linalg.norm(integrated))
+    orientation_cosine = (
+        0.0
+        if integrated_norm == 0.0
+        else float(np.dot(integrated, displacement) / (integrated_norm * source_length))
+    )
+    return {
+        "source_start": _numeric_list(p0),
+        "source_end": _numeric_list(p1),
+        "source_length_m": source_length,
+        "expected_displacement_m": _numeric_list(displacement),
+        "integrated_displacement_m": _numeric_list(integrated),
+        "quadrature_weight_sum_m": weight_sum,
+        "signed_parallel_projection_m": signed_parallel,
+        "transverse_residual_m": float(np.linalg.norm(transverse)),
+        "orientation_cosine": orientation_cosine,
+        "relative_parallel_length_error": float(abs(signed_parallel - source_length) / source_length),
+        "s_parameter_min": float(np.min(svals)),
+        "s_parameter_max": float(np.max(svals)),
+        "s_parameter_monotonic": bool(np.all(np.diff(svals) >= -1.0e-14)),
+        "reversed_orientation": bool(orientation_cosine <= -0.99),
+    }
+
+
+def _numeric_list(values) -> list[float]:
+    import numpy as np
+
+    return [float(value) for value in np.asarray(values, dtype=float).reshape(-1)]
 
 
 def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfig):
