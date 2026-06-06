@@ -143,11 +143,7 @@ def _parse_mapping(lines: list[tuple[int, str]], index: int, indent: int):
             break
         if line_indent != indent or text.startswith("-"):
             break
-        key, separator, rest = text.partition(":")
-        if not separator:
-            raise ValueError(f"unsupported YAML mapping line: {text!r}")
-        key = _parse_key(key.strip())
-        rest = rest.strip()
+        key, rest = _parse_mapping_pair(text)
         index += 1
         if rest:
             values[key] = _parse_scalar(rest)
@@ -172,13 +168,33 @@ def _parse_sequence(lines: list[tuple[int, str]], index: int, indent: int):
         rest = text[1:].strip()
         index += 1
         if rest:
-            values.append(_parse_scalar(rest))
+            if _is_inline_mapping(rest):
+                key, map_rest = _parse_mapping_pair(rest)
+                item = {key: _parse_scalar(map_rest) if map_rest else None}
+                if index < len(lines) and lines[index][0] > indent:
+                    extra, index = _parse_mapping(lines, index, lines[index][0])
+                    item.update(extra)
+                values.append(item)
+            else:
+                values.append(_parse_scalar(rest))
         elif index < len(lines) and lines[index][0] > indent:
             item, index = _parse_block(lines, index, lines[index][0])
             values.append(item)
         else:
             values.append(None)
     return values, index
+
+
+def _parse_mapping_pair(text: str):
+    key, separator, rest = text.partition(":")
+    if not separator:
+        raise ValueError(f"unsupported YAML mapping line: {text!r}")
+    return _parse_key(key.strip()), rest.strip()
+
+
+def _is_inline_mapping(value: str) -> bool:
+    key, separator, _ = value.partition(":")
+    return bool(separator and key.strip() and re.fullmatch(r"[A-Za-z0-9_.-]+", key.strip()))
 
 
 def _parse_key(value: str) -> str:
@@ -225,6 +241,7 @@ def _split_inline_items(value: str) -> list[str]:
     start = 0
     quote = ""
     escape = False
+    depth = 0
     for index, char in enumerate(value):
         if escape:
             escape = False
@@ -239,7 +256,13 @@ def _split_inline_items(value: str) -> list[str]:
         if char in {"'", '"'}:
             quote = char
             continue
-        if char == ",":
+        if char == "[":
+            depth += 1
+            continue
+        if char == "]":
+            depth = max(0, depth - 1)
+            continue
+        if char == "," and depth == 0:
             items.append(value[start:index])
             start = index + 1
     items.append(value[start:])

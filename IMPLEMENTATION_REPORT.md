@@ -2642,6 +2642,12 @@ source-term substitution inside the existing total-field equation.
   `validation.components: [Ex, Ey, dBzdt]` completed in the same FEniCSx
   environment and printed `fallback_inline_list_yaml_ok`. WSL was then shut
   down and `Ubuntu Stopped` was confirmed.
+- The PyYAML-free YAML reader now also handles task-book style nested inline
+  lists such as `time_steps: [[0.001, 3], 0.005]` and sequence mappings such
+  as `receivers: - id: rx1 ...` with following indented fields. Windows
+  verification ran `python -m pytest -q` with all tests passing (`2 skipped`).
+  A WSL FEniCSx regression printed `wsl_fallback_nested_yaml_ok`; WSL was then
+  shut down and `Ubuntu Stopped` was confirmed.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
   metadata, including runner/material metadata, and accepts
   `--n-observation-times` for memory-safe reduced diagnostic specs.
