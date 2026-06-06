@@ -83,6 +83,60 @@ def apply_leakage_channel_marker(
     return values
 
 
+def structured_box_cell_centers(domain_min, domain_max, cells) -> np.ndarray:
+    """Return cell centers for an axis-aligned structured box."""
+
+    lower = np.asarray(domain_min, dtype=float)
+    upper = np.asarray(domain_max, dtype=float)
+    counts = np.asarray(cells, dtype=int)
+    if lower.shape != (3,) or upper.shape != (3,):
+        raise ValueError("domain_min and domain_max must have length 3")
+    if counts.shape != (3,) or np.any(counts <= 0):
+        raise ValueError("cells must contain three positive integers")
+    if np.any(upper <= lower):
+        raise ValueError("domain_max must be greater than domain_min")
+    axes = []
+    for lo, hi, count in zip(lower, upper, counts):
+        edges = np.linspace(float(lo), float(hi), int(count) + 1)
+        axes.append(0.5 * (edges[:-1] + edges[1:]))
+    grid = np.meshgrid(*axes, indexing="ij")
+    return np.column_stack([item.ravel() for item in grid])
+
+
+def leakage_channel_marker_diagnostics(
+    *,
+    domain_min,
+    domain_max,
+    cells,
+    channel_points,
+    radius: float,
+) -> dict[str, object]:
+    """Return pure preflight diagnostics for structured leakage markers."""
+
+    centers = structured_box_cell_centers(domain_min, domain_max, cells)
+    channel = _as_points(channel_points, "channel_points")
+    radius = float(radius)
+    if radius <= 0.0:
+        raise ValueError("radius must be positive")
+    distances = np.full(centers.shape[0], np.inf, dtype=float)
+    for start, end in zip(channel[:-1], channel[1:]):
+        distances = np.minimum(distances, _distance_to_segment(centers, start, end))
+    mask = distances <= radius
+    leakage_count = int(np.count_nonzero(mask))
+    return {
+        "cell_count": int(centers.shape[0]),
+        "cells": [int(value) for value in np.asarray(cells, dtype=int)],
+        "domain_min": [float(value) for value in np.asarray(domain_min, dtype=float)],
+        "domain_max": [float(value) for value in np.asarray(domain_max, dtype=float)],
+        "radius_m": radius,
+        "leakage_cell_count": leakage_count,
+        "leakage_cell_fraction": float(leakage_count / centers.shape[0]),
+        "nearest_channel_distance_m": float(np.min(distances)),
+        "farthest_channel_distance_m": float(np.max(distances)),
+        "marked": bool(leakage_count > 0),
+    }
+
+
 def _distance_to_segment(points: np.ndarray, start: np.ndarray, end: np.ndarray) -> np.ndarray:
     segment = end - start
     denom = float(np.dot(segment, segment))

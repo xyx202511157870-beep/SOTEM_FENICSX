@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_corrected_model_convergence_run(argv[1:])
     if argv and argv[0] == "convergence-sweep-report":
         return _main_convergence_sweep_report(argv[1:])
+    if argv and argv[0] == "leakage-marker-diagnostics":
+        return _main_leakage_marker_diagnostics(argv[1:])
     if argv and argv[0] == "corrected-leakage-model-spec":
         return _main_corrected_leakage_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-model-spec":
@@ -304,6 +306,53 @@ def _main_convergence_sweep_report(argv: list[str]) -> int:
     print(f"wrote {args.output_dir / 'convergence_sweep_summary.json'}")
     print(f"best_by_max_physical_error: {summary['best_by_max_physical_error']['label']}")
     return 0
+
+
+def _main_leakage_marker_diagnostics(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Preflight leakage-channel cell marker diagnostics.")
+    parser.add_argument("config", type=Path, help="JSON/YAML corrected leakage case spec")
+    parser.add_argument("--case", choices=("noip", "ip"), default="noip")
+    parser.add_argument("--output", type=Path, default=Path("leakage_marker_diagnostics.json"))
+    args = parser.parse_args(argv)
+
+    from .corrected_model_runner import _build_dolfinx_refined_reference_specs
+    from .materials.material_map import leakage_channel_marker_diagnostics
+
+    config = _load_yaml(args.config)
+    case_spec = dict(config[args.case] if args.case in config else config)
+    prediction_spec, reference_spec = _build_dolfinx_refined_reference_specs(case_spec)
+    payload = {
+        "case_type": str(case_spec.get("case_type", args.case)),
+        "prediction": _leakage_marker_diagnostics_from_forward(
+            prediction_spec["dolfinx_forward"],
+            leakage_channel_marker_diagnostics,
+        ),
+        "reference": _leakage_marker_diagnostics_from_forward(
+            reference_spec["dolfinx_forward"],
+            leakage_channel_marker_diagnostics,
+        ),
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"wrote {args.output}")
+    print(
+        "prediction_leakage_cell_count: "
+        f"{payload['prediction']['leakage_cell_count']}; "
+        f"reference_leakage_cell_count: {payload['reference']['leakage_cell_count']}"
+    )
+    return 0
+
+
+def _leakage_marker_diagnostics_from_forward(forward_cfg: dict, diagnostics_func) -> dict:
+    forward = dict(forward_cfg)
+    leakage = dict(forward["leakage_channel"])
+    return diagnostics_func(
+        domain_min=forward["domain_min"],
+        domain_max=forward["domain_max"],
+        cells=forward["cells"],
+        channel_points=leakage["points"],
+        radius=float(leakage["radius"]),
+    )
 
 
 def _main_validate_secondary(argv: list[str]) -> int:

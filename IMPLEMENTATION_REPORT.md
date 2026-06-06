@@ -2853,6 +2853,16 @@ source-term substitution inside the existing total-field equation.
   next path for this coarse leakage geometry; the likely problem is the
   interaction of DG0 leakage marking, cell-center channel representation, and
   source/receiver coupling rather than a simple global resolution shortage.
+- Added pure leakage-marker preflight diagnostics for structured box meshes
+  and the CLI command `tdem-ip-forward leakage-marker-diagnostics`. It reports
+  prediction/reference cell counts, nearest channel distance, leakage-cell
+  fraction, and whether any cells are marked before launching a DOLFINx run.
+  Running it on the existing specs reproduced the domain diagnostic failure:
+  default `[2,2,1]` marked `1` coarse and `8` refined leakage cells
+  (`nearest=670 m`), enlarged-domain `[2,2,1]` marked `0` coarse cells
+  (`nearest=1385.97 m > radius=900 m`), enlarged-domain `[3,3,1]` marked
+  `1/5` cells, and default-domain `[3,3,1]` marked `3/20` cells. This gives a
+  cheap pre-run guard for leakage-channel representation problems.
 
 ## Next Steps
 

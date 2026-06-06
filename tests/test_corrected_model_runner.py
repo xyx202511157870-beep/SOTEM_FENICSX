@@ -451,3 +451,28 @@ def test_corrected_leakage_model_spec_cli_writes_json(tmp_path):
     assert payload["ip"]["observation_times"][0] == 1.0e-5
     assert payload["ip"]["observation_times"][-1] == 1.0
     assert len(payload["ip"]["observation_times"]) == 3
+
+
+def test_leakage_marker_diagnostics_cli_writes_case_report(tmp_path):
+    specs = build_corrected_leakage_channel_case_specs(tmp_path / "run")
+    spec_path = tmp_path / "spec.json"
+    output = tmp_path / "marker_diagnostics.json"
+    spec_path.write_text(json.dumps(specs), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "leakage-marker-diagnostics",
+            str(spec_path),
+            "--case",
+            "noip",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["case_type"] == "noip"
+    assert payload["prediction"]["leakage_cell_count"] > 0
+    assert payload["reference"]["leakage_cell_count"] > payload["prediction"]["leakage_cell_count"]
+    assert payload["prediction"]["marked"] is True

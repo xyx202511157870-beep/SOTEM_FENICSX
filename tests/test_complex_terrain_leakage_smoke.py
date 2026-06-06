@@ -4,6 +4,7 @@ from atem3d.examples.leakage_channel import build_leakage_channel_example
 from atem3d.materials.material_map import (
     CellMaterialMap,
     apply_leakage_channel_marker,
+    leakage_channel_marker_diagnostics,
     mark_leakage_channel,
 )
 from atem3d.materials.prony import DebyeTerm, PronyConductivity
@@ -63,6 +64,43 @@ def test_apply_leakage_channel_marker_overwrites_selected_cells():
     )
 
     np.testing.assert_array_equal(updated, np.array([7, 7, 1, 7]))
+
+
+def test_leakage_channel_marker_diagnostics_catches_unmarked_coarse_box():
+    channel = [
+        [-700.0, -500.0, -120.0],
+        [-250.0, -320.0, -90.0],
+        [150.0, -120.0, -140.0],
+        [650.0, 80.0, -110.0],
+    ]
+
+    default = leakage_channel_marker_diagnostics(
+        domain_min=[-2000.0, -2000.0, -1000.0],
+        domain_max=[2000.0, 2000.0, 100.0],
+        cells=[2, 2, 1],
+        channel_points=channel,
+        radius=900.0,
+    )
+    enlarged_bad = leakage_channel_marker_diagnostics(
+        domain_min=[-3000.0, -3000.0, -1500.0],
+        domain_max=[3000.0, 3000.0, 200.0],
+        cells=[2, 2, 1],
+        channel_points=channel,
+        radius=900.0,
+    )
+    enlarged_ok = leakage_channel_marker_diagnostics(
+        domain_min=[-3000.0, -3000.0, -1500.0],
+        domain_max=[3000.0, 3000.0, 200.0],
+        cells=[3, 3, 1],
+        channel_points=channel,
+        radius=900.0,
+    )
+
+    assert default["leakage_cell_count"] > 0
+    assert enlarged_bad["leakage_cell_count"] == 0
+    assert enlarged_bad["nearest_channel_distance_m"] > 900.0
+    assert enlarged_ok["leakage_cell_count"] > 0
+    assert enlarged_ok["cell_count"] == 9
 
 
 def test_build_leakage_channel_example_has_marked_channel_and_materials():
