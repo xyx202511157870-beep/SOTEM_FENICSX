@@ -2788,6 +2788,19 @@ source-term substitution inside the existing total-field equation.
   with two full-window observation times; it wrote the required validation
   artifacts and passed. WSL was then shut down and `Ubuntu Stopped` was
   confirmed.
+- A corrected-scale no-IP leakage convergence diagnostic was then run in
+  WSL/FEniCSx with `n_observation_times=2`, prediction cells `[2,2,1]`, and
+  refined reference cells `[4,4,2]`. It generated the full artifact set under
+  `dolfinx/runs/corrected_leakage_convergence_noip/noip_convergence` and
+  correctly remained non-final because `reference_type=dolfinx_refined` and
+  `validation_scope=corrected_model_terrain_leakage_diagnostic`. The physical
+  convergence gate failed at the late `1 s` channel: `max_error_Ex=0.6238305`,
+  `max_error_dBzdt=0.1302714`, while early `1e-5 s` Ex and dBzdt errors were
+  `0.0100462` and `2.84e-6`. `Ey` was flagged as a weak component; strict
+  floor-relative errors failed (`max_error_Ey=1.53145`), but it was not listed
+  in `physical_failed_components`. Runtime was about `23.93 s` for the coarse
+  prediction, `164.08 s` for the refined reference, and `1.06 s` for artifact
+  writing. WSL was shut down after the run and `Ubuntu Stopped` was confirmed.
 
 ## Next Steps
 
