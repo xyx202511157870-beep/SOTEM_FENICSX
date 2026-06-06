@@ -2719,6 +2719,20 @@ source-term substitution inside the existing total-field equation.
   smoke ran
   `PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m pytest -q tests/test_dolfinx_validation_artifacts.py::test_validation_artifacts_include_source_local_projection_diagnostics tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_zero_contrast_forward_returns_primary_response`
   with `2 passed`; WSL was then shut down and `Ubuntu Stopped` was confirmed.
+- A memory-safe WSL/FEniCSx corrected-source `--source-only` audit was run on a
+  coarse bounded domain with the latest corrected geometry
+  `(-500, 200, -0.1) -> (500, 200, -0.1)` and receiver `(0, -300, -0.1)`.
+  In raw projection mode, `source_line_orientation` reported
+  `source_length_m=1000`, `quadrature_weight_sum_m=1000.0000000000002`,
+  `orientation_cosine=1.0`, `relative_parallel_length_error=2.27e-16`,
+  `transverse_residual_m=0`, `s_parameter_monotonic=true`, and
+  `reversed_orientation=false`; the raw scalar endpoint residual was
+  `0.6272116102502578` against endpoint norm `1.414213562373095`. The same
+  audit with `source_projection_mode=charge_conserving` reduced the endpoint
+  residual to `4.989813331218184e-10`
+  (`divergence_residual_reduction=0.999999999204445`) while preserving the same
+  orientation/length diagnostics. WSL was shut down after both runs and
+  `Ubuntu Stopped` was confirmed.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.
@@ -2734,9 +2748,12 @@ source-term substitution inside the existing total-field equation.
    audits improved dBzdt but not Ex, so the next step should shift to source
    loading/DC-primary consistency and the primary-secondary path before any full
    fine-grid run.
-2. Keep mesh-segment line-source integration as the current source baseline,
-   and add an explicit de Rham/source-edge orientation audit before replacing
-   it with any DOLFINx-native source assembly.
+2. Keep mesh-segment line-source integration as the current source baseline.
+   The corrected-source orientation/length audit now passes on a coarse
+   source-only WSL run, so the next source task is to use the persisted
+   endpoint-balance and line-orientation diagnostics to audit de Rham
+   source-edge consistency before replacing it with any DOLFINx-native source
+   assembly.
 3. Do not continue tuning `source_term_mode=primary_dc` as a total-field
    shortcut. Move primary/background-current accounting into the real
    primary-secondary path.
