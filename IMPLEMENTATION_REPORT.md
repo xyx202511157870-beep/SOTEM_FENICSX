@@ -405,6 +405,28 @@ python -m pytest -q
 Results: the new alias-binding regression test passed, validation/metrics
 pytest passed (`18 passed`), and full pytest exited `0`.
 
+## YAML Linear Ramp-Off Waveform Checkpoint (2026-06-06)
+
+The legacy `tdem-ip-forward run CONFIG` path now accepts task-book
+`linear_ramp_off` source waveforms in YAML. The config loader converts
+`current_initial` and `current_final` in amperes into the existing
+`GroundedWireSource.current * waveform.value(t)` scale convention, so a
+source with `current=10 A` and `current_initial=10 A` still injects `10 A`,
+not `100 A`. The compatible runtime waveform is continuous over
+`0 <= t <= t_off`, reaches `current_final` at `t_off`, and preserves the
+existing `step_off` and `tabulated` paths.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_config_and_io.py::test_build_simulation_supports_linear_ramp_off_waveform
+python -m pytest -q tests/test_config_and_io.py tests/test_waveform.py tests/test_time_grid.py tests/test_sources.py
+python -m pytest -q
+```
+
+Results: the new YAML config regression test passed, config/waveform/source
+pytest passed, and full pytest exited `0`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

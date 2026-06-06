@@ -37,6 +37,44 @@ class StepOffWaveform:
 
 
 @dataclass(frozen=True)
+class LinearRampOffWaveform:
+    """Continuous linear ramp-off waveform stored as a source-current scale."""
+
+    off_time: float
+    initial_value_scale: float = 1.0
+    final_value_scale: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not np.isfinite(float(self.off_time)) or float(self.off_time) <= 0.0:
+            raise ValueError("linear ramp off_time must be finite and positive")
+        object.__setattr__(self, "off_time", float(self.off_time))
+        object.__setattr__(self, "initial_value_scale", float(self.initial_value_scale))
+        object.__setattr__(self, "final_value_scale", float(self.final_value_scale))
+
+    @property
+    def has_initial_fields(self) -> bool:
+        return abs(self.initial_value_scale) > 0.0
+
+    def value(self, time: float) -> float:
+        time = float(time)
+        if time <= 0.0:
+            return float(self.initial_value_scale)
+        if time >= self.off_time:
+            return float(self.final_value_scale)
+        fraction = time / self.off_time
+        return float(
+            (1.0 - fraction) * self.initial_value_scale
+            + fraction * self.final_value_scale
+        )
+
+    def previous_value(self, time: float) -> float:
+        return self.value(time)
+
+    def initial_value(self) -> float:
+        return float(self.initial_value_scale)
+
+
+@dataclass(frozen=True)
 class TabulatedWaveform:
     """Piecewise-linear current waveform."""
 
@@ -77,7 +115,7 @@ class GroundedWireSource:
     start: tuple[float, float, float]
     end: tuple[float, float, float]
     current: float
-    waveform: StepOffWaveform | TabulatedWaveform
+    waveform: StepOffWaveform | LinearRampOffWaveform | TabulatedWaveform
     face_projection: str = "auto"
 
     def __post_init__(self) -> None:

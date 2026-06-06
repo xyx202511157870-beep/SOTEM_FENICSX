@@ -50,6 +50,40 @@ def test_build_simulation_from_config_dict_runs_small_model(tmp_path):
         assert "config_yaml" in h5.attrs
 
 
+def test_build_simulation_supports_linear_ramp_off_waveform():
+    config = {
+        "mesh": {
+            "hx": [1.0, 1.0, 1.0],
+            "hy": [1.0, 1.0, 1.0],
+            "hz": [1.0, 1.0],
+            "origin": [-1.5, -1.5, -1.0],
+        },
+        "model": {"sigma_infinity": 0.1},
+        "source": {
+            "start": [-0.5, 0.0, 0.0],
+            "end": [0.5, 0.0, 0.0],
+            "current": 10.0,
+            "waveform": {
+                "type": "linear_ramp_off",
+                "t_off": 1.0e-5,
+                "current_initial": 10.0,
+                "current_final": 0.0,
+            },
+        },
+        "time_steps": [1.0e-6],
+        "receivers": [],
+    }
+
+    simulation = build_simulation(config)
+    waveform = simulation.sources[0].waveform
+    source_current = simulation.sources[0].current
+
+    assert source_current * waveform.value(0.0) == 10.0
+    assert source_current * waveform.value(5.0e-6) == 5.0
+    assert source_current * waveform.value(2.0e-5) == 0.0
+    assert source_current * waveform.previous_value(1.0e-5) == 0.0
+
+
 def test_save_result_hdf5_accepts_receiver_data_only_result(tmp_path):
     result = ReceiverDataResult(
         times=np.array([0.0, 1.0e-3]),

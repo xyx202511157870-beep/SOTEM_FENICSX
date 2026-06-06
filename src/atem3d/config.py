@@ -29,7 +29,12 @@ from .source_history_runtime import (
     TimeSeriesSourceHistoryCorrection,
 )
 from .simulation import TDEMIPSimulation
-from .sources import GroundedWireSource, StepOffWaveform, TabulatedWaveform
+from .sources import (
+    GroundedWireSource,
+    LinearRampOffWaveform,
+    StepOffWaveform,
+    TabulatedWaveform,
+)
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -180,10 +185,31 @@ def _build_time_steps(time_steps: Any) -> list[float]:
 def _build_source(source_cfg: dict[str, Any]) -> GroundedWireSource:
     waveform_cfg = source_cfg.get("waveform", {"type": "step_off", "off_time": 0.0})
     waveform_type = waveform_cfg.get("type", "step_off")
+    source_current = float(source_cfg["current"])
     if waveform_type == "step_off":
         waveform = StepOffWaveform(
             off_time=float(waveform_cfg.get("off_time", 0.0)),
             on_value=float(waveform_cfg.get("on_value", 1.0)),
+        )
+    elif waveform_type == "linear_ramp_off":
+        if source_current == 0.0:
+            raise ValueError("current must be nonzero")
+        current_initial = float(
+            waveform_cfg.get(
+                "current_initial",
+                source_current * float(waveform_cfg.get("initial_value", 1.0)),
+            )
+        )
+        current_final = float(
+            waveform_cfg.get(
+                "current_final",
+                source_current * float(waveform_cfg.get("final_value", 0.0)),
+            )
+        )
+        waveform = LinearRampOffWaveform(
+            off_time=float(waveform_cfg.get("t_off", waveform_cfg.get("off_time", 0.0))),
+            initial_value_scale=current_initial / source_current,
+            final_value_scale=current_final / source_current,
         )
     elif waveform_type == "tabulated":
         waveform = TabulatedWaveform(
@@ -197,7 +223,7 @@ def _build_source(source_cfg: dict[str, Any]) -> GroundedWireSource:
     return GroundedWireSource(
         start=tuple(source_cfg["start"]),
         end=tuple(source_cfg["end"]),
-        current=float(source_cfg["current"]),
+        current=source_current,
         waveform=waveform,
         face_projection=str(source_cfg.get("face_projection", "auto")),
     )
