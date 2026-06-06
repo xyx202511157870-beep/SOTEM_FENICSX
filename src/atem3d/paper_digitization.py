@@ -28,6 +28,7 @@ PAPER_CURVE_TARGETS = [
         "response_units": "V/m",
         "axis_notes": "log10 time axis in seconds; response panel digitizes Ex values",
         "caption": "Ex responses and relative error of 3D modeling results and 1D analytical solutions under the same half-space model with polarization layer.",
+        "figure_crop_fraction": [0.15, 0.07, 0.88, 0.335],
         "suggested_curve_labels": ["paper_3d_model", "paper_1d_analytical"],
     },
     {
@@ -41,6 +42,7 @@ PAPER_CURVE_TARGETS = [
         "response_units": "nT",
         "axis_notes": "log10 time axis in seconds; response panel digitizes Hz values",
         "caption": "Hz responses and relative error of 3D modeling results and 1D analytical solutions under the same half-space model with polarization layer.",
+        "figure_crop_fraction": [0.15, 0.68, 0.88, 0.95],
         "suggested_curve_labels": ["paper_3d_model", "paper_1d_analytical"],
     },
     {
@@ -54,6 +56,7 @@ PAPER_CURVE_TARGETS = [
         "response_units": "V/m",
         "axis_notes": "log10 time axis in seconds; response panel digitizes Ex values",
         "caption": "SOTEM Ex responses and relative IP effects for the half-space model with and without polarized layer.",
+        "figure_crop_fraction": [0.15, 0.36, 0.88, 0.64],
         "suggested_curve_labels": ["paper_ip", "paper_noip"],
     },
     {
@@ -67,6 +70,7 @@ PAPER_CURVE_TARGETS = [
         "response_units": "nT",
         "axis_notes": "log10 time axis in seconds; response panel digitizes Hz values",
         "caption": "SOTEM Hz responses and relative IP effects for the half-space model with and without polarized layer.",
+        "figure_crop_fraction": [0.15, 0.68, 0.88, 0.95],
         "suggested_curve_labels": ["paper_ip", "paper_noip"],
     },
     {
@@ -80,6 +84,7 @@ PAPER_CURVE_TARGETS = [
         "response_units": "V/m",
         "axis_notes": "log10 time axis in seconds; response panel digitizes Ex values; paper notes absolute values when sign changes",
         "caption": "SOTEM Ex responses and relative IP effects for 3D low resistance polarization model.",
+        "figure_crop_fraction": [0.15, 0.68, 0.88, 0.95],
         "suggested_curve_labels": ["paper_ip", "paper_noip"],
     },
     {
@@ -93,6 +98,7 @@ PAPER_CURVE_TARGETS = [
         "response_units": "nT",
         "axis_notes": "log10 time axis in seconds; response panel digitizes Hz values; paper notes absolute values when sign changes",
         "caption": "SOTEM Hz responses and relative IP effects for 3D low resistance polarization model.",
+        "figure_crop_fraction": [0.15, 0.07, 0.88, 0.35],
         "suggested_curve_labels": ["paper_ip", "paper_noip"],
     },
 ]
@@ -148,6 +154,7 @@ def write_published_paper_figure_page_package(
     pdf_path: str | Path | None = None,
     dpi: int = 180,
     render: bool = False,
+    crop_figures: bool = False,
     renderer: str = "pdftoppm",
     runner=None,
 ) -> dict:
@@ -162,6 +169,8 @@ def write_published_paper_figure_page_package(
     rendered = bool(render)
     if rendered and pdf_path is None:
         raise ValueError("pdf_path is required when render=True")
+    if crop_figures and not rendered:
+        raise ValueError("crop_figures=True requires render=True")
     manifest_pages = []
     for page_number, page_targets in pages.items():
         image_name = ""
@@ -184,11 +193,24 @@ def write_published_paper_figure_page_package(
             run(command, check=True)
             if not (output / image_name).exists():
                 raise FileNotFoundError(f"expected rendered page image was not created: {image_name}")
+        manifest_targets = []
+        for target in page_targets:
+            manifest_target = dict(target)
+            figure_image = ""
+            if crop_figures:
+                figure_image = _figure_image_name(target)
+                _crop_figure_from_page(
+                    output / image_name,
+                    output / figure_image,
+                    target["figure_crop_fraction"],
+                )
+            manifest_target["figure_image"] = figure_image
+            manifest_targets.append(manifest_target)
         manifest_pages.append(
             {
                 "pdf_page_number": int(page_number),
                 "image": image_name,
-                "targets": [dict(target) for target in page_targets],
+                "targets": manifest_targets,
             }
         )
     manifest = {
@@ -198,6 +220,7 @@ def write_published_paper_figure_page_package(
         "source_title": str(dict(paper_spec.get("published_reference", {})).get("title", "")),
         "pdf_path": pdf_text,
         "rendered": rendered,
+        "crop_figures": bool(crop_figures),
         "renderer": str(renderer),
         "dpi": int(dpi),
         "pages": manifest_pages,
@@ -298,6 +321,32 @@ def _group_targets_by_page(targets: list[dict]) -> dict[int, list[dict]]:
     return dict(sorted(pages.items()))
 
 
+def _figure_image_name(target: dict) -> str:
+    digits = "".join(ch for ch in str(target["figure"]) if ch.isdigit())
+    return f"paper_fig_{int(digits):03d}.png"
+
+
+def _crop_figure_from_page(page_image: Path, output_image: Path, crop_fraction: list[float]) -> None:
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ImportError("Pillow is required for crop_figures=True") from exc
+    if len(crop_fraction) != 4:
+        raise ValueError("figure_crop_fraction must contain [left, top, right, bottom]")
+    with Image.open(page_image) as image:
+        width, height = image.size
+        left, top, right, bottom = [float(value) for value in crop_fraction]
+        box = (
+            max(0, min(width, int(round(left * width)))),
+            max(0, min(height, int(round(top * height)))),
+            max(0, min(width, int(round(right * width)))),
+            max(0, min(height, int(round(bottom * height)))),
+        )
+        if box[2] <= box[0] or box[3] <= box[1]:
+            raise ValueError(f"invalid figure_crop_fraction: {crop_fraction}")
+        image.crop(box).save(output_image)
+
+
 def _write_template_csv(path: Path, targets: list[dict]) -> None:
     columns = [
         "figure",
@@ -311,6 +360,7 @@ def _write_template_csv(path: Path, targets: list[dict]) -> None:
         "value",
         "units",
         "axis_notes",
+        "figure_crop_fraction",
         "caption",
         "notes",
     ]
@@ -332,6 +382,7 @@ def _write_template_csv(path: Path, targets: list[dict]) -> None:
                         "value": "",
                         "units": target.get("response_units", ""),
                         "axis_notes": target.get("axis_notes", ""),
+                        "figure_crop_fraction": json.dumps(target.get("figure_crop_fraction", [])),
                         "caption": target.get("caption", ""),
                         "notes": "digitize response panel from published plot",
                     }

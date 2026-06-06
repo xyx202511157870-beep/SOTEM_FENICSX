@@ -738,6 +738,7 @@ def test_published_paper_model_target_spec_records_public_reference_metadata(tmp
     assert figure_targets["Fig. 2"]["pdf_page_number"] == 3
     assert figure_targets["Fig. 2"]["component"] == "Ex"
     assert figure_targets["Fig. 2"]["response_units"] == "V/m"
+    assert figure_targets["Fig. 2"]["figure_crop_fraction"] == [0.15, 0.07, 0.88, 0.335]
     assert figure_targets["Fig. 15"]["pdf_page_number"] == 9
     assert figure_targets["Fig. 15"]["component"] == "Hz"
     assert figure_targets["Fig. 15"]["response_units"] == "nT"
@@ -788,7 +789,7 @@ def test_published_paper_digitization_template_cli_writes_manifest_and_csv(tmp_p
     csv_lines = (output_dir / "paper_curve_digitization_template.csv").read_text(encoding="utf-8").splitlines()
     assert csv_lines[0] == (
         "figure,pdf_page_number,model_key,component,response_panel,value_kind,"
-        "curve_label,time_obs,value,units,axis_notes,caption,notes"
+        "curve_label,time_obs,value,units,axis_notes,figure_crop_fraction,caption,notes"
     )
     assert any(
         line.startswith("Fig. 12,7,three_dimensional_polarized_body,Ex,a,response,paper_ip,,,V/m,")
@@ -824,6 +825,7 @@ def test_published_paper_figure_pages_cli_writes_page_manifest(tmp_path):
     assert page3["image"] == ""
     assert [target["figure"] for target in page3["targets"]] == ["Fig. 2", "Fig. 3"]
     assert page3["targets"][0]["component"] == "Ex"
+    assert page3["targets"][0]["figure_image"] == ""
 
 
 def test_published_paper_figure_page_package_renders_unique_pages(tmp_path):
@@ -858,6 +860,35 @@ def test_published_paper_figure_page_package_renders_unique_pages(tmp_path):
     assert len(calls) == 4
     assert calls[0][0][:7] == ["fake-pdftoppm", "-f", "3", "-l", "3", "-r", "90"]
     assert calls[0][1] is True
+
+
+def test_published_paper_figure_page_package_crops_figures(tmp_path):
+    from PIL import Image
+
+    spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    def fake_runner(command, check):
+        image = Image.new("RGB", (1000, 1200), color="white")
+        image.save(str(command[-1]) + ".png")
+
+    manifest = write_published_paper_figure_page_package(
+        spec,
+        tmp_path / "figure_pages",
+        pdf_path=pdf,
+        render=True,
+        crop_figures=True,
+        runner=fake_runner,
+    )
+
+    assert manifest["crop_figures"] is True
+    page3_targets = manifest["pages"][0]["targets"]
+    assert page3_targets[0]["figure_image"] == "paper_fig_002.png"
+    assert page3_targets[1]["figure_image"] == "paper_fig_003.png"
+    assert (tmp_path / "figure_pages" / "paper_fig_002.png").is_file()
+    with Image.open(tmp_path / "figure_pages" / "paper_fig_002.png") as cropped:
+        assert cropped.size == (730, 318)
 
 
 def test_published_paper_curve_artifacts_cli_writes_overlay_outputs(tmp_path):

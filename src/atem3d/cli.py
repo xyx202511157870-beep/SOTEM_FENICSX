@@ -278,6 +278,7 @@ def _main_published_paper_figure_pages(argv: list[str]) -> int:
     parser.add_argument("--pdf", type=Path, help="Optional source PDF to render target pages with pdftoppm")
     parser.add_argument("--dpi", type=int, default=180)
     parser.add_argument("--renderer", default="pdftoppm")
+    parser.add_argument("--crop-figures", action="store_true", help="Crop target figures from rendered pages")
     args = parser.parse_args(argv)
 
     from .paper_digitization import write_published_paper_figure_page_package
@@ -289,6 +290,7 @@ def _main_published_paper_figure_pages(argv: list[str]) -> int:
         pdf_path=args.pdf,
         dpi=args.dpi,
         render=args.pdf is not None,
+        crop_figures=args.crop_figures,
         renderer=args.renderer,
     )
     print(f"wrote {args.output_dir / 'paper_figure_page_manifest.json'}")
