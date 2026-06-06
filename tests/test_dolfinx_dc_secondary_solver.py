@@ -50,3 +50,35 @@ def test_dc_secondary_zero_contrast_returns_near_zero_field():
 
     assert result["contrast_is_zero"] is True
     assert np.linalg.norm(result["Es0"].x.array) < 1.0e-10
+
+
+def test_dc_secondary_nonzero_contrast_returns_finite_nonzero_field():
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    config = sp.PipelineConfig(ksp_type="cg", rtol=1.0e-10, atol=1.0e-12, max_it=400)
+    spaces = sp.build_function_spaces(msh, config)
+    sigma = fem.Function(spaces["Q"], name="sigma")
+    sigma.x.array[:] = np.linspace(0.01, 0.02, sigma.x.array.size)
+    sigma.x.scatter_forward()
+    materials = {"sigma": sigma, "sigma_initial": sigma}
+    Ep0 = fem.Function(spaces["V"], name="Ep0")
+    Ep0.interpolate(lambda x: np.vstack((np.ones(x.shape[1]), np.zeros(x.shape[1]), np.zeros(x.shape[1]))))
+    Ep0.x.scatter_forward()
+
+    result = sp._solve_dc_secondary_field(
+        msh,
+        spaces,
+        materials,
+        Ep0,
+        config,
+        sigma_background=0.01,
+    )
+
+    values = np.asarray(result["Es0"].x.array, dtype=float)
+    assert result["contrast_is_zero"] is False
+    assert np.all(np.isfinite(values))
+    assert np.linalg.norm(values) > 0.0
+    assert result["ksp_reason"] > 0

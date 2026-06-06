@@ -9,7 +9,8 @@ This report covers the implementation rounds currently committed or staged from 
 - P2: add no-IP three-component validation artifacts and diagnostics.
 - P3 partial: add a Debye/Prony material conductivity API and pure-Python memory tests.
 - P4 partial: add primary-field provider interfaces with zero/cached providers and runner-backed empymod sampling.
-- P5 partial: add a DC secondary initialization core with zero-contrast tests.
+- P5 partial: add a DC secondary initialization core with zero-contrast and
+  nonzero-contrast smoke tests.
 - P6 partial: add no-IP/IP primary-secondary TDEM step kernels with zero-contrast tests.
 - P7 partial: add no-IP/IP three-component validation smoke artifact writer.
 - P8 partial: add complex-terrain leakage-channel material-map smoke utilities.
@@ -110,8 +111,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     primary response.
   - Added `_solve_dc_secondary_field`, a DOLFINx scalar secondary-potential
     initializer for the primary-secondary DC problem. The zero-contrast path
-    is WSL-tested to return near-zero `Es0`; nonzero-contrast assembly is
-    implemented but still needs larger model validation.
+    is WSL-tested to return near-zero `Es0`; a nonzero-contrast unit-cube
+    smoke test verifies finite nonzero `Es0` and a converged KSP solve. Full
+    corrected-model primary-secondary integration remains pending.
   - Added `_make_dolfinx_secondary_step_solver`, a DOLFINx-backed
     primary-secondary TDEM step solver hook that forms
     `K + M_sigma/dt (+ Robin)` and solves with the existing AMS setup. The
@@ -1963,7 +1965,7 @@ source-term substitution inside the existing total-field equation.
   regenerated with `--postprocess-partial`.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
 - P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a uniform-halfspace analytic grounded-wire DC backend, a provider-to-FEM-point interpolation adapter, a DOLFINx-style tabulated callable assembler, and a shared DOLFINx Nedelec callable interpolation helper; wiring primary provider outputs into the full primary-secondary solver remains pending.
-- P5 currently provides a pure initialization core with an injected secondary field solver, a provider-driven entry point that consumes `E_p,dc` samples, and a DOLFINx scalar secondary-potential solver with a WSL zero-contrast smoke test. Nonzero-contrast DC secondary validation and integration into a full DOLFINx primary-secondary run remain pending.
+- P5 currently provides a pure initialization core with an injected secondary field solver, a provider-driven entry point that consumes `E_p,dc` samples, and a DOLFINx scalar secondary-potential solver with WSL zero-contrast and nonzero-contrast unit-cube smoke tests. Integration into a full corrected-model DOLFINx primary-secondary run remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, a pure primary-secondary forward orchestration core, a reusable secondary receiver projection adapter, a DOLFINx-backed secondary step solver with WSL zero-RHS and nonzero constant-RHS PETSc smoke tests, and a DOLFINx primary-secondary zero-contrast forward smoke. Non-constant RHS sample coordinates and complete nonzero-contrast DOLFINx primary-secondary forward wiring remain pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
@@ -2020,7 +2022,8 @@ source-term substitution inside the existing total-field equation.
    magnetic-rate recovery error.
 5. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
 6. Continue P4/P5 by wiring the `PrimaryFEMInterpolator`/`TabulatedVectorField` adapter through `_interpolate_vector_callable_to_nedelec_function` for primary-secondary DC initialization and time stepping.
-7. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
+7. Continue P5 by wiring the tested DOLFINx scalar DC secondary solve into a
+   full corrected-model primary-secondary run.
 8. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
 9. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
 10. Continue P8 by generating a gmsh terrain/leakage mesh and running a small DOLFINx forward example.
