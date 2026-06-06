@@ -139,7 +139,11 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert report["reference_type"] == "empymod"
     assert report["magnetic_quantity"] == "dBzdt"
     assert report["pass_all_components"] is True
+    assert report["final_acceptance_passed"] is False
+    assert "validation_scope_not_corrected_model_full" in report["acceptance_status"]["blocking_reasons"]
+    assert "time_window_not_covered" in report["acceptance_status"]["blocking_reasons"]
     assert summary["pass_all_components"] is True
+    assert summary["final_acceptance_passed"] is False
     diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
     assert diagnostics["source_consistency"]["source_endpoint_balance_residual"] == 1.0e-9
     assert diagnostics["source_projection"]["before_residual"] == 2.0
@@ -148,6 +152,8 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert diagnostics["source_projection"]["correction_l1_over_raw"] == pytest.approx(0.125)
     assert diagnostics["source_projection"]["divergence_residual_reduction"] == pytest.approx(0.9999999995)
     assert diagnostics["receiver_sampling"]["enabled"] is True
+    assert diagnostics["acceptance_status"]["final_acceptance_passed"] is False
+    assert diagnostics["validation_failure"]["final_acceptance_passed"] is False
     assert diagnostics["receiver_sampling"]["comparisons"]["disk_average"]["dBzdt"]["max_relative_difference"] == 0.8
     assert diagnostics["receiver_vs_reference"]["enabled"] is True
     assert diagnostics["receiver_vs_reference"]["comparisons"]["disk_average"]["dBzdt"]["improves_over_baseline"] is True
@@ -175,6 +181,32 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert diagnostic_rows[1]["candidate_count_max"] == "3"
     assert diagnostic_rows[1]["multi_candidate_sample_count"] == "2"
     assert float(diagnostic_rows[1]["selected_center_z_mean"]) == pytest.approx(-0.05)
+
+
+def test_dolfinx_validation_artifacts_can_mark_corrected_model_full_acceptance(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    ref = np.array([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0], [0.5, 0.0, 0.25]])
+    pred = ref * np.array([[1.01, 1.0, 0.99]])
+
+    summary = sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        validation_scope="corrected_model_full",
+    )
+
+    report = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert report["final_acceptance_passed"] is True
+    assert report["acceptance_status"]["blocking_reasons"] == []
+    assert diagnostics["acceptance_status"]["final_acceptance_passed"] is True
+    assert summary["final_acceptance_passed"] is True
 
 
 def test_validation_artifacts_report_physical_pass_for_weak_horizontal_component(tmp_path):

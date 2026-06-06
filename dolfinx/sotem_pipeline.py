@@ -5676,6 +5676,7 @@ def _write_validation_plots(workdir: Path, times, pred_data, ref_data, rows, com
 def _automatic_failure_diagnostics(summary: dict[str, Any], *, magnetic_receiver_mode: str) -> dict[str, Any]:
     strict_failed = not bool(summary.get("pass_all_components", False))
     failed = not bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
+    acceptance_status = dict(summary.get("acceptance_status", {}))
     checks = [
         "time_step_error",
         "mesh_error",
@@ -5688,6 +5689,8 @@ def _automatic_failure_diagnostics(summary: dict[str, Any], *, magnetic_receiver
     diagnostics = {
         "failed": failed,
         "strict_failed": strict_failed,
+        "final_acceptance_passed": bool(summary.get("final_acceptance_passed", False)),
+        "acceptance_blocking_reasons": list(acceptance_status.get("blocking_reasons", [])),
         "failed_components": summary.get("failed_components", []),
         "physical_failed_components": summary.get("physical_failed_components", summary.get("failed_components", [])),
         "failed_times": summary.get("failed_times", []),
@@ -6159,6 +6162,7 @@ def write_validation_artifacts(
     source_info=None,
     receiver_diagnostic_rows=None,
     solver_log=None,
+    validation_scope: str = "smoke",
 ) -> dict[str, Any]:
     """Write P2 validation CSV/JSON/plot artifacts for a three-component run."""
 
@@ -6171,8 +6175,24 @@ def write_validation_artifacts(
             "case_type": str(case_type),
             "reference_type": str(reference_type),
             "relative_error_threshold": threshold,
+            "validation_scope": str(validation_scope),
         }
     )
+    from atem3d.validation_3comp import validation_acceptance_status
+
+    acceptance_status = validation_acceptance_status(
+        times,
+        components,
+        summary,
+        case_type=str(case_type),
+        reference_type=str(reference_type),
+        threshold=threshold,
+        validation_scope=str(validation_scope),
+    )
+    summary["acceptance_status"] = acceptance_status
+    summary["full_window_covered"] = bool(acceptance_status["full_window_covered"])
+    summary["required_components_present"] = bool(acceptance_status["required_components_present"])
+    summary["final_acceptance_passed"] = bool(acceptance_status["final_acceptance_passed"])
     _write_component_csv(workdir / "predictions.csv", times, pred_data, components)
     _write_component_csv(workdir / "reference_empymod_or_1d.csv", times, ref_data, components)
     _write_errors_csv(workdir / "errors.csv", rows)
@@ -6191,6 +6211,7 @@ def write_validation_artifacts(
         summary,
         magnetic_receiver_mode=str(config.magnetic_receiver_mode),
     )
+    diagnostics["acceptance_status"] = acceptance_status
     diagnostics["validation_failure"] = dict(diagnostics)
     source_projection = _source_projection_diagnostics_from_info(source_info)
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)

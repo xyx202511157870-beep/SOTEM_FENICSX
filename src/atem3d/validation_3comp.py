@@ -14,6 +14,7 @@ from atem3d.metrics import robust_component_errors
 
 REQUIRED_TIME_MIN = 1.0e-5
 REQUIRED_TIME_MAX = 1.0
+FINAL_ACCEPTANCE_SCOPE = "corrected_model_full"
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class ThreeComponentValidationInput:
     diagnostics: dict = field(default_factory=dict)
     resolved_config: dict = field(default_factory=dict)
     material: PronyConductivity | None = None
+    validation_scope: str = "smoke"
 
 
 def write_three_component_validation_artifacts(case: ThreeComponentValidationInput) -> dict:
@@ -48,6 +50,19 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
         threshold=case.threshold,
     )
     summary = _augment_summary(case, summary)
+    acceptance_status = validation_acceptance_status(
+        times,
+        component_names,
+        summary,
+        case_type=case.case_type,
+        reference_type=case.reference_type,
+        threshold=case.threshold,
+        validation_scope=case.validation_scope,
+    )
+    summary["acceptance_status"] = acceptance_status
+    summary["full_window_covered"] = bool(acceptance_status["full_window_covered"])
+    summary["required_components_present"] = bool(acceptance_status["required_components_present"])
+    summary["final_acceptance_passed"] = bool(acceptance_status["final_acceptance_passed"])
 
     _write_response_csv(output_dir / "predictions.csv", times, predictions, component_names)
     _write_response_csv(output_dir / "reference_empymod_or_1d.csv", times, reference, component_names)
@@ -60,6 +75,7 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
     diagnostics.setdefault("case_type", case.case_type)
     diagnostics.setdefault("reference_type", case.reference_type)
     diagnostics.setdefault("components", component_names)
+    diagnostics["acceptance_status"] = acceptance_status
     diagnostics["validation_failure"] = _automatic_failure_diagnostics(summary)
     (output_dir / "diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2, sort_keys=True),
@@ -94,6 +110,7 @@ def _resolved_config(case: ThreeComponentValidationInput, component_names: list[
             "magnetic_quantity": case.magnetic_quantity,
             "component_names": component_names,
             "relative_error_threshold": float(case.threshold),
+            "validation_scope": case.validation_scope,
         }
     )
     if case.material is not None:
@@ -134,11 +151,89 @@ def _validated_arrays(
     return times, predictions, reference, component_names
 
 
+def validation_acceptance_status(
+    times,
+    component_names,
+    summary: dict,
+    *,
+    case_type: str,
+    reference_type: str,
+    threshold: float,
+    validation_scope: str = "smoke",
+    required_time_min: float = REQUIRED_TIME_MIN,
+    required_time_max: float = REQUIRED_TIME_MAX,
+) -> dict:
+    """Return the final-acceptance gate status for a validation table."""
+
+    times = np.asarray(times, dtype=float)
+    component_names = [str(name) for name in component_names]
+    time_min = float(np.min(times)) if times.size else float("nan")
+    time_max = float(np.max(times)) if times.size else float("nan")
+    full_window_covered = bool(
+        times.size > 0 and time_min <= float(required_time_min) and time_max >= float(required_time_max)
+    )
+    electric_present = {"Ex", "Ey"}.issubset(component_names)
+    magnetic_present = any(name in component_names for name in ("Hz", "dBzdt"))
+    required_components_present = bool(electric_present and magnetic_present)
+    scope_is_final = str(validation_scope) == FINAL_ACCEPTANCE_SCOPE
+    case_type_ok = case_type in {"noip", "ip"}
+    reference_type_ok = reference_type in {"empymod", "1d"}
+    threshold_ok = float(threshold) <= 0.05
+    physical_gate_passed = bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
+    strict_gate_passed = bool(summary.get("pass_all_components", False))
+
+    blocking_reasons: list[str] = []
+    if not scope_is_final:
+        blocking_reasons.append("validation_scope_not_corrected_model_full")
+    if not full_window_covered:
+        blocking_reasons.append("time_window_not_covered")
+    if not required_components_present:
+        blocking_reasons.append("required_components_missing")
+    if not case_type_ok:
+        blocking_reasons.append("case_type_invalid")
+    if not reference_type_ok:
+        blocking_reasons.append("reference_type_invalid")
+    if not threshold_ok:
+        blocking_reasons.append("threshold_above_5pct")
+    if not physical_gate_passed:
+        blocking_reasons.append("physical_error_gate_failed")
+
+    final_acceptance_passed = bool(
+        scope_is_final
+        and full_window_covered
+        and required_components_present
+        and case_type_ok
+        and reference_type_ok
+        and threshold_ok
+        and physical_gate_passed
+    )
+    return {
+        "validation_scope": str(validation_scope),
+        "final_acceptance_scope": FINAL_ACCEPTANCE_SCOPE,
+        "time_min": time_min,
+        "time_max": time_max,
+        "required_time_min": float(required_time_min),
+        "required_time_max": float(required_time_max),
+        "full_window_covered": full_window_covered,
+        "electric_components_present": bool(electric_present),
+        "magnetic_component_present": bool(magnetic_present),
+        "required_components_present": required_components_present,
+        "case_type_ok": bool(case_type_ok),
+        "reference_type_ok": bool(reference_type_ok),
+        "threshold_requirement_met": bool(threshold_ok),
+        "strict_error_gate_passed": strict_gate_passed,
+        "physical_error_gate_passed": physical_gate_passed,
+        "final_acceptance_passed": final_acceptance_passed,
+        "blocking_reasons": blocking_reasons,
+    }
+
+
 def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict:
     values = dict(summary)
     values["case_type"] = case.case_type
     values["reference_type"] = case.reference_type
     values["magnetic_quantity"] = case.magnetic_quantity
+    values["validation_scope"] = case.validation_scope
     if case.material is not None:
         terms = list(case.material.terms)
         sum_delta = float(sum(term.delta_sigma for term in terms))
@@ -159,9 +254,12 @@ def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict
 
 def _automatic_failure_diagnostics(summary: dict) -> dict:
     failed = not bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
+    acceptance_status = dict(summary.get("acceptance_status", {}))
     return {
         "failed": failed,
         "strict_failed": not bool(summary.get("pass_all_components", False)),
+        "final_acceptance_passed": bool(summary.get("final_acceptance_passed", False)),
+        "acceptance_blocking_reasons": list(acceptance_status.get("blocking_reasons", [])),
         "failed_components": list(summary.get("failed_components", [])),
         "physical_failed_components": list(
             summary.get("physical_failed_components", summary.get("failed_components", []))

@@ -352,6 +352,7 @@ def _validation_case_from_config(config: dict, *, case_type: str) -> ThreeCompon
         diagnostics=dict(validation.get("diagnostics", {})),
         resolved_config=config,
         material=material,
+        validation_scope=str(validation.get("validation_scope", config.get("validation_scope", "smoke"))),
     )
 
 

@@ -19,6 +19,14 @@ This report covers the implementation rounds currently committed or staged from 
 - P7 CLI: add `validate-noip-3comp` and `validate-ip-3comp` artifact commands from CSV inputs.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
+Validation artifacts now write an explicit `acceptance_status` object and a
+top-level `final_acceptance_passed` flag. A run can only set
+`final_acceptance_passed=true` when it is explicitly marked
+`validation_scope=corrected_model_full`, covers `1e-5 s` to `1 s`, includes
+`Ex`, `Ey`, and `Hz` or `dBzdt`, uses an allowed empymod/1D reference, keeps
+the threshold at or below `5%`, and passes the physical error gate. Smoke or
+partial-window runs remain useful diagnostics but are blocked from claiming
+final acceptance.
 
 ## Implemented Modules
 
@@ -174,6 +182,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
       `max(|Eh_ref|)`.
     - `weak_components`, `weak_component_passed`, and
       `physical_failed_components` are written to `error_summary.json`.
+    - `acceptance_status` and `final_acceptance_passed` now guard final
+      task-book acceptance separately from smoke/partial diagnostic runs.
+      `diagnostics.json` also records acceptance blocking reasons.
   - Biot-Savart receiver `Hz` and optional `biot_rate` now use the same
     point/average receiver sampling points as `Ex/Ey` and curl `dBzdt`.
 

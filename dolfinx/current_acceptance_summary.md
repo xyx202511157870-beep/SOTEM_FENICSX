@@ -1,4 +1,10 @@
-# DOLFINx SOTEM current acceptance summary
+# DOLFINx SOTEM legacy short-window acceptance summary
+
+This file records an older 100 m source / 50 m offset short-window diagnostic.
+It is not the current task-book final acceptance for the corrected model
+`(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver `(0, -300, -0.1)`,
+`1e-5 s <= t_obs <= 1 s`. Current validation artifacts should be judged by
+`error_summary.json` field `final_acceptance_passed`, not by this legacy note.
 
 Date: 2026-06-04
 

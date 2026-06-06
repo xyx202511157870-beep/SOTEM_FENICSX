@@ -21,6 +21,7 @@ def test_cli_validate_noip_3comp_writes_artifacts_from_csv(tmp_path):
                     "component_names": ["Ex", "Ey", "dBzdt"],
                     "reference_type": "empymod",
                     "magnetic_quantity": "dBzdt",
+                    "validation_scope": "corrected_model_full",
                 }
             }
         ),
@@ -35,6 +36,9 @@ def test_cli_validate_noip_3comp_writes_artifacts_from_csv(tmp_path):
     assert (output_dir / "errors.csv").is_file()
     assert (output_dir / "error_summary.json").is_file()
     assert (output_dir / "run_config_resolved.yaml").is_file()
+    payload = yaml.safe_load((output_dir / "error_summary.json").read_text(encoding="utf-8"))
+    assert payload["validation_scope"] == "corrected_model_full"
+    assert payload["final_acceptance_passed"] is True
 
 
 def test_cli_validate_ip_3comp_reads_prony_material_metadata(tmp_path):
