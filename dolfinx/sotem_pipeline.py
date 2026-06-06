@@ -4748,6 +4748,7 @@ def _make_dolfinx_primary_secondary_forward_operator(
         secondary_state_stepper=adapters["secondary_state_stepper"],
         turnoff_time=turnoff_time,
         turnoff_steps=turnoff_steps,
+        diagnostics=adapters["diagnostics"],
     )
     return {
         "operator": operator,

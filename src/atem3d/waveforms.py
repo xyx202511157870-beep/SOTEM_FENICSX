@@ -152,6 +152,41 @@ def build_internal_time_grid_from_turnoff(
     return np.unique(np.r_[ramp, output_times])
 
 
+def summarize_internal_time_grid(
+    observation_times,
+    *,
+    turnoff_time: float,
+    turnoff_steps: int,
+) -> dict[str, float | int | bool]:
+    """Return a compact audit summary for the task-book internal time grid."""
+
+    observation_times = np.asarray(observation_times, dtype=float)
+    grid = build_internal_time_grid_from_turnoff(
+        observation_times,
+        turnoff_time=turnoff_time,
+        turnoff_steps=turnoff_steps,
+    )
+    turnoff_time = float(turnoff_time)
+    output_internal_times = turnoff_time + observation_times
+    turnoff_grid = grid[grid <= turnoff_time]
+    return {
+        "turnoff_grid_points": int(turnoff_grid.size),
+        "observation_output_points": int(output_internal_times.size),
+        "total_internal_points": int(grid.size),
+        "first_internal_time_s": float(grid[0]),
+        "last_internal_time_s": float(grid[-1]),
+        "last_output_internal_time_s": float(output_internal_times[-1]),
+        "contains_turnoff_start": bool(np.any(np.isclose(grid, 0.0, rtol=0.0, atol=1.0e-15))),
+        "contains_turnoff_end": bool(np.any(np.isclose(grid, turnoff_time, rtol=0.0, atol=1.0e-15))),
+        "contains_all_observation_outputs": bool(
+            all(
+                np.any(np.isclose(grid, output_time, rtol=0.0, atol=1.0e-15))
+                for output_time in output_internal_times
+            )
+        ),
+    }
+
+
 def _validate_turnoff(t_off: float, min_steps: int) -> None:
     if not np.isfinite(float(t_off)) or float(t_off) < 0.0:
         raise ValueError("t_off must be finite and nonnegative")

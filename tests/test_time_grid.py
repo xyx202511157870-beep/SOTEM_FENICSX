@@ -5,6 +5,7 @@ from atem3d.waveforms import (
     LinearRampOffWaveform,
     build_internal_time_grid,
     build_internal_time_grid_from_turnoff,
+    summarize_internal_time_grid,
 )
 
 
@@ -47,9 +48,34 @@ def test_time_grid_from_turnoff_matches_waveform_grid():
     np.testing.assert_allclose(from_turnoff[-3:], 1.0e-5 + observation_times)
 
 
+def test_summarize_internal_time_grid_reports_task_book_coverage():
+    observation_times = np.array([1.0e-5, 1.0e-4, 1.0])
+
+    summary = summarize_internal_time_grid(
+        observation_times,
+        turnoff_time=1.0e-5,
+        turnoff_steps=10,
+    )
+
+    assert summary["turnoff_grid_points"] == 11
+    assert summary["observation_output_points"] == 3
+    assert summary["total_internal_points"] == 14
+    assert summary["contains_turnoff_start"] is True
+    assert summary["contains_turnoff_end"] is True
+    assert summary["contains_all_observation_outputs"] is True
+    assert summary["last_output_internal_time_s"] == pytest.approx(1.00001)
+    assert summary["last_internal_time_s"] == pytest.approx(1.00001)
+
+
 def test_time_grid_from_turnoff_is_exported_at_package_top_level():
     import atem3d
 
+    assert "summarize_internal_time_grid" in atem3d.__all__
+    assert atem3d.summarize_internal_time_grid(
+        [1.0e-5],
+        turnoff_time=1.0e-5,
+        turnoff_steps=10,
+    )["contains_all_observation_outputs"] is True
     grid = atem3d.build_internal_time_grid_from_turnoff(
         [1.0e-5],
         turnoff_time=1.0e-5,

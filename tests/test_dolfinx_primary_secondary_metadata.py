@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from atem3d.materials.prony import DebyeTerm, PronyConductivity
@@ -63,3 +65,49 @@ def test_record_primary_secondary_step_equation_writes_ip_metadata():
     assert metadata["alpha"] == [0.5]
     assert metadata["beta"] == [0.5]
     assert metadata["adapter_backend"] == "dolfinx_primary_secondary"
+
+
+def test_dolfinx_primary_secondary_bridge_passes_adapter_diagnostics(monkeypatch):
+    sp = _load_pipeline_module()
+    captured = {}
+    diagnostics = {}
+
+    def fake_interpolation(_msh, _spaces):
+        return {"points": np.array([[0.0, 0.0, 0.0]])}
+
+    def fake_adapters(_msh, _spaces, _materials, _operators, _config, _fem_points, **_kwargs):
+        return {
+            "secondary_state_initializer": object(),
+            "secondary_step_solver": object(),
+            "secondary_receiver_projector": object(),
+            "secondary_state_stepper": object(),
+            "diagnostics": diagnostics,
+        }
+
+    class FakePrimarySecondaryForwardOperator:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import atem3d.solvers as solvers
+
+    monkeypatch.setattr(sp, "_nedelec_interpolation_points", fake_interpolation)
+    monkeypatch.setattr(sp, "_make_dolfinx_primary_secondary_forward_adapters", fake_adapters)
+    monkeypatch.setattr(solvers, "PrimarySecondaryForwardOperator", FakePrimarySecondaryForwardOperator)
+
+    result = sp._make_dolfinx_primary_secondary_forward_operator(
+        msh=object(),
+        spaces={},
+        materials={},
+        operators={},
+        config=SimpleNamespace(),
+        primary=object(),
+        receiver_locations=np.array([[0.0, 0.0, 0.0]]),
+        components=("Ex", "Ey", "dBzdt"),
+        material=PronyConductivity.no_ip(0.01),
+        sigma_background=0.01,
+        turnoff_time=1.0e-5,
+        turnoff_steps=10,
+    )
+
+    assert captured["diagnostics"] is diagnostics
+    assert result["diagnostics"] is diagnostics

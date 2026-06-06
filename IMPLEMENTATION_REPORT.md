@@ -3487,7 +3487,13 @@ source-term substitution inside the existing total-field equation.
   drops only the initial `t=0` sample for its stepping loop, so the solver path
   and waveform diagnostics use the same grid semantics. The helper is exported
   at package top level as `atem3d.build_internal_time_grid_from_turnoff(...)`.
-  Corrected-model
+  The companion `atem3d.summarize_internal_time_grid(...)` helper records the
+  compact audit fields used by both corrected-model diagnostics and actual
+  forward runs. `PrimarySecondaryForwardOperator.forward(...)` now writes
+  `primary_secondary_internal_time_grid` into an injected diagnostics mapping,
+  and the DOLFINx primary-secondary bridge passes its adapter diagnostics into
+  the pure forward operator so real DOLFINx runs can record the internal grid
+  they actually stepped through. Corrected-model
   diagnostics now include an `internal_time_grid` summary with turnoff-grid
   point count, output point count, total internal point count, first/last
   internal time, last output internal time, and explicit flags confirming that
@@ -3496,7 +3502,8 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_time_grid.py tests/test_primary_secondary_forward.py`
   and
   `python -m pytest -q tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_full_artifact_set tests/test_corrected_model_runner.py::test_run_corrected_model_validation_writes_ip_secondary_equation_metadata tests/test_corrected_model_runner.py::test_corrected_model_spec_cli_allows_observation_time_count_override`,
-  both with exit code 0.
+  `python -m pytest -q tests/test_time_grid.py tests/test_primary_secondary_forward.py tests/test_corrected_model_runner.py tests/test_dolfinx_primary_secondary_metadata.py`,
+  and `python -m pytest -q`, all with exit code 0.
 
 ## Next Steps
 

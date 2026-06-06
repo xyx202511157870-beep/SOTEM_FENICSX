@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, MutableMapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -10,7 +10,7 @@ import numpy as np
 from atem3d.materials.prony import PronyConductivity
 from atem3d.primary.base import PrimaryFieldProvider, as_points
 from atem3d.primary.interpolation import PrimaryFEMInterpolator
-from atem3d.waveforms import build_internal_time_grid_from_turnoff
+from atem3d.waveforms import build_internal_time_grid_from_turnoff, summarize_internal_time_grid
 
 from .dc_secondary import DCSecondaryInitialization, initialize_dc_secondary_from_primary
 from .tdem_secondary import (
@@ -61,6 +61,7 @@ class PrimarySecondaryForwardOperator:
     contrast_atol: float = 0.0
     turnoff_time: float = 0.0
     turnoff_steps: int = 1
+    diagnostics: MutableMapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fem_points", as_points(self.fem_points, "fem_points"))
@@ -101,6 +102,7 @@ class PrimarySecondaryForwardOperator:
             turnoff_time=float(self.turnoff_time),
             turnoff_steps=int(self.turnoff_steps),
         )
+        self._record_internal_time_grid_diagnostics(observation_times, internal_times)
         primary_fem = PrimaryFEMInterpolator(provider=self.primary, points=self.fem_points)
         if self.secondary_state_initializer is None:
             initialization = initialize_dc_secondary_from_primary(
@@ -173,6 +175,26 @@ class PrimarySecondaryForwardOperator:
         if len(rows) != observation_times.size:
             raise RuntimeError("internal time grid did not visit every observation output time")
         return np.vstack(rows)
+
+    def _record_internal_time_grid_diagnostics(
+        self,
+        observation_times: np.ndarray,
+        stepped_internal_times: np.ndarray,
+    ) -> None:
+        if self.diagnostics is None:
+            return
+        summary = dict(
+            summarize_internal_time_grid(
+                observation_times,
+                turnoff_time=float(self.turnoff_time),
+                turnoff_steps=int(self.turnoff_steps),
+            )
+        )
+        summary["stepped_internal_points"] = int(stepped_internal_times.size)
+        if stepped_internal_times.size:
+            summary["first_stepped_internal_time_s"] = float(stepped_internal_times[0])
+            summary["last_stepped_internal_time_s"] = float(stepped_internal_times[-1])
+        self.diagnostics["primary_secondary_internal_time_grid"] = summary
 
     def _receiver_row(
         self,

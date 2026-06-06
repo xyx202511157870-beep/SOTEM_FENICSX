@@ -33,6 +33,7 @@ from .waveforms import (
     Waveform,
     build_internal_time_grid,
     build_internal_time_grid_from_turnoff,
+    summarize_internal_time_grid,
 )
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "relative_linf",
     "robust_component_errors",
     "robust_relative_error",
+    "summarize_internal_time_grid",
     "summarize_errors",
 ]
 
