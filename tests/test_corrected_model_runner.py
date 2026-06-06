@@ -21,6 +21,7 @@ from atem3d.corrected_model_runner import run_corrected_model_convergence_valida
 from atem3d.corrected_model_runner import _default_forward_runner
 from atem3d.corrected_model_runner import _default_reference_runner
 from atem3d.corrected_model_runner import _copy_dolfinx_forward_diagnostics_to_case_spec
+from atem3d.corrected_model_runner import _terrain_mesh_runtime_config
 from atem3d.corrected_model_runner import dolfinx_backend_status
 
 
@@ -232,6 +233,27 @@ def test_run_corrected_model_convergence_validation_records_nonzero_secondary_ef
     assert secondary["max_abs_reference_minus_primary_by_component"]["Ex"] == pytest.approx(0.20)
     assert secondary["max_abs_prediction_minus_primary_by_component"]["Ey"] == pytest.approx(0.0)
     assert secondary["max_abs_prediction_minus_reference_by_component"]["dBzdt"] == pytest.approx(0.02)
+
+
+def test_terrain_mesh_runtime_config_resolves_small_gmsh_mesh_path(tmp_path):
+    cfg = _terrain_mesh_runtime_config(
+        {
+            "terrain_mesh": {
+                "mode": "small_gmsh_terrain_leakage",
+                "mesh_size": 0.65,
+                "msh_name": "terrain_leakage.msh",
+            }
+        },
+        output_dir=tmp_path / "run",
+    )
+
+    assert cfg == {
+        "mode": "small_gmsh_terrain_leakage",
+        "mesh_size": 0.65,
+        "msh_name": "terrain_leakage.msh",
+        "workdir": str(tmp_path / "run"),
+        "mesh_path": str(tmp_path / "run" / "terrain_leakage.msh"),
+    }
 
 
 def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):

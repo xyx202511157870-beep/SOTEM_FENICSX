@@ -3671,6 +3671,22 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_convergence_sweep_report.py`,
   `python -m pytest -q tests/test_corrected_model_runner.py tests/test_convergence_sweep_report.py tests/test_dolfinx_complex_terrain_leakage_forward.py`,
   and `python -m pytest -q`, all with exit code 0.
+- Corrected-runner Gmsh terrain mesh preflight checkpoint (2026-06-06): the
+  corrected DOLFINx forward runner now accepts
+  `dolfinx_forward.terrain_mesh.mode = small_gmsh_terrain_leakage`. In that
+  mode it generates a real Gmsh terrain volume, loads it through the DOLFINx
+  Gmsh path, preserves facet tags, and records `mesh_runtime.terrain_mesh`
+  diagnostics including mesh path and terrain elevation range. The leakage
+  marker preflight was extended to prove the loaded terrain mesh can mark a
+  leakage-channel cell set before any transient solve. Verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py tests/test_dolfinx_complex_terrain_leakage_forward.py`,
+  a WSL `conda activate fenicsx` check
+  `python -u -m pytest -vv tests/test_dolfinx_complex_terrain_leakage_forward.py::test_corrected_runner_gmsh_terrain_mesh_preflight_marks_leakage_cells`,
+  and `python -m pytest -q`, all with exit code 0; WSL was shut down afterward
+  and `Ubuntu Stopped` was confirmed. A full transient forward smoke on the
+  same small terrain mesh exceeded the 300 s command limit, so the committed
+  WSL test intentionally validates mesh loading, facet tags, and leakage
+  marking without starting the expensive transient solve.
 
 ## Next Steps
 

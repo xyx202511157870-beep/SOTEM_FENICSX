@@ -419,8 +419,13 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         dtype=float,
     )
     cells = [int(value) for value in forward_cfg.get("cells", [1, 1, 1])]
-    msh = mesh.create_box(MPI.COMM_WORLD, [domain_min, domain_max], cells)
+    terrain_runtime = _terrain_mesh_runtime_config(
+        forward_cfg,
+        output_dir=Path(case_spec.get("output_dir", ".")),
+    )
     config = sp.PipelineConfig(
+        workdir=Path(terrain_runtime["workdir"]),
+        msh_name=str(terrain_runtime["msh_name"]),
         receiver=tuple(float(value) for value in case_spec["receiver"]),
         receiver_evaluation_mode=str(forward_cfg.get("receiver_evaluation_mode", "first_cell")),
         outer_boundary_mode=str(forward_cfg.get("outer_boundary_mode", "natural")),
@@ -429,6 +434,17 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         atol=float(forward_cfg.get("atol", 1.0e-10)),
         max_it=int(forward_cfg.get("max_it", 200)),
     )
+    msh, facet_tags, mesh_runtime = _build_dolfinx_forward_mesh(
+        sp,
+        mesh,
+        MPI,
+        config,
+        domain_min=domain_min,
+        domain_max=domain_max,
+        cells=cells,
+        terrain_runtime=terrain_runtime,
+    )
+    case_spec.setdefault("diagnostics", {})["mesh_runtime"] = mesh_runtime
     spaces = sp.build_function_spaces(msh, config)
     material = _forward_material_from_case_spec(case_spec)
     sigma_background = float(case_spec.get("sigma_background", _background_sigma_from_case_spec(case_spec)))
@@ -457,6 +473,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
             receiver_locations=receiver_locations,
             components=components,
             sigma_background=sigma_background,
+            facet_tags=facet_tags,
         )
 
     if _is_zero_secondary_material(secondary_material, sigma_background):
@@ -497,7 +514,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         "sigma_infinity": sigma_infinity,
         "mu_inv": mu_inv,
     }
-    operators = sp.assemble_operators(msh, spaces, materials, facet_tags=None, config=config)
+    operators = sp.assemble_operators(msh, spaces, materials, facet_tags=facet_tags, config=config)
     built = sp._make_dolfinx_primary_secondary_forward_operator(
         msh,
         spaces,
@@ -529,6 +546,7 @@ def _run_dolfinx_leakage_channel_forward(
     receiver_locations: np.ndarray,
     components: tuple[str, ...],
     sigma_background: float,
+    facet_tags,
 ) -> np.ndarray:
     from atem3d.materials.material_map import (
         CellMaterialMap,
@@ -573,7 +591,7 @@ def _run_dolfinx_leakage_channel_forward(
         msh,
         spaces,
         built_materials["materials"],
-        facet_tags=None,
+        facet_tags=facet_tags,
         config=config,
         debye=built_materials["debye"],
     )
@@ -595,6 +613,72 @@ def _run_dolfinx_leakage_channel_forward(
     values = built_operator["operator"].forward(times)
     _copy_dolfinx_forward_diagnostics_to_case_spec(case_spec, built_operator["diagnostics"])
     return values
+
+
+def _terrain_mesh_runtime_config(forward_cfg: dict, *, output_dir: str | Path) -> dict:
+    terrain_cfg = dict(dict(forward_cfg).get("terrain_mesh", {}))
+    output = Path(output_dir)
+    mode = str(terrain_cfg.get("mode", "box_create_box"))
+    if mode == "box_create_box":
+        return {
+            "mode": "box_create_box",
+            "mesh_size": 0.0,
+            "msh_name": "",
+            "workdir": str(output),
+            "mesh_path": "",
+        }
+    if mode != "small_gmsh_terrain_leakage":
+        raise ValueError("terrain_mesh mode must be 'box_create_box' or 'small_gmsh_terrain_leakage'")
+    mesh_size = float(terrain_cfg.get("mesh_size", 0.65))
+    if not np.isfinite(mesh_size) or mesh_size <= 0.0:
+        raise ValueError("terrain_mesh mesh_size must be finite and positive")
+    msh_name = str(terrain_cfg.get("msh_name", "terrain_leakage.msh"))
+    if not msh_name or Path(msh_name).is_absolute() or Path(msh_name).name != msh_name:
+        raise ValueError("terrain_mesh msh_name must be a simple relative file name")
+    return {
+        "mode": mode,
+        "mesh_size": mesh_size,
+        "msh_name": msh_name,
+        "workdir": str(output),
+        "mesh_path": str(output / msh_name),
+    }
+
+
+def _build_dolfinx_forward_mesh(
+    sp,
+    mesh_module,
+    MPI,
+    config,
+    *,
+    domain_min: np.ndarray,
+    domain_max: np.ndarray,
+    cells: list[int],
+    terrain_runtime: dict,
+):
+    mode = str(terrain_runtime.get("mode", "box_create_box"))
+    if mode == "small_gmsh_terrain_leakage":
+        terrain_info = sp._write_small_gmsh_terrain_leakage_mesh(
+            Path(str(terrain_runtime["mesh_path"])),
+            mesh_size=float(terrain_runtime["mesh_size"]),
+        )
+        msh, _cell_tags, facet_tags = sp.load_mesh(config)
+        return msh, facet_tags, {
+            "mode": "gmsh",
+            "terrain_mesh": {
+                **dict(terrain_runtime),
+                **dict(terrain_info),
+            },
+        }
+    msh = mesh_module.create_box(MPI.COMM_WORLD, [domain_min, domain_max], cells)
+    return msh, None, {
+        "mode": "create_box",
+        "terrain_mesh": None,
+        "box": {
+            "domain_min": [float(value) for value in domain_min],
+            "domain_max": [float(value) for value in domain_max],
+            "cells": [int(value) for value in cells],
+        },
+    }
 
 
 def _copy_dolfinx_forward_diagnostics_to_case_spec(

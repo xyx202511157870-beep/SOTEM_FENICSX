@@ -234,3 +234,60 @@ def test_corrected_leakage_convergence_runner_writes_dolfinx_refined_artifacts(t
     assert secondary["prediction_secondary_effect_nonzero"] is True
     assert secondary["reference_secondary_effect_nonzero"] is True
     assert secondary["secondary_effect_nonzero"] is True
+
+
+def test_corrected_runner_gmsh_terrain_mesh_preflight_marks_leakage_cells(tmp_path):
+    pytest.importorskip("gmsh")
+
+    from atem3d.corrected_model_runner import (
+        _build_dolfinx_forward_mesh,
+        _terrain_mesh_runtime_config,
+    )
+    from atem3d.materials.material_map import apply_leakage_channel_marker_with_diagnostics
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    forward_cfg = {
+        "terrain_mesh": {
+            "mode": "small_gmsh_terrain_leakage",
+            "mesh_size": 0.9,
+            "msh_name": "terrain_leakage.msh",
+        }
+    }
+    terrain_runtime = _terrain_mesh_runtime_config(forward_cfg, output_dir=tmp_path)
+    config = sp.PipelineConfig(
+        workdir=tmp_path,
+        msh_name="terrain_leakage.msh",
+        receiver=(0.25, 0.25, -0.25),
+        receiver_evaluation_mode="first_cell",
+        outer_boundary_mode="natural",
+    )
+
+    msh, facet_tags, mesh_runtime = _build_dolfinx_forward_mesh(
+        sp,
+        mesh,
+        MPI,
+        config,
+        domain_min=np.array([0.0, 0.0, -1.0]),
+        domain_max=np.array([1.0, 1.0, 0.2]),
+        cells=[1, 1, 1],
+        terrain_runtime=terrain_runtime,
+    )
+
+    centers = sp._cell_centers(msh)
+    marker_result = apply_leakage_channel_marker_with_diagnostics(
+        np.ones(centers.shape[0], dtype=int),
+        centers,
+        channel_points=np.array([[0.05, 0.5, -0.45], [0.95, 0.5, -0.45]]),
+        radius=0.35,
+        leakage_marker=7,
+        min_marked_cells=1,
+    )
+
+    assert facet_tags is not None
+    assert marker_result.diagnostics["leakage_cell_count"] > 0
+    terrain = mesh_runtime["terrain_mesh"]
+    assert terrain["mode"] == "small_gmsh_terrain_leakage"
+    assert terrain["terrain_elevation_max"] > terrain["terrain_elevation_min"]
+    assert Path(terrain["mesh_path"]).is_file()
