@@ -145,3 +145,63 @@ def build_corrected_model_case_specs(
             "material": ip_material,
         },
     }
+
+
+def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
+    """Return the published SOTEM paper target metadata for later reproduction.
+
+    The public abstract/search metadata identifies the paper and its broad SOTEM
+    setup. Full numerical reproduction still needs the paper's tabulated model,
+    receiver, and IP-anomaly parameters before this can be used as an accuracy
+    acceptance reference.
+    """
+
+    cfg = CorrectedModelValidationConfig()
+    cfg.validate_geometry()
+    return {
+        "published_reference": {
+            "title": "Analysis of 3D induced polarization effects of SOTEM",
+            "journal": "Journal of Applied Geophysics",
+            "volume": "226",
+            "article_number": "105613",
+            "article_id": "S092698512400329X",
+            "doi": "10.1016/j.jappgeo.2024.105613",
+            "url": "https://www.sciencedirect.com/science/article/pii/S092698512400329X",
+            "reproduction_status": "target_defined_full_text_parameters_pending",
+        },
+        "model": {
+            "source_start": [float(value) for value in cfg.source_start],
+            "source_end": [float(value) for value in cfg.source_end],
+            "receiver": [float(value) for value in cfg.receiver],
+            "source_current": float(cfg.source_current),
+            "source_length_m": float(cfg.source_length),
+            "parallel_offset_m": float(cfg.parallel_offset),
+            "ramp_off_time_s": float(cfg.ramp_off_time),
+            "observation_time_min_s": float(cfg.observation_time_min),
+            "observation_time_max_s": float(cfg.observation_time_max),
+            "components": list(cfg.components),
+            "magnetic_quantity": str(cfg.magnetic_quantity),
+            "air_conductivity_s_per_m": 1.0e-6,
+            "background_conductivity_s_per_m": float(cfg.sigma_background),
+            "calculation_domain_m": [4000.0, 4000.0, 1000.0],
+        },
+        "run_contract": {
+            "output_root": str(Path(output_root)),
+            "validation_scope": "published_paper_reproduction_target",
+            "reference_type": "published_response_curve",
+            "algorithm_under_test": "atem3d_primary_secondary",
+            "comparison_outputs": [
+                "paper_response_overlay.png",
+                "paper_relative_error_curves.png",
+                "runtime_diagnostics.json",
+            ],
+        },
+        "full_text_parameters_required": [
+            "terrain_surface_or_layer_geometry",
+            "ip_anomaly_geometry",
+            "ip_anomaly_prony_or_cole_cole_parameters",
+            "all_receiver_locations_and_components",
+            "paper_plot_time_channels",
+            "digitized_or_tabulated_published_response_values",
+        ],
+    }

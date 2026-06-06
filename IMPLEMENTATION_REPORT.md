@@ -63,12 +63,17 @@ final acceptance.
 - `src/atem3d/corrected_model.py`
   - `CorrectedModelValidationConfig`
   - `build_corrected_model_case_specs`
+  - `build_published_paper_model_target_spec`
   - Stores the corrected latest geometry:
     source `(-500, 200, -0.1) -> (500, 200, -0.1)`, receiver
     `(0, -300, -0.1)`, current `10 A`, source length `1000 m`, parallel
     offset `500 m`.
   - Generates full-window log observation times from `1e-5 s` to `1 s` and
     no-IP/IP case metadata with `validation_scope=corrected_model_full`.
+  - Records a published-paper reproduction target for the Journal of Applied
+    Geophysics paper `Analysis of 3D induced polarization effects of SOTEM`
+    (`S092698512400329X`) without treating missing full-text model parameters
+    as verified.
 
 - `src/atem3d/source_diagnostics.py`
   - `diagnose_source_consistency`
@@ -351,6 +356,9 @@ final acceptance.
     is tested to remain equivalent to the no-IP zero-contrast response.
   - Adds `plot RUN_DIR` to regenerate `comparison_3comp.png` and
     `error_curves_3comp.png` from validation CSV artifacts.
+  - Adds `published-paper-model-spec` for writing the published SOTEM paper
+    reproduction target metadata and the list of full-text parameters still
+    required before a paper-response overlay can be claimed.
   - Uses lazy imports so validation CLI does not require heavy simulation dependencies.
 
 - `src/atem3d/empymod_validation.py` and `src/atem3d/empymod_validation_cli.py`
@@ -919,6 +927,51 @@ For IP cases, the corrected-model reference path now converts the Prony/Debye
 material metadata into empymod's Debye `res` dictionary, so the reference uses
 the same `sigma_inf`, `delta_sigma_list`, and `tau_list` stored in the case
 spec instead of silently falling back to the no-IP resistivity tuple.
+
+## Published Paper Reproduction Target
+
+The currently selected published model target is:
+
+```text
+title = Analysis of 3D induced polarization effects of SOTEM
+journal = Journal of Applied Geophysics
+volume = 226
+article_number = 105613
+article_id = S092698512400329X
+doi = 10.1016/j.jappgeo.2024.105613
+url = https://www.sciencedirect.com/science/article/pii/S092698512400329X
+```
+
+Public metadata/snippets align with the present SOTEM setup: a finite grounded
+wire SOTEM source, `1000 m` transmitter length, `10 A` current, air conductivity
+around `1e-6 S/m`, a background half-space around `0.01 S/m`, and a published
+calculation domain of `4000 m x 4000 m x 1000 m`. The latest corrected
+coordinates used here remain source `(-500, 200, -0.1) -> (500, 200, -0.1)` and
+receiver `(0, -300, -0.1)`.
+
+Write the reproduction target metadata with:
+
+```bash
+tdem-ip-forward published-paper-model-spec dolfinx/runs/published_paper_target --output dolfinx/runs/published_paper_target/spec.json
+```
+
+This command records the paper identity, corrected source/receiver geometry,
+full `1e-5 s` to `1 s` validation window, and the required comparison outputs.
+It also explicitly lists the full-text parameters still required before an
+actual paper-response overlay can be claimed:
+
+```text
+terrain_surface_or_layer_geometry
+ip_anomaly_geometry
+ip_anomaly_prony_or_cole_cole_parameters
+all_receiver_locations_and_components
+paper_plot_time_channels
+digitized_or_tabulated_published_response_values
+```
+
+Current status: this is a reproducibility target definition only. It is not yet
+a completed reproduction of the published response curves, because the full
+paper model tables/figure values have not been extracted into the run spec.
 
 A WSL CLI smoke completed under:
 

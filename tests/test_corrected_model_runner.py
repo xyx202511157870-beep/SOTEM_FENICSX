@@ -6,7 +6,11 @@ import numpy as np
 
 from atem3d.cli import main
 from atem3d.cli import _load_yaml
-from atem3d.corrected_model import CorrectedModelValidationConfig, build_corrected_model_case_specs
+from atem3d.corrected_model import (
+    CorrectedModelValidationConfig,
+    build_corrected_model_case_specs,
+    build_published_paper_model_target_spec,
+)
 from atem3d.corrected_model_runner import run_corrected_model_validation
 from atem3d.corrected_model_runner import _default_reference_runner
 
@@ -209,3 +213,40 @@ def test_corrected_model_json_config_load_does_not_require_pyyaml(tmp_path, monk
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     assert _load_yaml(config_path) == {"noip": {"case_type": "noip"}}
+
+
+def test_published_paper_model_target_spec_records_public_reference_metadata(tmp_path):
+    spec = build_published_paper_model_target_spec(tmp_path)
+
+    assert spec["published_reference"]["title"] == "Analysis of 3D induced polarization effects of SOTEM"
+    assert spec["published_reference"]["journal"] == "Journal of Applied Geophysics"
+    assert spec["published_reference"]["article_id"] == "S092698512400329X"
+    assert spec["published_reference"]["doi"] == "10.1016/j.jappgeo.2024.105613"
+    assert spec["published_reference"]["reproduction_status"] == "target_defined_full_text_parameters_pending"
+    assert spec["model"]["source_start"] == [-500.0, 200.0, -0.1]
+    assert spec["model"]["source_end"] == [500.0, 200.0, -0.1]
+    assert spec["model"]["receiver"] == [0.0, -300.0, -0.1]
+    assert spec["model"]["source_current"] == 10.0
+    assert spec["model"]["source_length_m"] == 1000.0
+    assert spec["model"]["parallel_offset_m"] == 500.0
+    assert spec["model"]["calculation_domain_m"] == [4000.0, 4000.0, 1000.0]
+    assert "ip_anomaly_geometry" in spec["full_text_parameters_required"]
+
+
+def test_published_paper_model_spec_cli_writes_json(tmp_path):
+    output = tmp_path / "paper_model_target.json"
+
+    exit_code = main(
+        [
+            "published-paper-model-spec",
+            str(tmp_path / "paper_run"),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["published_reference"]["article_id"] == "S092698512400329X"
+    assert payload["run_contract"]["output_root"] == str(tmp_path / "paper_run")
+    assert payload["run_contract"]["validation_scope"] == "published_paper_reproduction_target"
