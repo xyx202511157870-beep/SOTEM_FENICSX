@@ -309,6 +309,9 @@ def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
 
     cfg = CorrectedModelValidationConfig()
     cfg.validate_geometry()
+    from atem3d.paper_digitization import PAPER_CURVE_TARGETS
+
+    digitization_targets = [dict(target) for target in PAPER_CURVE_TARGETS]
     return {
         "published_reference": {
             "title": "Analysis of 3D induced polarization effects of SOTEM",
@@ -429,6 +432,7 @@ def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
         "paper_response_targets": {
             "digitized_response_required": True,
             "candidate_overlay_figures": ["Fig. 2", "Fig. 3", "Fig. 7", "Fig. 8", "Fig. 12", "Fig. 15"],
+            "digitization_targets": digitization_targets,
             "components": ["Ex", "Hz"],
             "comparison_outputs": [
                 "paper_response_overlay.png",

@@ -730,6 +730,16 @@ def test_published_paper_model_target_spec_records_public_reference_metadata(tmp
     assert anomaly["time_window_after_turnoff_s"] == [0.0001, 1.0]
     assert anomaly["time_count"] == 41
     assert spec["paper_response_targets"]["digitized_response_required"] is True
+    figure_targets = {
+        target["figure"]: target
+        for target in spec["paper_response_targets"]["digitization_targets"]
+    }
+    assert figure_targets["Fig. 2"]["pdf_page_number"] == 3
+    assert figure_targets["Fig. 2"]["component"] == "Ex"
+    assert figure_targets["Fig. 2"]["response_units"] == "V/m"
+    assert figure_targets["Fig. 15"]["pdf_page_number"] == 9
+    assert figure_targets["Fig. 15"]["component"] == "Hz"
+    assert figure_targets["Fig. 15"]["response_units"] == "nT"
     assert "digitized_or_tabulated_published_response_values" in spec["remaining_reproduction_requirements"]
 
 
@@ -771,16 +781,22 @@ def test_published_paper_digitization_template_cli_writes_manifest_and_csv(tmp_p
     manifest = json.loads((output_dir / "paper_curve_digitization_manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_article_id"] == "S092698512400329X"
     assert manifest["template_csv"] == "paper_curve_digitization_template.csv"
-    assert manifest["targets"][0] == {
-        "figure": "Fig. 2",
-        "model_key": "accuracy_benchmark_layer",
-        "component": "Ex",
-        "suggested_curve_labels": ["paper_3d_model", "paper_1d_analytical"],
-    }
+    assert manifest["targets"][0]["figure"] == "Fig. 2"
+    assert manifest["targets"][0]["pdf_page_number"] == 3
+    assert manifest["targets"][0]["response_units"] == "V/m"
     csv_lines = (output_dir / "paper_curve_digitization_template.csv").read_text(encoding="utf-8").splitlines()
-    assert csv_lines[0] == "figure,model_key,component,curve_label,time_obs,value,notes"
-    assert "Fig. 12,three_dimensional_polarized_body,Ex,paper_ip,,,digitize from published plot" in csv_lines
-    assert "Fig. 15,three_dimensional_polarized_body,Hz,paper_noip,,,digitize from published plot" in csv_lines
+    assert csv_lines[0] == (
+        "figure,pdf_page_number,model_key,component,response_panel,value_kind,"
+        "curve_label,time_obs,value,units,axis_notes,caption,notes"
+    )
+    assert any(
+        line.startswith("Fig. 12,7,three_dimensional_polarized_body,Ex,a,response,paper_ip,,,V/m,")
+        for line in csv_lines
+    )
+    assert any(
+        line.startswith("Fig. 15,9,three_dimensional_polarized_body,Hz,a,response,paper_noip,,,nT,")
+        for line in csv_lines
+    )
 
 
 def test_published_paper_curve_artifacts_cli_writes_overlay_outputs(tmp_path):
