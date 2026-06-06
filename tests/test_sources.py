@@ -2,7 +2,13 @@ import numpy as np
 from discretize import TensorMesh
 from simpeg.electromagnetics import time_domain as tdem
 
-from atem3d.sources import GroundedWireSource, StepOffWaveform, _nearest_face_line_source
+from atem3d.sources import (
+    GroundedWireSource,
+    LinearRampOffWaveform,
+    StepOffWaveform,
+    TabulatedWaveform,
+    _nearest_face_line_source,
+)
 
 
 def test_grounded_wire_source_projects_finite_wire_to_edges_with_current_strength():
@@ -153,3 +159,41 @@ def test_step_off_waveform_matches_simpeg_endpoint_convention():
     assert waveform.value(0.0) == 2.0
     assert waveform.previous_value(0.0) == 2.0
     assert waveform.previous_value(1.0) == 0.0
+
+
+def test_legacy_waveforms_expose_interval_average_didt():
+    step = StepOffWaveform(off_time=1.0e-5, on_value=1.0)
+    ramp = LinearRampOffWaveform(
+        off_time=1.0e-5,
+        initial_value_scale=1.0,
+        final_value_scale=0.0,
+    )
+    tabulated = TabulatedWaveform(
+        times=np.array([0.0, 5.0e-6, 1.0e-5]),
+        values=np.array([1.0, 0.5, 0.0]),
+        initial_field_value=1.0,
+    )
+
+    np.testing.assert_allclose(step.interval_average_didt(0.0, 2.0e-5), -5.0e4)
+    np.testing.assert_allclose(ramp.interval_average_didt(2.0e-6, 7.0e-6), -1.0e5)
+    np.testing.assert_allclose(tabulated.interval_average_didt(0.0, 1.0e-5), -1.0e5)
+
+
+def test_grounded_wire_source_interval_average_didt_scales_unit_vector():
+    mesh = TensorMesh([np.ones(7), np.ones(5), np.ones(3)], origin=(-3.5, -2.5, -1.5))
+    source = GroundedWireSource(
+        start=(-2.5, 0.0, 0.0),
+        end=(2.5, 0.0, 0.0),
+        current=10.0,
+        waveform=LinearRampOffWaveform(
+            off_time=1.0e-5,
+            initial_value_scale=1.0,
+            final_value_scale=0.0,
+        ),
+    )
+
+    avg_didt = source.current_interval_average_didt(0.0, 1.0e-5)
+    edge_rhs = source.edge_vector_interval_average_didt(mesh, 0.0, 1.0e-5)
+
+    np.testing.assert_allclose(avg_didt, -1.0e6)
+    np.testing.assert_allclose(edge_rhs, avg_didt * source.unit_edge_vector(mesh))

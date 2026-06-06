@@ -32,6 +32,12 @@ class StepOffWaveform:
             return float(self.on_value)
         return self.value(time)
 
+    def interval_average_didt(self, t0: float, t1: float) -> float:
+        t0, t1 = _validated_interval(t0, t1)
+        if t0 <= float(self.off_time) <= t1:
+            return float(-self.on_value / (t1 - t0))
+        return 0.0
+
     def initial_value(self) -> float:
         return float(self.on_value)
 
@@ -70,6 +76,10 @@ class LinearRampOffWaveform:
     def previous_value(self, time: float) -> float:
         return self.value(time)
 
+    def interval_average_didt(self, t0: float, t1: float) -> float:
+        t0, t1 = _validated_interval(t0, t1)
+        return float((self.value(t1) - self.value(t0)) / (t1 - t0))
+
     def initial_value(self) -> float:
         return float(self.initial_value_scale)
 
@@ -103,6 +113,10 @@ class TabulatedWaveform:
 
     def previous_value(self, time: float) -> float:
         return self.value(time)
+
+    def interval_average_didt(self, t0: float, t1: float) -> float:
+        t0, t1 = _validated_interval(t0, t1)
+        return float((self.value(t1) - self.value(t0)) / (t1 - t0))
 
     def initial_value(self) -> float:
         return float(self.initial_field_value)
@@ -204,6 +218,21 @@ class GroundedWireSource:
 
         return self.face_vector(mesh, self.waveform.previous_value(time))
 
+    def current_interval_average_didt(self, t0: float, t1: float) -> float:
+        """Return interval-average dI/dt for the actual source current."""
+
+        return float(self.current * self.waveform.interval_average_didt(t0, t1))
+
+    def edge_vector_interval_average_didt(self, mesh, t0: float, t1: float) -> np.ndarray:
+        """Return unit edge source vector scaled by interval-average dI/dt."""
+
+        return self.current_interval_average_didt(t0, t1) * self.unit_edge_vector(mesh)
+
+    def face_vector_interval_average_didt(self, mesh, t0: float, t1: float) -> np.ndarray:
+        """Return unit face source vector scaled by interval-average dI/dt."""
+
+        return self.current_interval_average_didt(t0, t1) * self.unit_face_vector(mesh)
+
     def initial_edge_vector(self, mesh) -> np.ndarray:
         """Return the on-time source used for static initial fields."""
 
@@ -217,6 +246,14 @@ class GroundedWireSource:
         if not self.waveform.has_initial_fields:
             return np.zeros(mesh.n_faces, dtype=float)
         return self.face_vector(mesh, self.waveform.initial_value())
+
+
+def _validated_interval(t0: float, t1: float) -> tuple[float, float]:
+    t0 = float(t0)
+    t1 = float(t1)
+    if not np.isfinite(t0) or not np.isfinite(t1) or t1 <= t0:
+        raise ValueError("t1 must be finite and greater than t0")
+    return t0, t1
 
 
 def _nearest_edge_line_source(mesh, locations: np.ndarray) -> np.ndarray:

@@ -451,6 +451,29 @@ python -m pytest -q
 Results: the new CSV waveform regression test passed, config/waveform/source
 pytest passed, and full pytest exited `0`.
 
+## Legacy Source Interval-Average dI/dt Checkpoint (2026-06-06)
+
+The legacy `GroundedWireSource` runtime waveforms now expose
+`interval_average_didt(t0, t1)` so source loading can use the task-book
+interval-average convention instead of a point-value derivative. The method is
+available for `StepOffWaveform`, `LinearRampOffWaveform`, and
+`TabulatedWaveform`. `GroundedWireSource` now also provides
+`current_interval_average_didt(...)`,
+`edge_vector_interval_average_didt(...)`, and
+`face_vector_interval_average_didt(...)`, scaling the unit source vectors by
+the actual source-current average derivative.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_sources.py::test_legacy_waveforms_expose_interval_average_didt tests/test_sources.py::test_grounded_wire_source_interval_average_didt_scales_unit_vector
+python -m pytest -q tests/test_sources.py tests/test_config_and_io.py tests/test_waveform.py
+python -m pytest -q
+```
+
+Results: the new interval-average source tests passed, source/config/waveform
+pytest passed, and full pytest exited `0`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`
