@@ -17,7 +17,12 @@ REQUIRED_TIME_MIN = 1.0e-5
 REQUIRED_TIME_MAX = 1.0
 FINAL_ACCEPTANCE_SCOPE = "corrected_model_full"
 FINAL_ACCEPTANCE_REFERENCE_TYPES = {"empymod", "1d"}
-DIAGNOSTIC_REFERENCE_TYPES = {"dolfinx_refined", "self_convergence", "manufactured"}
+DIAGNOSTIC_REFERENCE_TYPES = {
+    "dolfinx_refined",
+    "self_convergence",
+    "manufactured",
+    "published_response_curve",
+}
 SUPPORTED_REFERENCE_TYPES = FINAL_ACCEPTANCE_REFERENCE_TYPES | DIAGNOSTIC_REFERENCE_TYPES
 
 
@@ -150,7 +155,10 @@ def _validated_arrays(
         raise ValueError("predictions and reference must have the same shape")
     if predictions.shape != (times.size, len(component_names)):
         raise ValueError("responses must have shape (n_times, n_components)")
-    if len(component_names) < 3:
+    if case.reference_type == "published_response_curve":
+        if len(component_names) < 2:
+            raise ValueError("published_response_curve validation requires at least two components")
+    elif len(component_names) < 3:
         raise ValueError("at least three components are required")
     if case.case_type not in {"noip", "ip"}:
         raise ValueError("case_type must be 'noip' or 'ip'")

@@ -2,6 +2,8 @@ import numpy as np
 import yaml
 
 from atem3d import cli
+from atem3d.validation_3comp import ThreeComponentValidationInput
+from atem3d.validation_3comp import write_three_component_validation_artifacts
 
 
 def test_cli_validate_noip_3comp_writes_artifacts_from_csv(tmp_path):
@@ -75,6 +77,41 @@ def test_cli_validate_ip_3comp_reads_prony_material_metadata(tmp_path):
     assert payload["case_type"] == "ip"
     assert payload["sigma_inf"] == 0.02
     assert payload["delta_sigma_list"] == [0.003]
+
+
+def test_published_response_curve_reference_writes_diagnostic_artifacts(tmp_path):
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    reference = np.array(
+        [
+            [1.0, 1.0e-9],
+            [0.5, 5.0e-10],
+            [0.1, 1.0e-10],
+        ]
+    )
+    predictions = 1.02 * reference
+
+    summary = write_three_component_validation_artifacts(
+        ThreeComponentValidationInput(
+            output_dir=tmp_path / "paper_overlay",
+            times=times,
+            predictions=predictions,
+            reference=reference,
+            component_names=["Ex", "Hz"],
+            case_type="ip",
+            reference_type="published_response_curve",
+            magnetic_quantity="Hz",
+            validation_scope="published_paper_reproduction_target",
+            diagnostics={"published_reference": {"figure": "Fig. 12"}},
+        )
+    )
+
+    assert summary["reference_type"] == "published_response_curve"
+    assert summary["final_acceptance_passed"] is False
+    assert summary["acceptance_status"]["reference_type_supported"] is True
+    assert "reference_type_not_final_acceptance" in summary["acceptance_status"]["blocking_reasons"]
+    assert "required_components_missing" in summary["acceptance_status"]["blocking_reasons"]
+    assert (tmp_path / "paper_overlay" / "comparison_3comp.png").is_file()
+    assert (tmp_path / "paper_overlay" / "error_curves_3comp.png").is_file()
 
 
 def _write_response_csv(path, *, scale: float, component_names=("Ex", "Ey", "dBzdt")):

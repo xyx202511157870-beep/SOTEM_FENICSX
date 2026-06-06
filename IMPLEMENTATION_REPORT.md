@@ -2922,6 +2922,18 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_corrected_model_runner.py` with `15 passed`
   and `python -m pytest -q` with all tests passing (`703 passed`,
   `2 skipped`).
+- Three-component validation now supports `reference_type=
+  published_response_curve` as a diagnostic reference. This lets digitized
+  paper curves such as `Ex`/`Hz` overlays produce the standard artifact set
+  (`predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
+  `error_summary.json`, `comparison_3comp.png`, `error_curves_3comp.png`,
+  `diagnostics.json`, `run_config_resolved.yaml`) even when the paper reports
+  only two components. The final acceptance gate still blocks these runs with
+  `reference_type_not_final_acceptance` and, when applicable,
+  `required_components_missing`, so paper-curve overlays cannot be mistaken
+  for the task-book empymod/1D 5% acceptance result. Windows verification ran
+  `python -m pytest -q tests/test_validation_3comp_cli.py` with `3 passed` and
+  `python -m pytest -q` with all tests passing (`704 passed`, `2 skipped`).
 
 ## Next Steps
 
