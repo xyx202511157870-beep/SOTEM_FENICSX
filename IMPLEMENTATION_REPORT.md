@@ -13,8 +13,9 @@ This report covers the implementation rounds currently committed or staged from 
   nonzero-contrast smoke tests.
 - P6 partial: add no-IP/IP primary-secondary TDEM step kernels with zero-contrast tests.
 - P7 partial: add no-IP/IP three-component validation smoke artifact writer.
-- P8 partial: add complex-terrain leakage-channel material-map utilities and
-  a small DOLFINx primary-secondary forward smoke.
+- P8 partial: add complex-terrain leakage-channel material-map utilities,
+  a small DOLFINx primary-secondary forward smoke, and a generated Gmsh
+  terrain/leakage forward smoke.
 - P7 CLI: add `validate-noip-3comp` and `validate-ip-3comp` artifact commands from CSV inputs.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
@@ -140,6 +141,10 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     `mu_inv`, representative Prony material metadata, and optional spatial
     Debye `delta_functions`. A WSL leakage-channel smoke uses this path in a
     small DOLFINx primary-secondary forward run.
+  - Added `_write_small_gmsh_terrain_leakage_mesh`, which writes a tiny
+    Gmsh terrain volume with physical earth/outer/top-surface tags. A WSL
+    smoke loads the generated mesh, marks a leakage channel from cell centers,
+    maps it to DG0 IP materials, and runs one primary-secondary forward step.
   - Added `_make_nedelec_solution_sampler_at_points` for sampling DOLFINx
     Nedelec Functions back to `(n_samples, 3)` tables. The secondary step smoke
     now exercises `rhs_to_function` plus this production `solution_to_samples`
@@ -2007,10 +2012,11 @@ source-term substitution inside the existing total-field equation.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
-- P8 currently verifies marker/material/channel geometry utilities and runs a
+- P8 currently verifies marker/material/channel geometry utilities, runs a
   small DOLFINx primary-secondary leakage-channel forward smoke on a unit-cube
-  mesh with DG0 material markers. A generated Gmsh terrain/leakage mesh and
-  corrected-model-scale forward example remain pending.
+  mesh with DG0 material markers, and runs a generated Gmsh terrain/leakage
+  mesh through the same primary-secondary forward path. A corrected-model-scale
+  terrain/leakage example remains pending.
 - Full no-IP/IP `1e-5 s` to `1 s` 5% acceptance is not yet achieved. The latest
   full-window corrected-model no-IP run with analytic DC and
   `min_steps_before_first_observation=4` covers the full window, but the
@@ -2066,5 +2072,5 @@ source-term substitution inside the existing total-field equation.
    full corrected-model primary-secondary run.
 8. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
 9. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
-10. Continue P8 by generating a Gmsh terrain/leakage mesh and running the
-    DOLFINx primary-secondary forward path on that generated mesh.
+10. Continue P8 by scaling the generated Gmsh terrain/leakage smoke toward the
+    corrected source/receiver geometry and writing full validation artifacts.

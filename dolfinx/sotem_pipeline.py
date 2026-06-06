@@ -1458,12 +1458,12 @@ def _make_dolfinx_materials_from_cell_material_map(
     sigma_eff_values = sigma_infinity_values.copy()
     representative_terms = []
     delta_functions = []
-    for tau in term_taus:
+    for index, tau in enumerate(term_taus):
         delta_values = delta_values_by_tau[tau]
         beta = dt_value / (tau + dt_value)
         sigma_eff_values -= beta * delta_values
         representative_terms.append(DebyeTerm(delta_sigma=float(np.max(delta_values)), tau=tau))
-        delta_fn = fem.Function(Q, name=f"delta_sigma_tau_{tau:.3e}")
+        delta_fn = fem.Function(Q, name=f"delta_sigma_term_{index}")
         _assign_dg0_by_cell_values(delta_fn, cells, delta_values)
         delta_fn.x.scatter_forward()
         delta_functions.append(delta_fn)
@@ -1516,6 +1516,91 @@ def _make_dolfinx_materials_from_cell_material_map(
             "sigma_inf_min": float(np.min(sigma_infinity_values)),
             "sigma_inf_max": float(np.max(sigma_infinity_values)),
         },
+    }
+
+
+def _write_small_gmsh_terrain_leakage_mesh(mesh_path, *, mesh_size: float = 0.5):
+    """Write a tiny Gmsh terrain volume for leakage-channel forward smokes."""
+
+    from pathlib import Path
+
+    import gmsh
+
+    path = Path(mesh_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mesh_size = float(mesh_size)
+    if mesh_size <= 0.0 or not math.isfinite(mesh_size):
+        raise ValueError("mesh_size must be finite and positive")
+
+    top = {
+        "p5": 0.02,
+        "p6": 0.14,
+        "p7": 0.06,
+        "p8": -0.04,
+    }
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Mesh.MshFileVersion", 4.1)
+        gmsh.model.add("small_terrain_leakage")
+        geo = gmsh.model.geo
+
+        p1 = geo.addPoint(0.0, 0.0, -1.0, mesh_size)
+        p2 = geo.addPoint(1.0, 0.0, -1.0, mesh_size)
+        p3 = geo.addPoint(1.0, 1.0, -1.0, mesh_size)
+        p4 = geo.addPoint(0.0, 1.0, -1.0, mesh_size)
+        p5 = geo.addPoint(0.0, 0.0, top["p5"], mesh_size)
+        p6 = geo.addPoint(1.0, 0.0, top["p6"], mesh_size)
+        p7 = geo.addPoint(1.0, 1.0, top["p7"], mesh_size)
+        p8 = geo.addPoint(0.0, 1.0, top["p8"], mesh_size)
+
+        b1 = geo.addLine(p1, p2)
+        b2 = geo.addLine(p2, p3)
+        b3 = geo.addLine(p3, p4)
+        b4 = geo.addLine(p4, p1)
+        t1 = geo.addLine(p5, p6)
+        t2 = geo.addLine(p6, p7)
+        t3 = geo.addLine(p7, p8)
+        t4 = geo.addLine(p8, p5)
+        v1 = geo.addLine(p1, p5)
+        v2 = geo.addLine(p2, p6)
+        v3 = geo.addLine(p3, p7)
+        v4 = geo.addLine(p4, p8)
+
+        bottom = geo.addPlaneSurface([geo.addCurveLoop([b1, b2, b3, b4])])
+        top_surface = geo.addPlaneSurface([geo.addCurveLoop([t1, t2, t3, t4])])
+        side_y0 = geo.addPlaneSurface([geo.addCurveLoop([b1, v2, -t1, -v1])])
+        side_x1 = geo.addPlaneSurface([geo.addCurveLoop([b2, v3, -t2, -v2])])
+        side_y1 = geo.addPlaneSurface([geo.addCurveLoop([b3, v4, -t3, -v3])])
+        side_x0 = geo.addPlaneSurface([geo.addCurveLoop([b4, v1, -t4, -v4])])
+        surface_loop = geo.addSurfaceLoop([bottom, top_surface, side_y0, side_x1, side_y1, side_x0])
+        volume = geo.addVolume([surface_loop])
+        geo.synchronize()
+
+        gmsh.model.addPhysicalGroup(3, [volume], PHYS_EARTH)
+        gmsh.model.setPhysicalName(3, PHYS_EARTH, "earth")
+        outer_surfaces = [bottom, top_surface, side_y0, side_x1, side_y1, side_x0]
+        gmsh.model.addPhysicalGroup(2, outer_surfaces, PHYS_OUTER)
+        gmsh.model.setPhysicalName(2, PHYS_OUTER, "outer_boundary")
+        gmsh.model.addPhysicalGroup(2, [top_surface], PHYS_SURFACE)
+        gmsh.model.setPhysicalName(2, PHYS_SURFACE, "terrain_surface")
+        gmsh.option.setNumber("Mesh.MeshSizeMin", mesh_size)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", mesh_size)
+        gmsh.model.mesh.generate(3)
+        gmsh.write(str(path))
+        node_tags, _, _ = gmsh.model.mesh.getNodes()
+        elem_types, elem_tags, _ = gmsh.model.mesh.getElements(3)
+        element_count = sum(len(tags) for tags in elem_tags)
+    finally:
+        gmsh.finalize()
+
+    elevations = list(top.values())
+    return {
+        "mesh_path": str(path),
+        "node_count": int(len(node_tags)),
+        "cell_count": int(element_count),
+        "terrain_elevation_min": float(min(elevations)),
+        "terrain_elevation_max": float(max(elevations)),
     }
 
 
@@ -3546,8 +3631,8 @@ def _build_debye_materials(msh, cell_tags, spaces: dict[str, Any], fit: DebyeFit
             f"cole_layer_top={float(config.cole_layer_top):.6g} m and "
             f"cole_layer_bottom={float(config.cole_layer_bottom):.6g} m"
         )
-    for term in fit.terms:
-        fn = fem.Function(Q, name=f"delta_sigma_tau_{term.tau:.3e}")
+    for index, term in enumerate(fit.terms):
+        fn = fem.Function(Q, name=f"delta_sigma_term_{index}")
         fn.x.array[:] = 0.0
         _assign_dg0_by_cell(fn, polarizable_cells, term.delta_sigma)
         fn.x.scatter_forward()
