@@ -4138,6 +4138,7 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     latest_secondary = {
         "E": fem.Function(V, name="E_secondary_latest"),
         "deltaJ": None,
+        "chi": [],
         "dc_result": None,
     }
     latest_secondary["E"].x.array[:] = 0.0
@@ -4168,6 +4169,13 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             "primary_secondary_deltaJ_dc",
             sigma * (Ep0_function + result["Es0"]) - sigma_b_const * Ep0_function,
         )
+        latest_secondary["chi"] = [
+            interpolate_vector_expression(
+                f"primary_secondary_chi_{index}_dc",
+                Ep0_function + result["Es0"],
+            )
+            for index, _term in enumerate([])
+        ]
         return None, sample_solution(result["Es0"], Ep0_samples)
 
     def solution_to_samples(solution, rhs_samples):
@@ -4195,8 +4203,6 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     def secondary_state_stepper(state, Ep_old, Ep_new, material, sigma_background_value, dt):
         from atem3d.solvers.tdem_secondary import SecondaryState
 
-        if material.terms:
-            raise NotImplementedError("DOLFINx variable-contrast primary-secondary IP stepping is not implemented yet")
         if abs(float(sigma_background_value) - sigma_b) > max(1.0e-14, 1.0e-12 * abs(sigma_b)):
             raise ValueError("sigma_background mismatch in DOLFINx primary-secondary adapter")
         if latest_secondary["deltaJ"] is None:
@@ -4205,18 +4211,46 @@ def _make_dolfinx_primary_secondary_forward_adapters(
         if dt_value <= 0.0 or not math.isfinite(dt_value):
             raise ValueError("dt must be finite and positive")
         Ep_new_function = sample_to_function(Ep_new)
-        c_new = interpolate_vector_expression(
-            "primary_secondary_c_new",
-            (sigma - sigma_b_const) * Ep_new_function,
-        )
+        if material.terms and len(latest_secondary["chi"]) != len(material.terms):
+            latest_secondary["chi"] = [
+                sample_to_function(memory_samples)
+                for memory_samples in state.chi
+            ]
+            if len(latest_secondary["chi"]) != len(material.terms):
+                raise ValueError("state.chi must contain one memory field per Debye term")
+        if material.terms:
+            alpha = material.alpha(dt_value)
+            c_expr = (float(material.sigma_eff(dt_value)) - sigma_b) * Ep_new_function
+            for term, memory, alpha_i in zip(material.terms, latest_secondary["chi"], alpha):
+                c_expr = c_expr - term.delta_sigma * float(alpha_i) * memory
+        else:
+            c_expr = (sigma - sigma_b_const) * Ep_new_function
+        c_new = interpolate_vector_expression("primary_secondary_c_new", c_expr)
         rhs_function = fem.Function(V, name="primary_secondary_rhs_density")
         rhs_function.x.array[:] = (latest_secondary["deltaJ"].x.array - c_new.x.array) / dt_value
         rhs_function.x.scatter_forward()
-        Es_new = secondary_step_solver(rhs_function, material.sigma_inf, dt_value)
-        deltaJ_new = interpolate_vector_expression(
-            "primary_secondary_deltaJ",
-            sigma * (Ep_new_function + latest_secondary["E"]) - sigma_b_const * Ep_new_function,
-        )
+        step_sigma = material.sigma_eff(dt_value) if material.terms else material.sigma_inf
+        Es_new = secondary_step_solver(rhs_function, step_sigma, dt_value)
+        Etotal_new = Ep_new_function + latest_secondary["E"]
+        if material.terms:
+            alpha = material.alpha(dt_value)
+            beta = material.beta(dt_value)
+            chi_new = []
+            for index, (old_memory, alpha_i, beta_i) in enumerate(zip(latest_secondary["chi"], alpha, beta)):
+                chi_new.append(
+                    interpolate_vector_expression(
+                        f"primary_secondary_chi_{index}",
+                        float(alpha_i) * old_memory + float(beta_i) * Etotal_new,
+                    )
+                )
+            latest_secondary["chi"] = chi_new
+            deltaJ_expr = material.sigma_inf * Etotal_new - sigma_b_const * Ep_new_function
+            for term, memory in zip(material.terms, latest_secondary["chi"]):
+                deltaJ_expr = deltaJ_expr - term.delta_sigma * memory
+        else:
+            deltaJ_expr = sigma * Etotal_new - sigma_b_const * Ep_new_function
+            latest_secondary["chi"] = []
+        deltaJ_new = interpolate_vector_expression("primary_secondary_deltaJ", deltaJ_expr)
         latest_secondary["deltaJ"] = deltaJ_new
         return SecondaryState(
             Es=Es_new,
