@@ -2934,6 +2934,17 @@ source-term substitution inside the existing total-field equation.
   for the task-book empymod/1D 5% acceptance result. Windows verification ran
   `python -m pytest -q tests/test_validation_3comp_cli.py` with `3 passed` and
   `python -m pytest -q` with all tests passing (`704 passed`, `2 skipped`).
+- Added `tdem-ip-forward published-paper-digitization-template`, which reads a
+  `published-paper-model-spec` JSON/YAML file and writes
+  `paper_curve_digitization_manifest.json` plus the long-form
+  `paper_curve_digitization_template.csv`. The template enumerates the current
+  paper overlay targets (`Fig. 2`, `Fig. 3`, `Fig. 7`, `Fig. 8`, `Fig. 12`,
+  `Fig. 15`) with model key, component, suggested curve label, `time_obs`, and
+  response value columns, giving a standard input path for the still-pending
+  figure digitization step. Windows verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py` with `16 passed`
+  and `python -m pytest -q` with all tests passing (`705 passed`,
+  `2 skipped`).
 
 ## Next Steps
 

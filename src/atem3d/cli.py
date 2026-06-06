@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_corrected_leakage_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-model-spec":
         return _main_published_paper_model_spec(argv[1:])
+    if argv and argv[0] == "published-paper-digitization-template":
+        return _main_published_paper_digitization_template(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
@@ -202,6 +204,21 @@ def _main_published_paper_model_spec(argv: list[str]) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
     print(f"wrote {args.output}")
+    return 0
+
+
+def _main_published_paper_digitization_template(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write published paper response digitization templates.")
+    parser.add_argument("config", type=Path, help="JSON/YAML published paper model target spec")
+    parser.add_argument("--output-dir", type=Path, default=Path("paper_digitization"))
+    args = parser.parse_args(argv)
+
+    from .paper_digitization import write_published_paper_digitization_template
+
+    spec = _load_yaml(args.config)
+    manifest = write_published_paper_digitization_template(spec, args.output_dir)
+    print(f"wrote {args.output_dir / 'paper_curve_digitization_manifest.json'}")
+    print(f"wrote {args.output_dir / manifest['template_csv']}")
     return 0
 
 

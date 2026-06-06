@@ -438,6 +438,37 @@ def test_published_paper_model_spec_cli_writes_json(tmp_path):
     assert payload["run_contract"]["validation_scope"] == "published_paper_reproduction_target"
 
 
+def test_published_paper_digitization_template_cli_writes_manifest_and_csv(tmp_path):
+    spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
+    spec_path = tmp_path / "paper_model_target.json"
+    output_dir = tmp_path / "digitization"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "published-paper-digitization-template",
+            str(spec_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    manifest = json.loads((output_dir / "paper_curve_digitization_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_article_id"] == "S092698512400329X"
+    assert manifest["template_csv"] == "paper_curve_digitization_template.csv"
+    assert manifest["targets"][0] == {
+        "figure": "Fig. 2",
+        "model_key": "accuracy_benchmark_layer",
+        "component": "Ex",
+        "suggested_curve_labels": ["paper_3d_model", "paper_1d_analytical"],
+    }
+    csv_lines = (output_dir / "paper_curve_digitization_template.csv").read_text(encoding="utf-8").splitlines()
+    assert csv_lines[0] == "figure,model_key,component,curve_label,time_obs,value,notes"
+    assert "Fig. 12,three_dimensional_polarized_body,Ex,paper_ip,,,digitize from published plot" in csv_lines
+    assert "Fig. 15,three_dimensional_polarized_body,Hz,paper_noip,,,digitize from published plot" in csv_lines
+
+
 def test_corrected_leakage_channel_case_specs_define_memory_safe_3d_anomaly(tmp_path):
     specs = build_corrected_leakage_channel_case_specs(tmp_path)
 
