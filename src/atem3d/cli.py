@@ -107,6 +107,7 @@ def _main_validate_secondary(argv: list[str]) -> int:
         PrimarySecondaryForwardOperator,
         initialize_dc_secondary,
         secondary_state_from_dc_initialization,
+        secondary_step_ip,
         secondary_step_noip,
     )
 
@@ -121,11 +122,13 @@ def _main_validate_secondary(argv: list[str]) -> int:
     times = np.asarray(cfg.get("times", [1.0e-5]), dtype=float)
     if times.ndim != 1 or times.size == 0 or np.any(times <= 0.0):
         raise ValueError("times must be positive observation times")
-    material = PronyConductivity.no_ip(sigma)
+    material_config = cfg.get("material", config.get("material"))
+    material = _material_from_config(material_config) or PronyConductivity.no_ip(sigma)
+    material_model = "prony" if material_config is not None else "no_ip"
 
     init = initialize_dc_secondary(
         Ep0=Ep0,
-        sigma0=sigma,
+        sigma0=material.sigma0,
         sigma_background=sigma_background,
         material=material,
         contrast_atol=threshold,
@@ -139,15 +142,26 @@ def _main_validate_secondary(argv: list[str]) -> int:
         dt = float(time - previous_time)
         if dt <= 0.0:
             raise ValueError("times must be strictly increasing")
-        state = secondary_step_noip(
-            previous,
-            Ep_old=Ep0,
-            Ep_new=Ep0,
-            sigma=sigma,
-            sigma_background=sigma_background,
-            dt=dt,
-            contrast_atol=threshold,
-        )
+        if material.terms:
+            state = secondary_step_ip(
+                previous,
+                Ep_old=Ep0,
+                Ep_new=Ep0,
+                material=material,
+                sigma_background=sigma_background,
+                dt=dt,
+                contrast_atol=threshold,
+            )
+        else:
+            state = secondary_step_noip(
+                previous,
+                Ep_old=Ep0,
+                Ep_new=Ep0,
+                sigma=material.sigma_inf,
+                sigma_background=sigma_background,
+                dt=dt,
+                contrast_atol=threshold,
+            )
         max_abs_secondary_dbdt = max(
             max_abs_secondary_dbdt,
             float(np.max(np.abs((state.Es - previous.Es) / dt))),
@@ -204,6 +218,11 @@ def _main_validate_secondary(argv: list[str]) -> int:
     summary = {
         "case_type": "secondary_zero_contrast",
         "sigma": sigma,
+        "sigma0": material.sigma0,
+        "sigma_inf": material.sigma_inf,
+        "material_model": material_model,
+        "delta_sigma_list": [term.delta_sigma for term in material.terms],
+        "tau_list": [term.tau for term in material.terms],
         "sigma_background": sigma_background,
         "threshold": threshold,
         "time_count": int(times.size),

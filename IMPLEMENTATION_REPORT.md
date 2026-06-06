@@ -219,6 +219,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     receiver locations, components, and primary receiver `E`/`dBdt` tables are
     supplied, writing `primary_secondary_predictions.csv` and checking total
     receiver response against the primary response in the zero-contrast case.
+  - `validate-secondary` reads optional Prony material metadata and uses the
+    IP secondary step path when Debye terms are present; zero-delta IP material
+    is tested to remain equivalent to the no-IP zero-contrast response.
   - Adds `plot RUN_DIR` to regenerate `comparison_3comp.png` and
     `error_curves_3comp.png` from validation CSV artifacts.
   - Uses lazy imports so validation CLI does not require heavy simulation dependencies.

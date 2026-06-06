@@ -122,3 +122,49 @@ def test_cli_validate_secondary_writes_forward_core_predictions(tmp_path):
     summary = json.loads((output_dir / "secondary_validation_summary.json").read_text(encoding="utf-8"))
     assert summary["forward_core_used"] is True
     assert summary["max_abs_total_minus_primary"] == 0.0
+
+
+def test_cli_validate_secondary_supports_ip_zero_delta_material(tmp_path):
+    output_dir = tmp_path / "secondary_ip"
+    config_path = tmp_path / "secondary_ip.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "secondary": {
+                    "output_dir": str(output_dir),
+                    "Ep0": [[1.0, 0.0, 0.0]],
+                    "sigma": 0.01,
+                    "sigma_background": 0.01,
+                    "times": [1.0e-5, 2.0e-5],
+                    "threshold": 1.0e-12,
+                    "receiver_locations": [[0.0, -300.0, -0.1]],
+                    "components": ["Ex", "Ey", "dBzdt"],
+                    "receiver_E": [
+                        [[10.0, 1.0, 0.0]],
+                        [[5.0, 0.5, 0.0]],
+                    ],
+                    "receiver_dBdt": [
+                        [[0.0, 0.0, -3.0]],
+                        [[0.0, 0.0, -1.5]],
+                    ],
+                },
+                "material": {
+                    "sigma_inf": 0.01,
+                    "terms": [{"delta_sigma": 0.0, "tau": 0.1}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["validate-secondary", str(config_path)])
+
+    assert exit_code == 0
+    summary = json.loads((output_dir / "secondary_validation_summary.json").read_text(encoding="utf-8"))
+    assert summary["case_type"] == "secondary_zero_contrast"
+    assert summary["material_model"] == "prony"
+    assert summary["sigma0"] == 0.01
+    assert summary["sigma_inf"] == 0.01
+    assert summary["delta_sigma_list"] == [0.0]
+    assert summary["pass_zero_contrast"] is True
+    assert summary["max_abs_total_minus_primary"] == 0.0
