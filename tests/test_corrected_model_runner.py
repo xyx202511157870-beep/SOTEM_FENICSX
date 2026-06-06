@@ -1,8 +1,11 @@
 import json
+import builtins
+import sys
 
 import numpy as np
 
 from atem3d.cli import main
+from atem3d.cli import _load_yaml
 from atem3d.corrected_model import CorrectedModelValidationConfig, build_corrected_model_case_specs
 from atem3d.corrected_model_runner import run_corrected_model_validation
 
@@ -86,3 +89,43 @@ def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch
 
     assert exit_code == 0
     assert calls == [("ip", str(tmp_path / "override" / "ip_3comp"))]
+
+
+def test_main_without_argv_uses_process_arguments_for_corrected_model_run(tmp_path, monkeypatch):
+    specs = build_corrected_model_case_specs(tmp_path / "from_spec")
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(specs), encoding="utf-8")
+    calls = []
+
+    def fake_run(case_spec):
+        calls.append(case_spec["case_type"])
+        return {"final_acceptance_passed": True}
+
+    import atem3d.corrected_model_runner as runner
+
+    monkeypatch.setattr(runner, "run_corrected_model_validation", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["tdem-ip-forward", "corrected-model-run", str(spec_path), "--case", "noip"],
+    )
+
+    assert main() == 0
+    assert calls == ["noip"]
+
+
+def test_corrected_model_json_config_load_does_not_require_pyyaml(tmp_path, monkeypatch):
+    config_path = tmp_path / "spec.json"
+    config_path.write_text(json.dumps({"noip": {"case_type": "noip"}}), encoding="utf-8")
+    original_import = builtins.__import__
+    import atem3d.cli as cli_module
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yaml":
+            raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.delattr(cli_module, "yaml", raising=False)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert _load_yaml(config_path) == {"noip": {"case_type": "noip"}}

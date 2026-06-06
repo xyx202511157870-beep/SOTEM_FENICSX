@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
-import yaml
 
 from .materials.prony import DebyeTerm, PronyConductivity
 from .validation_3comp import (
@@ -17,6 +17,8 @@ from .validation_3comp import (
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
     if argv and argv[0] == "run":
         return _main_run(argv[1:])
     if argv and argv[0] == "plot":
@@ -374,8 +376,13 @@ def _write_response_csv(
 
 
 def _load_yaml(path: Path) -> dict:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        config = json.loads(text)
+    except json.JSONDecodeError:
+        import yaml
+
+        config = yaml.safe_load(text)
     if not isinstance(config, dict):
         raise ValueError("configuration root must be a mapping")
     return config

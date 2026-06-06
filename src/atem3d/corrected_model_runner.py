@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib.util
 from pathlib import Path
+import sys
 from typing import Callable
 
 import numpy as np
@@ -63,8 +65,134 @@ def run_corrected_model_validation(
 
 
 def _default_forward_runner(case_spec: dict) -> np.ndarray:
-    raise NotImplementedError(
-        "DOLFINx corrected-model primary-secondary forward runner is not wired yet"
+    return _run_dolfinx_primary_secondary_forward(case_spec)
+
+
+def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
+    from atem3d.primary import EmpymodPrimaryProvider
+    from atem3d.solvers import PrimarySecondaryForwardOperator
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+
+    sp = _load_sotem_pipeline_module()
+    forward_cfg = dict(case_spec.get("dolfinx_forward", {}))
+    domain_min = np.asarray(
+        forward_cfg.get("domain_min", [-600.0, -400.0, -50.0]),
+        dtype=float,
+    )
+    domain_max = np.asarray(
+        forward_cfg.get("domain_max", [600.0, 300.0, 50.0]),
+        dtype=float,
+    )
+    cells = [int(value) for value in forward_cfg.get("cells", [1, 1, 1])]
+    msh = mesh.create_box(MPI.COMM_WORLD, [domain_min, domain_max], cells)
+    config = sp.PipelineConfig(
+        receiver=tuple(float(value) for value in case_spec["receiver"]),
+        receiver_evaluation_mode=str(forward_cfg.get("receiver_evaluation_mode", "first_cell")),
+        outer_boundary_mode=str(forward_cfg.get("outer_boundary_mode", "natural")),
+        ksp_type=str(forward_cfg.get("ksp_type", "cg")),
+        rtol=float(forward_cfg.get("rtol", 1.0e-8)),
+        atol=float(forward_cfg.get("atol", 1.0e-10)),
+        max_it=int(forward_cfg.get("max_it", 200)),
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    material = _forward_material_from_case_spec(case_spec)
+    sigma_background = float(case_spec.get("sigma_background", material.sigma0))
+    primary = EmpymodPrimaryProvider(
+        config=dict(case_spec["empymod_primary"]),
+        empymod_kwargs=dict(case_spec.get("empymod_kwargs", {})),
+    )
+    interpolation = sp._nedelec_interpolation_points(msh, spaces)
+    fem_points = interpolation["points"]
+    receiver_locations = np.asarray([case_spec["receiver"]], dtype=float)
+    components = tuple(str(value) for value in case_spec["components"])
+
+    if _is_zero_secondary_material(material, sigma_background):
+        operator = PrimarySecondaryForwardOperator(
+            primary=primary,
+            fem_points=fem_points,
+            receiver_locations=receiver_locations,
+            components=components,
+            material=material,
+            sigma_background=sigma_background,
+            secondary_receiver_projector=sp._make_dolfinx_zero_secondary_receiver_projector(
+                msh,
+                spaces,
+                config,
+            ),
+            contrast_atol=float(forward_cfg.get("contrast_atol", 1.0e-12)),
+        )
+        return operator.forward(np.asarray(case_spec["observation_times"], dtype=float))
+
+    sigma = fem.Function(spaces["Q"], name="sigma")
+    sigma.x.array[:] = material.sigma_inf
+    sigma.x.scatter_forward()
+    sigma_initial = fem.Function(spaces["Q"], name="sigma_initial")
+    sigma_initial.x.array[:] = material.sigma0
+    sigma_initial.x.scatter_forward()
+    sigma_infinity = fem.Function(spaces["Q"], name="sigma_infinity")
+    sigma_infinity.x.array[:] = material.sigma_inf
+    sigma_infinity.x.scatter_forward()
+    mu_inv = fem.Function(spaces["Q"], name="mu_inv")
+    mu_inv.x.array[:] = 1.0
+    mu_inv.x.scatter_forward()
+    materials = {
+        "sigma": sigma,
+        "sigma_initial": sigma_initial,
+        "sigma_infinity": sigma_infinity,
+        "mu_inv": mu_inv,
+    }
+    operators = sp.assemble_operators(msh, spaces, materials, facet_tags=None, config=config)
+    built = sp._make_dolfinx_primary_secondary_forward_operator(
+        msh,
+        spaces,
+        materials,
+        operators,
+        config,
+        primary=primary,
+        receiver_locations=receiver_locations,
+        components=components,
+        material=material,
+        sigma_background=sigma_background,
+    )
+    return built["operator"].forward(np.asarray(case_spec["observation_times"], dtype=float))
+
+
+def _load_sotem_pipeline_module():
+    root = Path(__file__).resolve().parents[2]
+    module_path = root / "dolfinx" / "sotem_pipeline.py"
+    module_name = "atem3d_dolfinx_sotem_pipeline"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load DOLFINx pipeline module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _forward_material_from_case_spec(case_spec: dict) -> PronyConductivity:
+    ip_material = _material_from_case_spec(case_spec)
+    if ip_material is not None:
+        return ip_material
+    material = dict(case_spec.get("material") or {})
+    if "sigma" in material:
+        return PronyConductivity.no_ip(float(material["sigma"]))
+    if "resistivity" in material:
+        return PronyConductivity.no_ip(1.0 / float(material["resistivity"]))
+    primary = dict(case_spec.get("empymod_primary", {}))
+    resistivities = primary.get("resistivities") or ()
+    if resistivities:
+        return PronyConductivity.no_ip(1.0 / float(resistivities[-1]))
+    raise ValueError("no-IP corrected-model material must define sigma or resistivity")
+
+
+def _is_zero_secondary_material(material: PronyConductivity, sigma_background: float) -> bool:
+    return (
+        not material.terms
+        and abs(float(material.sigma_inf) - float(sigma_background)) <= 1.0e-12
     )
 
 

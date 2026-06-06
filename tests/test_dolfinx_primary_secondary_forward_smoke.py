@@ -507,3 +507,31 @@ def test_dolfinx_primary_secondary_operator_helper_samples_provider_on_nedelec_p
     np.testing.assert_allclose(seen["dc_points"], expected_points)
     np.testing.assert_allclose(seen["transient_points"][0], expected_points)
     np.testing.assert_allclose(built["fem_points"], expected_points)
+
+
+def test_corrected_model_default_forward_runner_runs_small_dolfinx_backend():
+    from atem3d.corrected_model import (
+        CorrectedModelValidationConfig,
+        build_corrected_model_case_specs,
+    )
+    from atem3d.corrected_model_runner import _default_forward_runner
+
+    config = CorrectedModelValidationConfig(n_observation_times=2)
+    spec = build_corrected_model_case_specs("unused", config=config)["noip"]
+    spec["empymod_kwargs"] = {"srcpts": 3}
+    spec["dolfinx_forward"] = {
+        "domain_min": [-600.0, -400.0, -50.0],
+        "domain_max": [600.0, 300.0, 50.0],
+        "cells": [1, 1, 1],
+        "outer_boundary_mode": "natural",
+        "receiver_evaluation_mode": "first_cell",
+        "ksp_type": "cg",
+        "rtol": 1.0e-8,
+        "atol": 1.0e-10,
+        "max_it": 200,
+    }
+
+    predicted = _default_forward_runner(spec)
+
+    assert predicted.shape == (2, 3)
+    assert np.all(np.isfinite(predicted))
