@@ -45,6 +45,47 @@ the threshold at or below `5%`, and passes the physical error gate. Smoke or
 partial-window runs remain useful diagnostics but are blocked from claiming
 final acceptance.
 
+## P0-P2 Task-Book Checkpoint (2026-06-06)
+
+The current task-book first-round scope is P0 through P2 only:
+
+- P0 baseline freeze is present as `dolfinx/legacy_total_field_baseline.py`,
+  while the active DOLFINx total-field workflow remains in
+  `dolfinx/sotem_pipeline.py`.
+- P1 waveform/time-grid support is implemented in `src/atem3d/waveforms.py`
+  with `Waveform`, `StepOffWaveform`, `LinearRampOffWaveform`,
+  `TabulatedWaveform`, `interval_average_didt`, and internal grids that start
+  at turn-off start, include `t_off`, and include `t_off + t_obs`.
+- P2 no-IP three-component validation artifacts are implemented through
+  `src/atem3d/validation_3comp.py`, `src/atem3d/metrics.py`,
+  `src/atem3d/source_diagnostics.py`, and the
+  `tdem-ip-forward validate-noip-3comp` CLI path.
+- The required P2 artifact set is produced:
+  `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
+  `error_summary.json`, `comparison_3comp.png`,
+  `error_curves_3comp.png`, `diagnostics.json`, and
+  `run_config_resolved.yaml`.
+- The P2 error table includes `absolute_error`,
+  `ordinary_relative_error`, `relative_error_with_floor`,
+  `peak_normalized_error`, and `pass_5pct`; the error plot includes the 5%
+  threshold line.
+- Automatic failure diagnostics include the task-book check order for time
+  step, mesh, boundary, source term, receiver sampling, magnetic recovery, and
+  IP memory checks.
+
+Verification command run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_waveform.py tests/test_time_grid.py tests/test_source_consistency.py tests/test_noip_3comp_validation_smoke.py tests/test_validation_failure_diagnostics.py tests/test_validation_3comp_cli.py tests/test_metrics.py
+```
+
+Result: `25 passed`.
+
+Known limitation for this checkpoint: this confirms the P0-P2 interfaces,
+artifact writer, and diagnostics, but it does not claim the final full
+no-IP/IP DOLFINx production model reaches the task-book `<=5%` empymod/1D
+accuracy target. That target remains part of the later P7 acceptance path.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`
