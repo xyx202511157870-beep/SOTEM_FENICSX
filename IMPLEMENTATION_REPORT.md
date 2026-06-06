@@ -2816,6 +2816,21 @@ source-term substitution inside the existing total-field equation.
   `default_2x2x1_vs_4x4x2`: `failed_time_band=late_time`,
   `physical_failed_components=[Ex,dBzdt]`, `max_physical_error=0.6238305`,
   coarse runtime `23.93 s`, refined-reference runtime `164.08 s`.
+- A follow-up no-IP domain-size diagnostic tested an enlarged box
+  `[-3000,-3000,-1500]` to `[3000,3000,200]`. The first attempt kept
+  `[2,2,1]` cells and failed before solving because no leakage-channel cell was
+  marked; a pure marker-count check showed the enlarged box needs at least
+  `[3,3,1]` coarse cells to intersect the leakage radius. The successful
+  enlarged-domain run used `[3,3,1]` coarse and `[6,6,2]` refined cells. It was
+  worse than the default domain: `failed_time_band=broadband`,
+  `physical_failed_components=[Ex,Ey,dBzdt]`, `max_physical_error=179.5094`,
+  `max_error_Ex=6.53949`, `max_error_dBzdt=0.846722`, runtime about `50.78 s`
+  coarse and `366.84 s` refined. The sweep report selected the original
+  default domain as the current best (`max_physical_error=0.6238305`). This
+  indicates that simply enlarging the domain with very coarse cells degrades
+  the 3D leakage diagnostic; the next useful step is local/skin-depth
+  refinement or receiver/source sampling diagnostics rather than another
+  coarse domain expansion.
 
 ## Next Steps
 
