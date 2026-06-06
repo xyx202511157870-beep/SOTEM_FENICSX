@@ -8,15 +8,22 @@ import json
 REQUIRED_CASES = ("noip", "ip")
 
 
-def summarize_final_acceptance(case_summaries: dict[str, dict]) -> dict:
+def summarize_final_acceptance(
+    case_summaries: dict[str, dict],
+    case_diagnostics: dict[str, dict] | None = None,
+) -> dict:
     """Summarize task-book final acceptance across no-IP and IP cases."""
 
     cases = {str(key): dict(value) for key, value in dict(case_summaries).items()}
+    diagnostics_by_case = {
+        str(key): dict(value) for key, value in dict(case_diagnostics or {}).items()
+    }
     missing_cases = [case for case in REQUIRED_CASES if case not in cases]
     passed_cases: list[str] = []
     failed_cases: list[str] = []
     blocking_reasons_by_case: dict[str, list[str]] = {}
     case_status: dict[str, dict] = {}
+    failure_diagnostics_by_case: dict[str, dict] = {}
 
     for case in REQUIRED_CASES:
         if case in missing_cases:
@@ -33,6 +40,8 @@ def summarize_final_acceptance(case_summaries: dict[str, dict]) -> dict:
             passed_cases.append(case)
         else:
             failed_cases.append(case)
+        failure_diagnostics = _failure_diagnostics(diagnostics_by_case.get(case, {}))
+        failure_diagnostics_by_case[case] = failure_diagnostics
         blocking_reasons_by_case[case] = reasons
         case_status[case] = {
             "case_type": actual_case_type,
@@ -40,9 +49,11 @@ def summarize_final_acceptance(case_summaries: dict[str, dict]) -> dict:
             "magnetic_quantity": str(summary.get("magnetic_quantity", "")),
             "final_acceptance_passed": passed,
             "blocking_reasons": reasons,
+            "failure_diagnostics": failure_diagnostics,
         }
 
     for case in missing_cases:
+        failure_diagnostics_by_case[case] = {}
         blocking_reasons_by_case[case] = ["missing_error_summary"]
         case_status[case] = {
             "case_type": "",
@@ -50,6 +61,7 @@ def summarize_final_acceptance(case_summaries: dict[str, dict]) -> dict:
             "magnetic_quantity": "",
             "final_acceptance_passed": False,
             "blocking_reasons": ["missing_error_summary"],
+            "failure_diagnostics": {},
         }
 
     final_passed = bool(not missing_cases and not failed_cases)
@@ -60,6 +72,7 @@ def summarize_final_acceptance(case_summaries: dict[str, dict]) -> dict:
         "failed_cases": failed_cases,
         "missing_cases": missing_cases,
         "blocking_reasons_by_case": blocking_reasons_by_case,
+        "failure_diagnostics_by_case": failure_diagnostics_by_case,
         "cases": case_status,
     }
 
@@ -68,6 +81,8 @@ def write_final_acceptance_report(
     *,
     noip_summary_json: str | Path,
     ip_summary_json: str | Path,
+    noip_diagnostics_json: str | Path | None = None,
+    ip_diagnostics_json: str | Path | None = None,
     output_dir: str | Path,
 ) -> dict:
     """Read no-IP/IP validation summaries and write final acceptance artifacts."""
@@ -78,7 +93,11 @@ def write_final_acceptance_report(
         "noip": _read_summary_json(noip_summary_json),
         "ip": _read_summary_json(ip_summary_json),
     }
-    summary = summarize_final_acceptance(summaries)
+    diagnostics = {
+        "noip": _read_optional_json(noip_diagnostics_json),
+        "ip": _read_optional_json(ip_diagnostics_json),
+    }
+    summary = summarize_final_acceptance(summaries, case_diagnostics=diagnostics)
     (output / "final_acceptance_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -94,6 +113,15 @@ def _read_summary_json(path: str | Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _read_optional_json(path: str | Path | None) -> dict:
+    if path is None:
+        return {}
+    path = Path(path)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _blocking_reasons(summary: dict) -> list[str]:
     status = summary.get("acceptance_status", {})
     if isinstance(status, dict):
@@ -103,6 +131,17 @@ def _blocking_reasons(summary: dict) -> list[str]:
     if bool(summary.get("final_acceptance_passed", False)):
         return []
     return ["final_acceptance_passed_false"]
+
+
+def _failure_diagnostics(diagnostics: dict) -> dict:
+    failure = diagnostics.get("validation_failure", {})
+    if not isinstance(failure, dict):
+        return {}
+    return {
+        "failed": bool(failure.get("failed", False)),
+        "reason_codes": [str(reason) for reason in failure.get("reason_codes", [])],
+        "checks": dict(failure.get("checks", {})),
+    }
 
 
 def _format_final_acceptance_report(summary: dict) -> str:
@@ -120,6 +159,29 @@ def _format_final_acceptance_report(summary: dict) -> str:
         reasons = list(reasons_by_case.get(case, []))
         if reasons:
             lines.append(f"{case}: " + ",".join(reasons))
+        else:
+            lines.append(f"{case}: none")
+    lines.append("")
+    lines.append("diagnostic_reason_codes:")
+    diagnostics_by_case = dict(summary.get("failure_diagnostics_by_case", {}))
+    for case in summary["required_cases"]:
+        diagnostics = dict(diagnostics_by_case.get(case, {}))
+        reason_codes = list(diagnostics.get("reason_codes", []))
+        if reason_codes:
+            lines.append(f"{case}: " + ",".join(reason_codes))
+        else:
+            lines.append(f"{case}: none")
+    lines.append("")
+    lines.append("diagnostic_checks:")
+    for case in summary["required_cases"]:
+        diagnostics = dict(diagnostics_by_case.get(case, {}))
+        checks = dict(diagnostics.get("checks", {}))
+        check_status = [
+            f"{name}={dict(check).get('status', '')}"
+            for name, check in sorted(checks.items())
+        ]
+        if check_status:
+            lines.append(f"{case}: " + ",".join(check_status))
         else:
             lines.append(f"{case}: none")
     lines.append("")

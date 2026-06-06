@@ -199,6 +199,8 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
         "acceptance": {
             "noip_summary_json": str(tmp_path / "noip" / "error_summary.json"),
             "ip_summary_json": str(tmp_path / "ip" / "error_summary.json"),
+            "noip_diagnostics_json": str(tmp_path / "noip" / "diagnostics.json"),
+            "ip_diagnostics_json": str(tmp_path / "ip" / "diagnostics.json"),
             "output_dir": str(output_root / "final_acceptance"),
         }
     }

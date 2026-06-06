@@ -65,6 +65,9 @@ final acceptance.
     `final_acceptance_report.txt` from no-IP/IP `error_summary.json` files.
   - Requires both no-IP and IP cases to pass their own
     `final_acceptance_passed` gates before the combined final gate passes.
+  - Optionally reads no-IP/IP `diagnostics.json` files and propagates
+    `validation_failure.reason_codes` plus structured diagnostic check status
+    into `failure_diagnostics_by_case` in the combined final report.
 
 - `src/atem3d/corrected_model.py`
   - `CorrectedModelValidationConfig`
@@ -956,6 +959,8 @@ Example config:
 acceptance:
   noip_summary_json: outputs/noip_3comp/error_summary.json
   ip_summary_json: outputs/ip_3comp/error_summary.json
+  noip_diagnostics_json: outputs/noip_3comp/diagnostics.json
+  ip_diagnostics_json: outputs/ip_3comp/diagnostics.json
   output_dir: outputs/final_acceptance
 ```
 
@@ -966,7 +971,10 @@ Outputs:
 
 The command returns exit code `0` only if both no-IP and IP summaries have
 `final_acceptance_passed=true`. It returns exit code `1` and records blocking
-reasons when either case is missing or failed.
+reasons when either case is missing or failed. When diagnostics paths are
+provided, `final_acceptance_summary.json` also includes
+`failure_diagnostics_by_case`, and the text report lists per-case diagnostic
+reason codes and check statuses.
 
 ## Writing Corrected-Model Case Specs
 
@@ -2597,7 +2605,10 @@ source-term substitution inside the existing total-field equation.
   `validate-noip-3comp` and `validate-ip-3comp`. `corrected-model-run` now
   exists as the orchestration entry point; its default DOLFINx forward runner
   is currently smoke-tested for no-IP zero-secondary cases only.
-- `tdem-ip-forward acceptance-report` summarizes no-IP/IP validation outputs; it does not create those outputs or repair failing component errors.
+- `tdem-ip-forward acceptance-report` summarizes no-IP/IP validation outputs;
+  it does not create those outputs or repair failing component errors. When
+  diagnostics paths are supplied, it also carries per-case validation-failure
+  reason codes and check statuses into the combined final report.
 - Validation artifact diagnostics now include task-book failure reason codes
   and seven structured follow-up checks: time step, mesh, boundary, source
   term, receiver sampling, magnetic recovery, and IP memory.

@@ -157,6 +157,8 @@ def _main_acceptance_report(argv: list[str]) -> int:
     summary = write_final_acceptance_report(
         noip_summary_json=cfg["noip_summary_json"],
         ip_summary_json=cfg["ip_summary_json"],
+        noip_diagnostics_json=cfg.get("noip_diagnostics_json"),
+        ip_diagnostics_json=cfg.get("ip_diagnostics_json"),
         output_dir=cfg.get("output_dir", "outputs/final_acceptance"),
     )
     output_dir = Path(cfg.get("output_dir", "outputs/final_acceptance"))
@@ -501,6 +503,8 @@ def _write_corrected_model_acceptance_config(output_root: Path, output_dirs: dic
         "acceptance": {
             "noip_summary_json": str(output_dirs["noip"] / "error_summary.json"),
             "ip_summary_json": str(output_dirs["ip"] / "error_summary.json"),
+            "noip_diagnostics_json": str(output_dirs["noip"] / "diagnostics.json"),
+            "ip_diagnostics_json": str(output_dirs["ip"] / "diagnostics.json"),
             "output_dir": str(output_root / "final_acceptance"),
         }
     }

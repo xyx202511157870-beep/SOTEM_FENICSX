@@ -58,6 +58,51 @@ def test_write_final_acceptance_report_reads_summary_paths(tmp_path):
     assert "ip: validation_scope_not_corrected_model_full" in text
 
 
+def test_write_final_acceptance_report_summarizes_case_diagnostics(tmp_path):
+    noip_path = tmp_path / "noip" / "error_summary.json"
+    ip_path = tmp_path / "ip" / "error_summary.json"
+    noip_diag_path = tmp_path / "noip" / "diagnostics.json"
+    ip_diag_path = tmp_path / "ip" / "diagnostics.json"
+    noip_path.parent.mkdir()
+    ip_path.parent.mkdir()
+    noip_path.write_text(json.dumps(_summary("noip", True)), encoding="utf-8")
+    ip_path.write_text(json.dumps(_summary("ip", False, reasons=["physical_error_gate_failed"])), encoding="utf-8")
+    noip_diag_path.write_text(json.dumps({"validation_failure": {"failed": False}}), encoding="utf-8")
+    ip_diag_path.write_text(
+        json.dumps(
+            {
+                "validation_failure": {
+                    "failed": True,
+                    "reason_codes": ["physical_error_gate_failed"],
+                    "checks": {
+                        "time_step_error": {
+                            "status": "needs_evaluation",
+                            "evidence": {"failed_times": [1.0]},
+                            "recommended_action": "rerun with denser internal time steps",
+                        }
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = write_final_acceptance_report(
+        noip_summary_json=noip_path,
+        ip_summary_json=ip_path,
+        noip_diagnostics_json=noip_diag_path,
+        ip_diagnostics_json=ip_diag_path,
+        output_dir=tmp_path / "acceptance",
+    )
+
+    ip_diagnostics = summary["failure_diagnostics_by_case"]["ip"]
+    assert ip_diagnostics["reason_codes"] == ["physical_error_gate_failed"]
+    assert ip_diagnostics["checks"]["time_step_error"]["status"] == "needs_evaluation"
+    text = (tmp_path / "acceptance" / "final_acceptance_report.txt").read_text(encoding="utf-8")
+    assert "diagnostic_reason_codes:" in text
+    assert "ip: physical_error_gate_failed" in text
+
+
 def _summary(case_type: str, passed: bool, *, reasons=None):
     reasons = [] if reasons is None else list(reasons)
     return {
