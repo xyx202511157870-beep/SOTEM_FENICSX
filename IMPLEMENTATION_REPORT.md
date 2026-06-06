@@ -13,7 +13,8 @@ This report covers the implementation rounds currently committed or staged from 
   nonzero-contrast smoke tests.
 - P6 partial: add no-IP/IP primary-secondary TDEM step kernels with zero-contrast tests.
 - P7 partial: add no-IP/IP three-component validation smoke artifact writer.
-- P8 partial: add complex-terrain leakage-channel material-map smoke utilities.
+- P8 partial: add complex-terrain leakage-channel material-map utilities and
+  a small DOLFINx primary-secondary forward smoke.
 - P7 CLI: add `validate-noip-3comp` and `validate-ip-3comp` artifact commands from CSV inputs.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
@@ -134,6 +135,11 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     on those points through `PrimarySecondaryForwardOperator`, and wires the
     DOLFINx secondary initializer, stepper, and receiver projector. A WSL
     smoke verifies the provider receives the actual Nedelec point table.
+  - Added `_make_dolfinx_materials_from_cell_material_map`, which converts a
+    `CellMaterialMap` into DG0 `sigma`, `sigma_initial`, `sigma_infinity`,
+    `mu_inv`, representative Prony material metadata, and optional spatial
+    Debye `delta_functions`. A WSL leakage-channel smoke uses this path in a
+    small DOLFINx primary-secondary forward run.
   - Added `_make_nedelec_solution_sampler_at_points` for sampling DOLFINx
     Nedelec Functions back to `(n_samples, 3)` tables. The secondary step smoke
     now exercises `rhs_to_function` plus this production `solution_to_samples`
@@ -331,6 +337,7 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 - `tests/test_noip_3comp_validation_smoke.py`
 - `tests/test_ip_3comp_validation_smoke.py`
 - `tests/test_complex_terrain_leakage_smoke.py`
+- `tests/test_dolfinx_complex_terrain_leakage_forward.py`
 - `tests/test_validation_3comp_cli.py`
 - `tests/test_source_consistency.py`
 - `tests/test_average_receivers.py`
@@ -756,6 +763,7 @@ P8 complex-terrain leakage-channel smoke tests:
 
 ```bash
 python -m pytest -q tests/test_complex_terrain_leakage_smoke.py
+python -m pytest -q tests/test_dolfinx_complex_terrain_leakage_forward.py
 ```
 
 ## Running No-IP Three-Component Validation
@@ -1999,7 +2007,10 @@ source-term substitution inside the existing total-field equation.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
-- P8 currently verifies marker/material/channel geometry utilities; it does not yet run a DOLFINx gmsh complex-terrain forward example.
+- P8 currently verifies marker/material/channel geometry utilities and runs a
+  small DOLFINx primary-secondary leakage-channel forward smoke on a unit-cube
+  mesh with DG0 material markers. A generated Gmsh terrain/leakage mesh and
+  corrected-model-scale forward example remain pending.
 - Full no-IP/IP `1e-5 s` to `1 s` 5% acceptance is not yet achieved. The latest
   full-window corrected-model no-IP run with analytic DC and
   `min_steps_before_first_observation=4` covers the full window, but the
@@ -2055,4 +2066,5 @@ source-term substitution inside the existing total-field equation.
    full corrected-model primary-secondary run.
 8. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
 9. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
-10. Continue P8 by generating a gmsh terrain/leakage mesh and running a small DOLFINx forward example.
+10. Continue P8 by generating a Gmsh terrain/leakage mesh and running the
+    DOLFINx primary-secondary forward path on that generated mesh.

@@ -1416,6 +1416,109 @@ def _assign_dg0_by_cell_values(function, cells, values) -> None:
         arr[dofs] = float(value)
 
 
+def _make_dolfinx_materials_from_cell_material_map(
+    msh,
+    spaces,
+    material_map,
+    *,
+    dt: float,
+    mu_inv_value: float = 1.0,
+):
+    """Convert a cell-marker material map into DOLFINx DG0 material fields."""
+
+    import numpy as np
+    from dolfinx import fem
+
+    from atem3d.materials.prony import DebyeTerm, PronyConductivity
+
+    Q = spaces["Q"]
+    n_local = msh.topology.index_map(msh.topology.dim).size_local
+    markers = np.asarray(material_map.markers, dtype=int)
+    if markers.shape != (n_local,):
+        raise ValueError("material_map markers must match the number of local cells")
+    dt_value = float(dt)
+    if dt_value <= 0.0 or not math.isfinite(dt_value):
+        raise ValueError("dt must be finite and positive")
+    cells = np.arange(n_local, dtype=np.int32)
+
+    sigma_initial_values = np.asarray(material_map.sigma0(), dtype=float)
+    sigma_infinity_values = np.asarray(material_map.sigma_inf(), dtype=float)
+    term_taus = []
+    for cell in range(n_local):
+        for term in material_map.material_for_cell(cell).terms:
+            tau = float(term.tau)
+            if tau not in term_taus:
+                term_taus.append(tau)
+    term_taus.sort()
+    delta_values_by_tau = {tau: np.zeros(n_local, dtype=float) for tau in term_taus}
+    for cell in range(n_local):
+        for term in material_map.material_for_cell(cell).terms:
+            delta_values_by_tau[float(term.tau)][cell] += float(term.delta_sigma)
+
+    sigma_eff_values = sigma_infinity_values.copy()
+    representative_terms = []
+    delta_functions = []
+    for tau in term_taus:
+        delta_values = delta_values_by_tau[tau]
+        beta = dt_value / (tau + dt_value)
+        sigma_eff_values -= beta * delta_values
+        representative_terms.append(DebyeTerm(delta_sigma=float(np.max(delta_values)), tau=tau))
+        delta_fn = fem.Function(Q, name=f"delta_sigma_tau_{tau:.3e}")
+        _assign_dg0_by_cell_values(delta_fn, cells, delta_values)
+        delta_fn.x.scatter_forward()
+        delta_functions.append(delta_fn)
+
+    sigma = fem.Function(Q, name="sigma")
+    sigma_initial = fem.Function(Q, name="sigma_initial")
+    sigma_infinity = fem.Function(Q, name="sigma_infinity")
+    mu_inv = fem.Function(Q, name="mu_inv")
+    _assign_dg0_by_cell_values(sigma, cells, sigma_eff_values)
+    _assign_dg0_by_cell_values(sigma_initial, cells, sigma_initial_values)
+    _assign_dg0_by_cell_values(sigma_infinity, cells, sigma_infinity_values)
+    _assign_dg0_by_cell_values(mu_inv, cells, np.full(n_local, float(mu_inv_value), dtype=float))
+    for function in (sigma, sigma_initial, sigma_infinity, mu_inv):
+        function.x.scatter_forward()
+
+    if representative_terms:
+        representative_material = PronyConductivity(
+            sigma_inf=float(np.max(sigma_infinity_values)),
+            terms=representative_terms,
+        )
+        polarizable_cells = np.flatnonzero(
+            np.sum(np.vstack([delta_values_by_tau[tau] for tau in term_taus]), axis=0) > 0.0
+        ).astype(np.int32)
+        debye = {
+            "terms": tuple(representative_terms),
+            "delta_functions": delta_functions,
+            "polarizable_cells": polarizable_cells,
+        }
+    else:
+        representative_material = PronyConductivity.no_ip(float(np.max(sigma_infinity_values)))
+        debye = None
+
+    background_marker = int(np.min(markers))
+    marker_counts = {str(int(marker)): int(np.count_nonzero(markers == marker)) for marker in np.unique(markers)}
+    return {
+        "materials": {
+            "sigma": sigma,
+            "sigma_initial": sigma_initial,
+            "sigma_infinity": sigma_infinity,
+            "mu_inv": mu_inv,
+        },
+        "debye": debye,
+        "representative_material": representative_material,
+        "diagnostics": {
+            "cell_count": int(n_local),
+            "marker_counts": marker_counts,
+            "leakage_cell_count": int(np.count_nonzero(markers != background_marker)),
+            "sigma0_min": float(np.min(sigma_initial_values)),
+            "sigma0_max": float(np.max(sigma_initial_values)),
+            "sigma_inf_min": float(np.min(sigma_infinity_values)),
+            "sigma_inf_max": float(np.max(sigma_infinity_values)),
+        },
+    }
+
+
 def _copy_dg0_function(function, name: str):
     from dolfinx import fem
 
