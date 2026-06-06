@@ -93,9 +93,6 @@ def test_empymod_primary_provider_delays_import_until_evaluation():
     provider = EmpymodPrimaryProvider(config={"src": "placeholder"})
     assert isinstance(provider, PrimaryFieldProvider)
 
-    with pytest.raises(NotImplementedError, match="EmpymodPrimaryProvider"):
-        provider.get_receiver_E(0.1, np.array([[0.0, 0.0, 0.0]]))
-
 
 def test_empymod_primary_provider_skeleton_does_not_require_empymod(monkeypatch):
     original_import = builtins.__import__
@@ -106,10 +103,35 @@ def test_empymod_primary_provider_skeleton_does_not_require_empymod(monkeypatch)
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    provider = EmpymodPrimaryProvider(config={})
+    provider = EmpymodPrimaryProvider(config=_empymod_provider_config())
 
-    with pytest.raises(NotImplementedError, match="EmpymodPrimaryProvider"):
+    with pytest.raises(ModuleNotFoundError, match="empymod"):
         provider.get_receiver_dBdt(0.1, np.array([[0.0, 0.0, 0.0]]))
+
+
+def test_empymod_primary_provider_uses_default_run_empymod_reference(monkeypatch):
+    from atem3d import empymod_compare
+
+    seen = {}
+
+    def fake_reference(survey, **kwargs):
+        seen["components"] = survey.components
+        seen["times"] = survey.times.copy()
+        seen["kwargs"] = kwargs
+        return np.array([[1.0, 2.0, 3.0]])
+
+    monkeypatch.setattr(empymod_compare, "run_empymod_reference", fake_reference)
+    provider = EmpymodPrimaryProvider(
+        config=_empymod_provider_config(),
+        empymod_kwargs={"srcpts": 11},
+    )
+
+    values = provider.get_receiver_E(0.5, np.array([[0.0, 10.0, -0.5]]))
+
+    np.testing.assert_allclose(values, [[1.0, 2.0, 3.0]])
+    assert seen["components"] == ["Ex", "Ey", "Ez"]
+    np.testing.assert_allclose(seen["times"], [0.5])
+    assert seen["kwargs"] == {"srcpts": 11}
 
 
 def test_empymod_primary_provider_get_receiver_E_uses_reference_runner():

@@ -51,8 +51,6 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
         components: list[str],
     ) -> np.ndarray:
         runner = self.reference_runner
-        if runner is None:
-            raise NotImplementedError("EmpymodPrimaryProvider receiver sampling is not implemented yet")
 
         from atem3d.empymod_compare import EmpymodSurvey
 
@@ -75,7 +73,15 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
             receiver_components=flat,
             coordinate_system=str(self.config.get("coordinate_system", "depth_down")),
         )
-        values = np.asarray(runner(survey, **(self.empymod_kwargs or {})), dtype=float)
+        if runner is None:
+            from atem3d import empymod_compare
+
+            values = np.asarray(
+                empymod_compare.run_empymod_reference(survey, **(self.empymod_kwargs or {})),
+                dtype=float,
+            )
+        else:
+            values = np.asarray(runner(survey, **(self.empymod_kwargs or {})), dtype=float)
         if values.shape != (1, receivers.shape[0] * len(components)):
             raise ValueError("reference_runner returned an unexpected receiver table shape")
         return values.reshape(receivers.shape[0], len(components))
