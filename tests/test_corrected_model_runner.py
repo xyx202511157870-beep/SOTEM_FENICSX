@@ -373,7 +373,9 @@ def test_published_paper_model_target_spec_records_public_reference_metadata(tmp
     assert spec["published_reference"]["publication_date"] == "February 2025"
     assert spec["published_reference"]["article_id"] == "S092698512400329X"
     assert spec["published_reference"]["doi"] == "10.1016/j.jappgeo.2024.105613"
-    assert spec["published_reference"]["reproduction_status"] == "target_defined_full_text_parameters_pending"
+    assert spec["published_reference"]["reproduction_status"] == (
+        "full_text_model_parameters_extracted_response_digitization_pending"
+    )
     assert spec["published_reference"]["public_method_summary"] == {
         "frequency_domain_solver": "COMSOL",
         "time_domain_transform": "frequency-time transformation",
@@ -391,7 +393,30 @@ def test_published_paper_model_target_spec_records_public_reference_metadata(tmp
     assert spec["model"]["source_length_m"] == 1000.0
     assert spec["model"]["parallel_offset_m"] == 500.0
     assert spec["model"]["calculation_domain_m"] == [4000.0, 4000.0, 1000.0]
-    assert "ip_anomaly_geometry" in spec["full_text_parameters_required"]
+    assert spec["paper_model_parameters"]["accuracy_benchmark_layer"]["polarized_layer_thickness_m"] == 200.0
+    assert spec["paper_model_parameters"]["accuracy_benchmark_layer"]["cole_cole"] == {
+        "M": 0.3,
+        "c": 0.5,
+        "tau_s": 1.0,
+        "sigma0_s_per_m": 0.01,
+    }
+    layer = spec["paper_model_parameters"]["layered_polarization_model"]
+    assert layer["calculation_domain_m"] == [4000.0, 4000.0, 1000.0]
+    assert layer["infinite_element_layer_thickness_m"] == 100.0
+    assert layer["frequency_range_hz"] == [0.001, 10000.0]
+    assert layer["frequency_count"] == 81
+    assert layer["memory_gbytes"] == 15.7
+    assert layer["printed_source_position_note"] == "paper prints source along x=200 m; corrected working geometry uses y=200 m"
+    anomaly = spec["paper_model_parameters"]["three_dimensional_polarized_body"]
+    assert anomaly["body_size_m"] == [400.0, 400.0, 400.0]
+    assert anomaly["body_center_m"] == [0.0, -300.0, 400.0]
+    assert anomaly["observation_point_m"] == [0.0, -400.0, 0.0]
+    assert anomaly["high_resistivity_ohm_m"] == 1000.0
+    assert anomaly["low_resistivity_ohm_m"] == 10.0
+    assert anomaly["time_window_after_turnoff_s"] == [0.0001, 1.0]
+    assert anomaly["time_count"] == 41
+    assert spec["paper_response_targets"]["digitized_response_required"] is True
+    assert "digitized_or_tabulated_published_response_values" in spec["remaining_reproduction_requirements"]
 
 
 def test_published_paper_model_spec_cli_writes_json(tmp_path):

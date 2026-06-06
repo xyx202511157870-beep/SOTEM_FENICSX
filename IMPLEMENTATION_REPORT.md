@@ -2905,6 +2905,23 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_convergence_sweep_report.py` with `2 passed`
   and `python -m pytest -q` with all tests passing (`703 passed`,
   `2 skipped`).
+- The published-paper reproduction target for Song et al. (2025) now records
+  the model parameters extracted from the local full-text PDF: the 1D/3D
+  accuracy benchmark layer (`200 m`, Cole-Cole `M=0.3`, `c=0.5`, `tau=1 s`,
+  `sigma0=0.01 S/m`), the layered polarization model (`4000 m x 4000 m x
+  1000 m` domain, `100 m` infinite-element layer, `10 m` minimum cell size,
+  `265,670` elements, `0.001-10000 Hz`, `81` frequencies, reported
+  `248 min` runtime and `15.7 GB` memory), and the 3D polarized-body model
+  (`400 m x 400 m x 400 m` body centered at `(0,-300,400)`, receiver
+  `(0,-400,0)`, background `100 ohm m`, high/low anomalies `1000/10 ohm m`,
+  Cole-Cole `M=0.6`, `c=0.6`, `tau=1 s`, `0.1 ms-1000 ms`, `41` times).
+  The spec status is now
+  `full_text_model_parameters_extracted_response_digitization_pending`;
+  numerical reproduction is still blocked on digitized or tabulated values
+  from the paper response figures. Windows verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py` with `15 passed`
+  and `python -m pytest -q` with all tests passing (`703 passed`,
+  `2 skipped`).
 
 ## Next Steps
 

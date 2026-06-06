@@ -217,10 +217,10 @@ def build_corrected_leakage_channel_case_specs(
 def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
     """Return the published SOTEM paper target metadata for later reproduction.
 
-    The public abstract/search metadata identifies the paper and its broad SOTEM
-    setup. Full numerical reproduction still needs the paper's tabulated model,
-    receiver, and IP-anomaly parameters before this can be used as an accuracy
-    acceptance reference.
+    The local full-text extraction identifies the paper's benchmark, layered,
+    and 3D polarized-body model parameters. Numerical reproduction still needs
+    digitized or tabulated response curves before this can be used as an
+    accuracy acceptance reference.
     """
 
     cfg = CorrectedModelValidationConfig()
@@ -235,7 +235,8 @@ def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
             "article_id": "S092698512400329X",
             "doi": "10.1016/j.jappgeo.2024.105613",
             "url": "https://www.sciencedirect.com/science/article/pii/S092698512400329X",
-            "reproduction_status": "target_defined_full_text_parameters_pending",
+            "reproduction_status": "full_text_model_parameters_extracted_response_digitization_pending",
+            "parameter_source": "local_full_text_extraction_tmp_pdfs_song2025_full_text_txt",
             "public_method_summary": {
                 "frequency_domain_solver": "COMSOL",
                 "time_domain_transform": "frequency-time transformation",
@@ -263,6 +264,95 @@ def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
             "background_conductivity_s_per_m": float(cfg.sigma_background),
             "calculation_domain_m": [4000.0, 4000.0, 1000.0],
         },
+        "paper_model_parameters": {
+            "accuracy_benchmark_layer": {
+                "purpose": "3D finite-element accuracy check against 1D analytical solutions",
+                "homogeneous_earth_sigma_s_per_m": 0.01,
+                "polarized_layer_thickness_m": 200.0,
+                "source_current_a": 10.0,
+                "source_length_m": 1000.0,
+                "offset_m": 500.0,
+                "components": ["Ex", "Hz"],
+                "paper_figures": ["Fig. 2", "Fig. 3"],
+                "paper_reported_error": "relative errors within 5%",
+                "cole_cole": {
+                    "M": 0.3,
+                    "c": 0.5,
+                    "tau_s": 1.0,
+                    "sigma0_s_per_m": 0.01,
+                },
+            },
+            "layered_polarization_model": {
+                "purpose": "half-space with middle polarizable layer, with and without IP",
+                "air_sigma_s_per_m": 1.0e-6,
+                "halfspace_sigma_s_per_m": 0.01,
+                "calculation_domain_m": [4000.0, 4000.0, 1000.0],
+                "infinite_element_layer_thickness_m": 100.0,
+                "minimum_cell_size_m": 10.0,
+                "element_count": 265670,
+                "frequency_range_hz": [0.001, 10000.0],
+                "frequencies_per_decade": 10,
+                "frequency_count": 81,
+                "reported_runtime_min": 248.0,
+                "memory_gbytes": 15.7,
+                "source_current_a": 10.0,
+                "source_length_m": 1000.0,
+                "offset_m": 500.0,
+                "observation_point_printed_m": [-300.0, 0.0, 0.0],
+                "printed_source_position_note": (
+                    "paper prints source along x=200 m; corrected working geometry uses y=200 m"
+                ),
+                "polarized_layer_thickness_m": 300.0,
+                "polarized_layer_resistivity_ohm_m": 100.0,
+                "cole_cole": {
+                    "M": 0.3,
+                    "c": 0.3,
+                    "tau_s": 1.0,
+                },
+                "time_domain_figures": ["Fig. 7", "Fig. 8", "Fig. 9", "Fig. 10"],
+                "frequency_domain_figures": ["Fig. 5", "Fig. 6"],
+                "reported_time_samples_s": [0.0001, 0.1],
+            },
+            "three_dimensional_polarized_body": {
+                "purpose": "high- and low-resistivity 3D polarized-body IP response",
+                "body_size_m": [400.0, 400.0, 400.0],
+                "body_center_m": [0.0, -300.0, 400.0],
+                "source_center_m": [0.0, 0.0, 0.0],
+                "source_orientation": "x_axis",
+                "observation_point_m": [0.0, -400.0, 0.0],
+                "background_resistivity_ohm_m": 100.0,
+                "high_resistivity_ohm_m": 1000.0,
+                "low_resistivity_ohm_m": 10.0,
+                "cole_cole": {
+                    "M": 0.6,
+                    "c": 0.6,
+                    "tau_s": 1.0,
+                },
+                "time_window_after_turnoff_s": [0.0001, 1.0],
+                "time_count": 41,
+                "responses_use_absolute_value_when_sign_changes": True,
+                "low_resistivity_ex_sign_reversal_approx_s": 0.003,
+                "low_resistivity_hz_sign_reversals_approx_s": [0.03, 0.58],
+                "response_figures": {
+                    "low_resistivity_ex": "Fig. 12",
+                    "low_resistivity_hz": "Fig. 15",
+                    "low_resistivity_ex_sections": ["Fig. 13", "Fig. 14"],
+                    "low_resistivity_hz_sections": ["Fig. 16", "Fig. 17"],
+                    "high_resistivity_ex": "Fig. 18",
+                },
+            },
+        },
+        "paper_response_targets": {
+            "digitized_response_required": True,
+            "candidate_overlay_figures": ["Fig. 2", "Fig. 3", "Fig. 7", "Fig. 8", "Fig. 12", "Fig. 15"],
+            "components": ["Ex", "Hz"],
+            "comparison_outputs": [
+                "paper_response_overlay.png",
+                "paper_relative_error_curves.png",
+                "runtime_diagnostics.json",
+            ],
+            "acceptance_blocker": "paper curves are currently image figures, not tabulated numeric references",
+        },
         "run_contract": {
             "output_root": str(Path(output_root)),
             "validation_scope": "published_paper_reproduction_target",
@@ -274,12 +364,9 @@ def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
                 "runtime_diagnostics.json",
             ],
         },
-        "full_text_parameters_required": [
-            "terrain_surface_or_layer_geometry",
-            "ip_anomaly_geometry",
-            "ip_anomaly_prony_or_cole_cole_parameters",
-            "all_receiver_locations_and_components",
+        "remaining_reproduction_requirements": [
             "paper_plot_time_channels",
             "digitized_or_tabulated_published_response_values",
         ],
+        "full_text_parameters_required": [],
     }
