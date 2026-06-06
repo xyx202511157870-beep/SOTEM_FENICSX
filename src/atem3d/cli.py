@@ -609,10 +609,10 @@ def _main_validate_secondary(argv: list[str]) -> int:
         json.dumps(diagnostics, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    import yaml
+    from .yaml_io import safe_dump_yaml
 
     (output_dir / "run_config_resolved.yaml").write_text(
-        yaml.safe_dump(cfg, sort_keys=True),
+        safe_dump_yaml(cfg, sort_keys=True),
         encoding="utf-8",
     )
     print(f"wrote {path}")

@@ -216,6 +216,24 @@ wsl --shutdown; wsl -l -v
 Results: `2 passed`, `29 passed`, full pytest passed, and WSL reported
 `Ubuntu Stopped`.
 
+## Secondary Validation CLI YAML Fallback Checkpoint (2026-06-06)
+
+`tdem-ip-forward validate-secondary CONFIG` now writes
+`run_config_resolved.yaml` through `atem3d.yaml_io.safe_dump_yaml(...)`
+instead of importing `yaml` directly. This keeps the task-book
+primary-secondary zero-contrast CLI usable in minimal WSL/FEniCSx
+environments where PyYAML is not installed, while preserving YAML-readable
+resolved configuration output.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_cli_subcommands.py::test_cli_validate_secondary_uses_yaml_fallback_when_pyyaml_missing tests/test_cli_subcommands.py tests/test_yaml_io.py
+python -m pytest -q
+```
+
+Results: `12 passed` and full pytest passed.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

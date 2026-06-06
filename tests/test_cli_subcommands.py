@@ -1,3 +1,4 @@
+import builtins
 import json
 
 import yaml
@@ -81,6 +82,40 @@ def test_cli_validate_secondary_writes_zero_contrast_summary(tmp_path):
     assert diagnostics["validation_type"] == "secondary_zero_contrast"
     resolved = yaml.safe_load((output_dir / "run_config_resolved.yaml").read_text(encoding="utf-8"))
     assert resolved["sigma"] == 0.01
+
+
+def test_cli_validate_secondary_uses_yaml_fallback_when_pyyaml_missing(tmp_path, monkeypatch):
+    output_dir = tmp_path / "secondary_no_yaml"
+    config_path = tmp_path / "secondary.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "output_dir": str(output_dir),
+                "Ep0": [[1.0, 0.0, 0.0]],
+                "sigma": 0.01,
+                "sigma_background": 0.01,
+                "times": [1.0e-5],
+                "threshold": 1.0e-12,
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yaml":
+            raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    exit_code = cli.main(["validate-secondary", str(config_path)])
+
+    assert exit_code == 0
+    resolved_text = (output_dir / "run_config_resolved.yaml").read_text(encoding="utf-8")
+    assert "sigma: 0.01" in resolved_text
+    summary = json.loads((output_dir / "secondary_validation_summary.json").read_text(encoding="utf-8"))
+    assert summary["pass_zero_contrast"] is True
 
 
 def test_cli_validate_secondary_writes_forward_core_predictions(tmp_path):
