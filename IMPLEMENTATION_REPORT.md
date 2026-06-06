@@ -234,6 +234,30 @@ python -m pytest -q
 
 Results: `12 passed` and full pytest passed.
 
+## Task-Book Pytest File Coverage Checkpoint (2026-06-06)
+
+The task-book named pytest files are now present under `tests/`, including:
+`test_error_metric_floor.py`, `test_noip_3comp_validation_smoke.py`,
+`test_ip_3comp_validation_smoke.py`, `test_dbdt_components_from_curl.py`,
+`test_hz_recovery_modes.py`, `test_empymod_reference_table_io.py`,
+`test_waveform.py`, `test_time_grid.py`, `test_prony.py`,
+`test_source_consistency.py`, `test_dc_initialization.py`,
+`test_secondary_zero_contrast.py`, `test_debye_update.py`, and
+`test_receivers.py`.
+
+The newly added tests cover Backward-Euler Debye memory updates, zero-delta
+Ohmic degeneration, receiver dB/dt component flattening, Hz recovery mode
+diagnostics, and reference CSV component/table validation.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_debye_update.py tests/test_dbdt_components_from_curl.py tests/test_hz_recovery_modes.py tests/test_empymod_reference_table_io.py tests/test_dolfinx_biot_receiver.py tests/test_primary_secondary_forward.py tests/test_cli_subcommands.py
+python -m pytest -q
+```
+
+Results: `27 passed` and full pytest passed.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`
