@@ -3780,7 +3780,8 @@ def _make_nedelec_rhs_interpolator_from_samples(
         values = np.asarray(samples, dtype=float)
         if values.ndim != 2 or values.shape[1] != 3 or values.shape[0] == 0:
             raise ValueError("secondary RHS samples must have shape (n_samples, 3)")
-        if np.allclose(values, values[0], rtol=0.0, atol=0.0):
+        constant_atol = max(1.0e-14, 1.0e-12 * float(np.max(np.abs(values))))
+        if np.allclose(values, values[0], rtol=1.0e-12, atol=constant_atol):
             vector = values[0].copy()
 
             def constant_field(x):
@@ -4079,6 +4080,110 @@ def _make_dolfinx_secondary_step_solver(
         return result
 
     return solve
+
+
+def _make_dolfinx_primary_secondary_forward_adapters(
+    msh,
+    spaces,
+    materials,
+    operators,
+    config: PipelineConfig,
+    fem_points,
+    *,
+    sigma_background: float,
+):
+    """Wire DOLFINx secondary solves into the pure primary-secondary core.
+
+    The pure core currently passes the no-IP DC secondary callback a scalar
+    contrast-weighted ``(sigma0 - sigma_b) Ep0`` sample table.  This adapter
+    is therefore limited to uniform scalar ``sigma_initial`` contrast and
+    reconstructs ``Ep0`` before calling the DOLFINx scalar-potential DC solve.
+    Variable-material primary-secondary wiring should use a DOLFINx-native
+    operator path instead of this scalar bridge.
+    """
+
+    import numpy as np
+    from dolfinx import fem
+
+    points = np.asarray(fem_points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] == 0:
+        raise ValueError("fem_points must have shape (n_points, 3)")
+    sigma_b = float(sigma_background)
+    if sigma_b <= 0.0 or not math.isfinite(sigma_b):
+        raise ValueError("sigma_background must be finite and positive")
+    sigma_initial = materials.get("sigma_initial", materials["sigma"])
+    sigma_values = np.asarray(sigma_initial.x.array, dtype=float)
+    if sigma_values.size == 0:
+        raise ValueError("sigma_initial must contain local DG values")
+    sigma0 = float(sigma_values[0])
+    if not np.allclose(sigma_values, sigma0, rtol=1.0e-12, atol=1.0e-14):
+        raise ValueError("DOLFINx primary-secondary scalar adapter requires uniform sigma_initial")
+    contrast = sigma0 - sigma_b
+    if abs(contrast) <= max(1.0e-14, 1.0e-12 * abs(sigma_b)):
+        raise ValueError("nonzero contrast is required for this adapter")
+
+    sample_to_function = _make_nedelec_rhs_interpolator_from_samples(
+        spaces,
+        sample_points=points,
+        name="primary_secondary_sample_field",
+    )
+    sample_solution = _make_nedelec_solution_sampler_at_points(msh, points)
+    latest_secondary = {
+        "E": fem.Function(spaces["V"], name="E_secondary_latest"),
+        "dc_result": None,
+    }
+    latest_secondary["E"].x.array[:] = 0.0
+    latest_secondary["E"].x.scatter_forward()
+
+    def secondary_field_solver(contrast_weighted_Ep0):
+        contrast_weighted = np.asarray(contrast_weighted_Ep0, dtype=float)
+        Ep0_samples = contrast_weighted / contrast
+        Ep0_function = sample_to_function(Ep0_samples)
+        result = _solve_dc_secondary_field(
+            msh,
+            spaces,
+            materials,
+            Ep0_function,
+            config,
+            sigma_background=sigma_b,
+        )
+        latest_secondary["E"] = result["Es0"]
+        latest_secondary["dc_result"] = result
+        return None, sample_solution(result["Es0"], Ep0_samples)
+
+    def solution_to_samples(solution, rhs_samples):
+        latest_secondary["E"] = solution
+        return sample_solution(solution, rhs_samples)
+
+    secondary_step_solver = _make_dolfinx_secondary_step_solver(
+        spaces,
+        operators,
+        config,
+        rhs_to_function=_make_nedelec_rhs_interpolator_from_samples(
+            spaces,
+            sample_points=points,
+            name="secondary_rhs_density",
+        ),
+        solution_to_samples=solution_to_samples,
+    )
+
+    def electric_getter(_state, _Ep_new, _time_value, _dt):
+        return latest_secondary["E"]
+
+    def dbdt_getter(_state, _Ep_new, _time_value, _dt):
+        return compute_dbdt(latest_secondary["E"], spaces)
+
+    return {
+        "secondary_field_solver": secondary_field_solver,
+        "secondary_step_solver": secondary_step_solver,
+        "secondary_receiver_projector": _make_secondary_receiver_projector_from_evaluate_receivers(
+            electric_getter,
+            dbdt_getter,
+            msh=msh,
+            config=config,
+        ),
+        "diagnostics": latest_secondary,
+    }
 
 
 def _update_debye_memories(debye, memories, E_new, dt: float) -> None:
