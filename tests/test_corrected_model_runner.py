@@ -220,6 +220,8 @@ def test_published_paper_model_target_spec_records_public_reference_metadata(tmp
 
     assert spec["published_reference"]["title"] == "Analysis of 3D induced polarization effects of SOTEM"
     assert spec["published_reference"]["journal"] == "Journal of Applied Geophysics"
+    assert spec["published_reference"]["volume"] == "233"
+    assert spec["published_reference"]["publication_date"] == "February 2025"
     assert spec["published_reference"]["article_id"] == "S092698512400329X"
     assert spec["published_reference"]["doi"] == "10.1016/j.jappgeo.2024.105613"
     assert spec["published_reference"]["reproduction_status"] == "target_defined_full_text_parameters_pending"

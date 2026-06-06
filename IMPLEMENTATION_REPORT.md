@@ -935,7 +935,8 @@ The currently selected published model target is:
 ```text
 title = Analysis of 3D induced polarization effects of SOTEM
 journal = Journal of Applied Geophysics
-volume = 226
+volume = 233
+publication_date = February 2025
 article_number = 105613
 article_id = S092698512400329X
 doi = 10.1016/j.jappgeo.2024.105613
@@ -972,6 +973,11 @@ digitized_or_tabulated_published_response_values
 Current status: this is a reproducibility target definition only. It is not yet
 a completed reproduction of the published response curves, because the full
 paper model tables/figure values have not been extracted into the run spec.
+The public pages checked so far expose enough information to identify the
+target and coarse setup, but not enough to digitize the published response
+curves or define the full 3D IP anomaly. The next reproducibility step is to
+extract the missing model table/figure data from the full article text or a
+user-supplied PDF, then add those values to this spec and run the overlay.
 
 A WSL CLI smoke completed under:
 

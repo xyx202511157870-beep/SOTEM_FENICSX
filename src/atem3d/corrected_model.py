@@ -162,7 +162,8 @@ def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
         "published_reference": {
             "title": "Analysis of 3D induced polarization effects of SOTEM",
             "journal": "Journal of Applied Geophysics",
-            "volume": "226",
+            "volume": "233",
+            "publication_date": "February 2025",
             "article_number": "105613",
             "article_id": "S092698512400329X",
             "doi": "10.1016/j.jappgeo.2024.105613",
