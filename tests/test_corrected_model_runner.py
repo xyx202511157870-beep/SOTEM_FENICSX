@@ -1,6 +1,8 @@
 import json
 import builtins
+import importlib
 import sys
+from types import SimpleNamespace
 import types
 
 import numpy as np
@@ -18,6 +20,7 @@ from atem3d.corrected_model_runner import run_corrected_model_validation
 from atem3d.corrected_model_runner import run_corrected_model_convergence_validation
 from atem3d.corrected_model_runner import _default_forward_runner
 from atem3d.corrected_model_runner import _default_reference_runner
+from atem3d.corrected_model_runner import dolfinx_backend_status
 
 
 def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
@@ -190,6 +193,38 @@ def test_default_forward_runner_reports_incomplete_dolfinx_backend(tmp_path, mon
         _default_forward_runner(spec)
 
 
+def test_dolfinx_backend_status_reports_runtime_and_test_dependencies(monkeypatch):
+    missing = {"pytest"}
+    imported = []
+
+    def fake_import_module(name):
+        imported.append(name)
+        if name in missing:
+            raise ImportError(f"No module named {name!r}")
+        return SimpleNamespace(__file__=f"/fake/{name.replace('.', '/')}.py")
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+    status = dolfinx_backend_status()
+
+    assert status["available"] is True
+    assert status["runtime_modules"] == [
+        "numpy",
+        "dolfinx.fem",
+        "dolfinx.mesh",
+        "mpi4py.MPI",
+        "ufl",
+        "basix",
+        "petsc4py",
+    ]
+    assert status["test_modules"] == ["pytest"]
+    assert status["missing_modules"] == []
+    assert status["missing_test_modules"] == ["pytest"]
+    assert status["python_executable"]
+    assert set(status["checks"]) == set(status["runtime_modules"] + status["test_modules"])
+    assert imported == status["runtime_modules"] + status["test_modules"]
+
+
 def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch):
     specs = build_corrected_model_case_specs(tmp_path / "from_spec")
     spec_path = tmp_path / "spec.json"
@@ -246,6 +281,7 @@ def test_dolfinx_backend_check_cli_writes_unavailable_status(tmp_path, monkeypat
             "available": False,
             "required_modules": ["dolfinx.fem", "dolfinx.mesh", "mpi4py.MPI"],
             "missing_modules": ["dolfinx.fem"],
+            "missing_test_modules": ["pytest"],
             "checks": {
                 "dolfinx.fem": {"available": False, "error": "missing"},
             },
@@ -264,6 +300,7 @@ def test_dolfinx_backend_check_cli_writes_unavailable_status(tmp_path, monkeypat
     assert payload["available"] is False
     assert payload["missing_modules"] == ["dolfinx.fem"]
     assert "available: False" in captured.out
+    assert "missing_test_modules: pytest" in captured.out
 
 
 def test_corrected_model_convergence_run_cli_dispatches_selected_cases(tmp_path, monkeypatch):

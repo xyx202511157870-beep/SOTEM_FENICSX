@@ -202,9 +202,19 @@ def _default_forward_runner(case_spec: dict) -> np.ndarray:
 def dolfinx_backend_status() -> dict:
     """Return import diagnostics for the default DOLFINx forward backend."""
 
-    required_modules = ["dolfinx.fem", "dolfinx.mesh", "mpi4py.MPI"]
+    runtime_modules = [
+        "numpy",
+        "dolfinx.fem",
+        "dolfinx.mesh",
+        "mpi4py.MPI",
+        "ufl",
+        "basix",
+        "petsc4py",
+    ]
+    test_modules = ["pytest"]
+    required_modules = list(runtime_modules)
     checks: dict[str, dict[str, object]] = {}
-    for module_name in required_modules[:2]:
+    for module_name in runtime_modules + test_modules:
         try:
             module = importlib.import_module(module_name)
             checks[module_name] = {
@@ -216,19 +226,8 @@ def dolfinx_backend_status() -> dict:
                 "available": False,
                 "error": str(exc),
             }
-    try:
-        from mpi4py import MPI
-
-        checks["mpi4py.MPI"] = {
-            "available": True,
-            "module_file": getattr(MPI, "__file__", None),
-        }
-    except ImportError as exc:
-        checks["mpi4py.MPI"] = {
-            "available": False,
-            "error": str(exc),
-        }
-    missing = [name for name, item in checks.items() if not bool(item["available"])]
+    missing = [name for name in runtime_modules if not bool(checks[name]["available"])]
+    missing_test = [name for name in test_modules if not bool(checks[name]["available"])]
     available = not missing
     if available:
         message = "DOLFINx forward backend is available."
@@ -242,8 +241,13 @@ def dolfinx_backend_status() -> dict:
     return {
         "available": available,
         "required_modules": required_modules,
+        "runtime_modules": runtime_modules,
+        "test_modules": test_modules,
         "missing_modules": missing,
+        "missing_test_modules": missing_test,
         "checks": checks,
+        "python_executable": sys.executable,
+        "python_version": sys.version,
         "message": message,
     }
 

@@ -3448,6 +3448,22 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_noip_3comp_validation_smoke.py::test_final_acceptance_requires_strict_three_component_error_gate`,
   `python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_validation_failure_diagnostics.py tests/test_final_acceptance.py tests/test_dolfinx_validation_artifacts.py tests/test_error_metric_floor.py`,
   and `python -m pytest -q`, all with exit code 0.
+- DOLFINx backend readiness diagnostic checkpoint (2026-06-06): expanded
+  `dolfinx_backend_status` and the `tdem-ip-forward dolfinx-backend-check`
+  command to report full runtime modules (`numpy`, `dolfinx.fem`,
+  `dolfinx.mesh`, `mpi4py.MPI`, `ufl`, `basix`, `petsc4py`), test modules
+  (`pytest`), per-module import results, and Python executable/version. The
+  runtime gate still blocks only on missing forward-runtime modules, while
+  missing test modules are reported separately. Current WSL inspection found
+  Ubuntu 24.04 without passwordless sudo, without pip/conda/mamba/uv, and
+  missing `numpy`, `pytest`, `dolfinx.fem`, `dolfinx.mesh`, `mpi4py.MPI`,
+  `ufl`, `basix`, and `petsc4py`; `wsl --shutdown` was run afterward and
+  `Ubuntu` was confirmed `Stopped`. Windows verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py::test_dolfinx_backend_check_cli_writes_unavailable_status tests/test_corrected_model_runner.py::test_dolfinx_backend_status_reports_runtime_and_test_dependencies`,
+  `python -m pytest -q tests/test_corrected_model_runner.py tests/test_cli_subcommands.py`,
+  and `python -m pytest -q`, all with exit code 0. A direct Windows backend
+  check wrote `.tmp/dolfinx_backend_status_windows.json` and reported missing
+  `dolfinx.fem`, `dolfinx.mesh`, `mpi4py.MPI`, `ufl`, `basix`, and `petsc4py`.
 
 ## Next Steps
 

@@ -404,6 +404,8 @@ def _main_dolfinx_backend_check(argv: list[str]) -> int:
     print(f"available: {status['available']}")
     if status["missing_modules"]:
         print("missing_modules: " + ", ".join(status["missing_modules"]))
+    if status.get("missing_test_modules"):
+        print("missing_test_modules: " + ", ".join(status["missing_test_modules"]))
     return 0 if bool(status["available"]) else 2
 
 
