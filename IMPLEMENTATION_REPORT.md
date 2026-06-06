@@ -1826,9 +1826,49 @@ initializer is discretely curl-free. However, the first-output `Ex` and
 `dBzdt` errors remain large in both modes, so the total-field source/DC
 transition and early transient source loading still need deeper treatment.
 
+## P2 Source Term Mode Audit
+
+I ran a small WSL one-output source-term audit using the same finite box,
+corrected default geometry, and FEM DC initializer. The audit changed only the
+transient source loading mode:
+
+```text
+initial_dc_mode = fem
+t_obs = 1e-5 s
+source_term_mode = impressed_current | primary_dc
+```
+
+The comparison is:
+
+```text
+source_term_mode   initial_curl_residual  Ex pred          Ex ref           Ex peak error   dBzdt pred       dBzdt ref       dBzdt peak error
+impressed_current  2.193462260e-13        -8.5300569e-05   1.7857499e-03    104.777%        4.8722848e-06   8.9855492e-06   45.776%
+primary_dc         2.193462260e-13        -1.8242988e-02   1.7857499e-03    1121.587%       7.3485085e-09   8.9855492e-06   99.918%
+```
+
+Both runs preserve the source consistency checks:
+
+```text
+source_endpoint_balance_residual = 5.765754464368252e-11
+waveform_integral_residual = 0.0
+endpoint_source_total_sum = 0.0
+```
+
+Interpretation: replacing the impressed-current turn-off source with the
+current `primary_dc` source term is not an improvement in the total-field
+solver. It keeps the FEM DC initial field curl-free, but it over-amplifies `Ex`
+and almost removes the inductive `dBzdt` response at the first output. This
+supports the current diagnosis that a correct primary-secondary formulation
+needs explicit primary-field/background-current accounting, not a simple
+source-term substitution inside the existing total-field equation.
+
 ## Known Limitations
 
 - `diagnose_source_consistency` currently reports waveform-integral and endpoint-total checks without full FEM matrix residuals unless a source projection residual is provided.
+- `source_term_mode=primary_dc` is currently diagnostic only. In a small WSL
+  one-output audit with `initial_dc_mode=fem`, it worsened the first-output
+  `Ex` and `dBzdt` errors relative to `impressed_current`, so it must not be
+  treated as the accepted primary-secondary implementation.
 - `source_projection_mode=raw` is implemented only as a diagnostic switch.
   It can improve first-point `Ex`, but it violates endpoint charge
   conservation and must not be used as a final accepted solver mode.
@@ -1909,13 +1949,16 @@ transition and early transient source loading still need deeper treatment.
 2. Keep mesh-segment line-source integration as the current source baseline,
    and add an explicit de Rham/source-edge orientation audit before replacing
    it with any DOLFINx-native source assembly.
-3. Run a controlled WSL comparison of `biot_current`, `biot_ohmic`, and
+3. Do not continue tuning `source_term_mode=primary_dc` as a total-field
+   shortcut. Move primary/background-current accounting into the real
+   primary-secondary path.
+4. Run a controlled WSL comparison of `biot_current`, `biot_ohmic`, and
    `faraday_integrated` magnetic receiver modes using the persisted
    `dBzdt_curl`/`dBzdt_biot_rate` receiver diagnostics to localize the
    magnetic-rate recovery error.
-4. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
-5. Continue P4/P5 by wiring the `PrimaryFEMInterpolator`/`TabulatedVectorField` adapter through `_interpolate_vector_callable_to_nedelec_function` for primary-secondary DC initialization and time stepping.
-6. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
-7. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
-8. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
-9. Continue P8 by generating a gmsh terrain/leakage mesh and running a small DOLFINx forward example.
+5. Continue P3 by wiring `PronyConductivity` into DOLFINx total-field IP assembly and adding solver-level `delta_sigma=0` no-IP equivalence tests.
+6. Continue P4/P5 by wiring the `PrimaryFEMInterpolator`/`TabulatedVectorField` adapter through `_interpolate_vector_callable_to_nedelec_function` for primary-secondary DC initialization and time stepping.
+7. Continue P5 by adding the DOLFINx scalar DC secondary solve for `phi_s`.
+8. Continue P6 by wiring the step kernels to DOLFINx FEM operators and receiver operators.
+9. Continue P7 by connecting `validation_3comp` to real no-IP/IP empymod or 1D reference runs over `1e-5 s <= t_obs <= 1 s`.
+10. Continue P8 by generating a gmsh terrain/leakage mesh and running a small DOLFINx forward example.
