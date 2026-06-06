@@ -71,3 +71,48 @@ def test_failed_validation_writes_structured_task_book_diagnostics(tmp_path):
     assert failure["checks"]["receiver_sampling_error"]["evidence"]["receiver_types"] == ["point", "disk_average"]
     assert failure["checks"]["magnetic_recovery_error"]["evidence"]["magnetic_quantity"] == "dBzdt"
     assert failure["checks"]["ip_memory_error"]["status"] == "not_applicable"
+
+
+def test_dolfinx_refined_failure_marks_late_time_convergence_diagnostic(tmp_path):
+    times = np.array([1.0e-5, 1.0])
+    reference = np.array(
+        [
+            [1.0, 1.0e-12, 2.0e-9],
+            [0.5, 1.0e-12, 1.0e-9],
+        ]
+    )
+    predictions = reference.copy()
+    predictions[1, 0] *= 1.30
+    predictions[1, 2] *= 0.80
+    predictions[:, 1] += 2.0e-12
+
+    write_three_component_validation_artifacts(
+        ThreeComponentValidationInput(
+            output_dir=tmp_path,
+            times=times,
+            predictions=predictions,
+            reference=reference,
+            component_names=["Ex", "Ey", "dBzdt"],
+            case_type="noip",
+            reference_type="dolfinx_refined",
+            magnetic_quantity="dBzdt",
+            validation_scope="corrected_model_terrain_leakage_diagnostic",
+            diagnostics={
+                "convergence_reference": {
+                    "prediction_cells": [2, 2, 1],
+                    "reference_cells": [4, 4, 2],
+                    "reference_type": "dolfinx_refined",
+                }
+            },
+        )
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    convergence = diagnostics["validation_failure"]["convergence_diagnostic"]
+    assert convergence["reference_type"] == "dolfinx_refined"
+    assert convergence["failed_time_band"] == "late_time"
+    assert convergence["physical_failed_components"] == ["Ex", "dBzdt"]
+    assert convergence["failed_times"] == [1.0]
+    assert convergence["prediction_cells"] == [2, 2, 1]
+    assert convergence["reference_cells"] == [4, 4, 2]
+    assert "boundary" in convergence["recommended_action"]

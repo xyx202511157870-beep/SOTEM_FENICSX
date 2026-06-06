@@ -80,7 +80,11 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
     diagnostics.setdefault("reference_type", case.reference_type)
     diagnostics.setdefault("components", component_names)
     diagnostics["acceptance_status"] = acceptance_status
-    diagnostics["validation_failure"] = _automatic_failure_diagnostics(summary, diagnostics)
+    diagnostics["validation_failure"] = _automatic_failure_diagnostics(
+        summary,
+        diagnostics,
+        rows=rows,
+    )
     (output_dir / "diagnostics.json").write_text(
         json.dumps(diagnostics, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -263,7 +267,12 @@ def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict
     return values
 
 
-def _automatic_failure_diagnostics(summary: dict, diagnostics: dict | None = None) -> dict:
+def _automatic_failure_diagnostics(
+    summary: dict,
+    diagnostics: dict | None = None,
+    *,
+    rows: np.ndarray | None = None,
+) -> dict:
     failed = not bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
     acceptance_status = dict(summary.get("acceptance_status", {}))
     diagnostics = dict(diagnostics or {})
@@ -272,7 +281,7 @@ def _automatic_failure_diagnostics(summary: dict, diagnostics: dict | None = Non
         reason_codes.append("physical_error_gate_failed")
     if not bool(summary.get("pass_all_components", False)) and "strict_error_gate_failed" not in reason_codes:
         reason_codes.append("strict_error_gate_failed")
-    return {
+    failure = {
         "failed": failed,
         "strict_failed": not bool(summary.get("pass_all_components", False)),
         "final_acceptance_passed": bool(summary.get("final_acceptance_passed", False)),
@@ -296,6 +305,89 @@ def _automatic_failure_diagnostics(summary: dict, diagnostics: dict | None = Non
         "weak_component_passed": bool(summary.get("weak_component_passed", True)),
         "weak_components": list(summary.get("weak_components", [])),
     }
+    convergence = _convergence_failure_diagnostic(summary, diagnostics, rows=rows)
+    if convergence:
+        failure["convergence_diagnostic"] = convergence
+    return failure
+
+
+def _convergence_failure_diagnostic(
+    summary: dict,
+    diagnostics: dict,
+    *,
+    rows: np.ndarray | None,
+) -> dict:
+    reference_type = str(summary.get("reference_type", ""))
+    if reference_type not in DIAGNOSTIC_REFERENCE_TYPES:
+        return {}
+    convergence = dict(diagnostics.get("convergence_reference", {}))
+    physical_components = [
+        str(component)
+        for component in summary.get(
+            "physical_failed_components",
+            summary.get("failed_components", []),
+        )
+    ]
+    failed_times = _physical_failed_times_from_rows(rows, physical_components)
+    if not failed_times:
+        failed_times = [float(value) for value in summary.get("failed_times", [])]
+    acceptance = dict(summary.get("acceptance_status", {}))
+    time_min = float(acceptance.get("time_min", min(failed_times) if failed_times else 0.0))
+    time_max = float(acceptance.get("time_max", max(failed_times) if failed_times else time_min))
+    if time_min > 0.0 and time_max > time_min:
+        time_split = float(np.sqrt(time_min * time_max))
+    else:
+        time_split = float(0.5 * (time_min + time_max))
+    early_failed = [time for time in failed_times if time <= time_split]
+    late_failed = [time for time in failed_times if time > time_split]
+    if late_failed and not early_failed:
+        band = "late_time"
+    elif early_failed and late_failed:
+        band = "broadband"
+    elif early_failed:
+        band = "early_time"
+    else:
+        band = "none"
+    return {
+        "reference_type": reference_type,
+        "failed_time_band": band,
+        "time_split": time_split,
+        "failed_times": failed_times,
+        "early_failed_times": early_failed,
+        "late_failed_times": late_failed,
+        "physical_failed_components": physical_components,
+        "prediction_cells": list(convergence.get("prediction_cells", [])),
+        "reference_cells": list(convergence.get("reference_cells", [])),
+        "recommended_action": _convergence_recommended_action(band),
+    }
+
+
+def _physical_failed_times_from_rows(rows: np.ndarray | None, physical_components: list[str]) -> list[float]:
+    if rows is None or not physical_components:
+        return []
+    components = set(physical_components)
+    times = {
+        float(row["time_obs"])
+        for row in rows
+        if str(row["component"]) in components and not bool(row["pass_5pct"])
+    }
+    return sorted(times)
+
+
+def _convergence_recommended_action(failed_time_band: str) -> str:
+    if failed_time_band == "late_time":
+        return (
+            "run boundary/domain-size sweeps and refine the late-time diffusion region "
+            "before increasing source/receiver local resolution"
+        )
+    if failed_time_band == "early_time":
+        return (
+            "refine source, receiver, and leakage-channel cells and audit source loading "
+            "before running larger-domain late-time sweeps"
+        )
+    if failed_time_band == "broadband":
+        return "run mesh, time-step, and boundary sweeps because failures span early and late times"
+    return "inspect convergence artifacts; no physical failed times were isolated"
 
 
 def _task_book_failure_checks(summary: dict, diagnostics: dict, *, failed: bool) -> dict[str, dict]:

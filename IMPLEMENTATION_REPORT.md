@@ -2801,6 +2801,13 @@ source-term substitution inside the existing total-field equation.
   in `physical_failed_components`. Runtime was about `23.93 s` for the coarse
   prediction, `164.08 s` for the refined reference, and `1.06 s` for artifact
   writing. WSL was shut down after the run and `Ubuntu Stopped` was confirmed.
+- Diagnostic validation now writes a `convergence_diagnostic` block for
+  diagnostic 3D reference types such as `dolfinx_refined`. It uses row-level
+  `errors.csv` data and `physical_failed_components` to classify failures as
+  `early_time`, `late_time`, or `broadband`, carries the coarse/refined cell
+  counts into `diagnostics.json`, and recommends the next sweep type. This is
+  intended to make late-time leakage convergence failures actionable instead
+  of leaving only aggregate max-error numbers.
 
 ## Next Steps
 
