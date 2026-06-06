@@ -134,6 +134,14 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
     def fake_run(case_spec):
         output_dir = tmp_path / case_spec["case_type"]
         output_dir.mkdir()
+        offset = 1.0 if case_spec["case_type"] == "ip" else 0.0
+        response_csv = (
+            "time_obs,Ex,Ey,dBzdt\n"
+            f"1e-05,{1.0 + offset},0.0,{2.0 + offset}\n"
+            f"1.0,{2.0 + offset},0.0,{3.0 + offset}\n"
+        )
+        (output_dir / "predictions.csv").write_text(response_csv, encoding="utf-8")
+        (output_dir / "reference_empymod_or_1d.csv").write_text(response_csv, encoding="utf-8")
         (output_dir / "error_summary.json").write_text(
             json.dumps(
                 {
@@ -176,6 +184,9 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
     assert main(["acceptance-report", str(output_root / "acceptance.yaml")]) == 0
     final_summary = _load_yaml(output_root / "final_acceptance" / "final_acceptance_summary.json")
     assert final_summary["final_acceptance_passed"] is True
+    effect_summary = _load_yaml(output_root / "polarization_effect" / "polarization_effect_summary.json")
+    assert effect_summary["definition"] == "ip_minus_noip"
+    assert effect_summary["pass_all_components"] is True
 
 
 def test_main_without_argv_uses_process_arguments_for_corrected_model_run(tmp_path, monkeypatch):

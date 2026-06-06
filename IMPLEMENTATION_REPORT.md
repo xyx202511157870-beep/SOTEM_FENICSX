@@ -31,6 +31,9 @@ This report covers the implementation rounds currently committed or staged from 
 - Corrected-model schematic integration: `corrected-model-run` now writes
   `model_schematic.png` into each case output directory and records schematic
   metadata in `diagnostics.json`.
+- Corrected-model polarization-effect integration: `corrected-model-run --case
+  both` now writes a sibling `polarization_effect/` directory with IP-minus-noIP
+  response, reference, error, summary, and plot artifacts.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 Validation artifacts now write an explicit `acceptance_status` object and a
@@ -1183,6 +1186,9 @@ When both cases are run, `corrected-model-run` now writes
 write `final_acceptance/final_acceptance_summary.json` and
 `final_acceptance_report.txt`. The same two-time WSL smoke exercised this
 chain successfully.
+When both cases are run, `corrected-model-run` also writes
+`polarization_effect/` using the no-IP/IP case artifact directories, so the
+IP-minus-noIP response and error plots are regenerated automatically.
 
 An 80-observation-time WSL smoke also completed under:
 

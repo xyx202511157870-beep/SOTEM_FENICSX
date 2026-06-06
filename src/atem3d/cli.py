@@ -246,6 +246,8 @@ def _main_corrected_model_run(argv: list[str]) -> int:
         acceptance_root = args.output_root or output_dirs["noip"].parent
         acceptance_path = _write_corrected_model_acceptance_config(acceptance_root, output_dirs)
         print(f"wrote {acceptance_path}")
+        effect_path = _write_corrected_model_polarization_effect(acceptance_root, output_dirs)
+        print(f"wrote {effect_path}")
     return 0 if all(bool(summary["final_acceptance_passed"]) for summary in summaries) else 1
 
 
@@ -501,6 +503,15 @@ def _write_corrected_model_acceptance_config(output_root: Path, output_dirs: dic
     path = output_root / "acceptance.yaml"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+def _write_corrected_model_polarization_effect(output_root: Path, output_dirs: dict[str, Path]) -> Path:
+    from .polarization_effect import write_polarization_effect_artifacts
+
+    output_root = Path(output_root)
+    effect_dir = output_root / "polarization_effect"
+    write_polarization_effect_artifacts(output_dirs["noip"], output_dirs["ip"], effect_dir)
+    return effect_dir
 
 
 def _response_component_names(path: Path) -> list[str]:
