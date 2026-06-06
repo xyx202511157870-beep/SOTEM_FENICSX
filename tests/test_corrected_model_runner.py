@@ -843,6 +843,9 @@ def test_published_paper_curve_artifacts_cli_writes_overlay_outputs(tmp_path):
         "error_curves_3comp.png",
         "diagnostics.json",
         "run_config_resolved.yaml",
+        "paper_response_overlay.png",
+        "paper_relative_error_curves.png",
+        "runtime_diagnostics.json",
     ):
         assert (output_dir / name).is_file()
     payload = json.loads((output_dir / "error_summary.json").read_text(encoding="utf-8"))

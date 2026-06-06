@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import csv
 import json
+import shutil
 
 import numpy as np
 
@@ -116,7 +117,7 @@ def write_published_paper_curve_artifacts(
             "predictions_csv": str(Path(predictions_csv)),
         }
     }
-    return write_three_component_validation_artifacts(
+    summary = write_three_component_validation_artifacts(
         ThreeComponentValidationInput(
             output_dir=output_dir,
             times=times,
@@ -133,6 +134,24 @@ def write_published_paper_curve_artifacts(
             validation_scope="published_paper_reproduction_target",
         )
     )
+    _write_published_curve_alias_artifacts(Path(output_dir))
+    return summary
+
+
+def _write_published_curve_alias_artifacts(output_dir: Path) -> None:
+    """Write paper-reproduction filenames promised by the paper target spec."""
+
+    aliases = {
+        "comparison_3comp.png": "paper_response_overlay.png",
+        "error_curves_3comp.png": "paper_relative_error_curves.png",
+        "diagnostics.json": "runtime_diagnostics.json",
+    }
+    for source_name, alias_name in aliases.items():
+        source = Path(output_dir) / source_name
+        alias = Path(output_dir) / alias_name
+        if not source.exists():
+            raise FileNotFoundError(f"missing source artifact for paper alias: {source_name}")
+        shutil.copyfile(source, alias)
 
 
 def _targets_from_spec(paper_spec: dict) -> list[dict]:
