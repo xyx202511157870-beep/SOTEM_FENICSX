@@ -98,8 +98,9 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     spaces = sp.build_function_spaces(msh, config)
     material = _forward_material_from_case_spec(case_spec)
     sigma_background = float(case_spec.get("sigma_background", material.sigma0))
+    secondary_material = _secondary_material_for_forward(case_spec, material, sigma_background)
     primary = EmpymodPrimaryProvider(
-        config=dict(case_spec["empymod_primary"]),
+        config=_empymod_primary_config_for_case_spec(case_spec),
         empymod_kwargs=dict(case_spec.get("empymod_kwargs", {})),
     )
     interpolation = sp._nedelec_interpolation_points(msh, spaces)
@@ -107,13 +108,13 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     receiver_locations = np.asarray([case_spec["receiver"]], dtype=float)
     components = tuple(str(value) for value in case_spec["components"])
 
-    if _is_zero_secondary_material(material, sigma_background):
+    if _is_zero_secondary_material(secondary_material, sigma_background):
         operator = PrimarySecondaryForwardOperator(
             primary=primary,
             fem_points=fem_points,
             receiver_locations=receiver_locations,
             components=components,
-            material=material,
+            material=secondary_material,
             sigma_background=sigma_background,
             secondary_receiver_projector=sp._make_dolfinx_zero_secondary_receiver_projector(
                 msh,
@@ -125,13 +126,13 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         return operator.forward(np.asarray(case_spec["observation_times"], dtype=float))
 
     sigma = fem.Function(spaces["Q"], name="sigma")
-    sigma.x.array[:] = material.sigma_inf
+    sigma.x.array[:] = secondary_material.sigma_inf
     sigma.x.scatter_forward()
     sigma_initial = fem.Function(spaces["Q"], name="sigma_initial")
-    sigma_initial.x.array[:] = material.sigma0
+    sigma_initial.x.array[:] = secondary_material.sigma0
     sigma_initial.x.scatter_forward()
     sigma_infinity = fem.Function(spaces["Q"], name="sigma_infinity")
-    sigma_infinity.x.array[:] = material.sigma_inf
+    sigma_infinity.x.array[:] = secondary_material.sigma_inf
     sigma_infinity.x.scatter_forward()
     mu_inv = fem.Function(spaces["Q"], name="mu_inv")
     mu_inv.x.array[:] = 1.0
@@ -152,7 +153,7 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
         primary=primary,
         receiver_locations=receiver_locations,
         components=components,
-        material=material,
+        material=secondary_material,
         sigma_background=sigma_background,
     )
     return built["operator"].forward(np.asarray(case_spec["observation_times"], dtype=float))
@@ -197,25 +198,13 @@ def _is_zero_secondary_material(material: PronyConductivity, sigma_background: f
 
 
 def _default_reference_runner(case_spec: dict) -> np.ndarray:
-    from atem3d.empymod_compare import make_debye_resistivity_model
     from atem3d.primary import EmpymodPrimaryProvider
 
     components = [str(value) for value in case_spec["components"]]
     times = np.asarray(case_spec["observation_times"], dtype=float)
     receiver = np.asarray([case_spec["receiver"]], dtype=float)
-    provider_config = dict(case_spec["empymod_primary"])
-    material = _material_from_case_spec(case_spec)
-    if material is not None:
-        layer_count = len(provider_config["resistivities"])
-        provider_config["resistivities"] = make_debye_resistivity_model(
-            [material.sigma_inf] * layer_count,
-            [
-                {"delta_sigma": term.delta_sigma, "tau": term.tau}
-                for term in material.terms
-            ],
-        )
     provider = EmpymodPrimaryProvider(
-        config=provider_config,
+        config=_empymod_primary_config_for_case_spec(case_spec),
         empymod_kwargs=dict(case_spec.get("empymod_kwargs", {})),
     )
     rows = []
@@ -232,6 +221,41 @@ def _default_reference_runner(case_spec: dict) -> np.ndarray:
         }
         rows.append([values[name] for name in components])
     return np.asarray(rows, dtype=float)
+
+
+def _empymod_primary_config_for_case_spec(case_spec: dict) -> dict:
+    from atem3d.empymod_compare import make_debye_resistivity_model
+
+    provider_config = dict(case_spec["empymod_primary"])
+    material = _material_from_case_spec(case_spec)
+    if material is None:
+        return provider_config
+    layer_count = len(provider_config["resistivities"])
+    provider_config["resistivity"] = 1.0 / float(material.sigma0)
+    provider_config["resistivities"] = make_debye_resistivity_model(
+        [material.sigma_inf] * layer_count,
+        [
+            {"delta_sigma": term.delta_sigma, "tau": term.tau}
+            for term in material.terms
+        ],
+    )
+    return provider_config
+
+
+def _secondary_material_for_forward(
+    case_spec: dict,
+    material: PronyConductivity,
+    sigma_background: float,
+) -> PronyConductivity:
+    forward_cfg = dict(case_spec.get("dolfinx_forward", {}))
+    primary_includes_ip = bool(forward_cfg.get("primary_includes_ip_background", True))
+    if (
+        str(case_spec.get("case_type")) == "ip"
+        and primary_includes_ip
+        and abs(material.sigma0 - float(sigma_background)) <= 1.0e-12
+    ):
+        return PronyConductivity.no_ip(float(sigma_background))
+    return material
 
 
 def _validate_response_table(values, times: np.ndarray, components: list[str], runner_name: str) -> np.ndarray:

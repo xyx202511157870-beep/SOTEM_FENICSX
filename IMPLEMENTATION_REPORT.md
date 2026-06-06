@@ -936,6 +936,21 @@ A local two-time IP empymod reference smoke using the corrected Prony metadata
 also returned finite `Ex/Ey/dBzdt` values. This validates the IP reference
 plumbing only; it does not validate the DOLFINx IP forward response.
 
+A later WSL CLI smoke completed both no-IP and IP cases under:
+
+```text
+dolfinx/runs/corrected_model_noip_ip_smoke
+```
+
+This smoke used the same two observation times, tiny box mesh, and
+`EmpymodPrimaryProvider(srcpts=3)`. For IP, the Debye/Prony background is
+included in the empymod primary provider and the DOLFINx secondary field is
+zero because there is no 3D material contrast in this smoke. Both no-IP and IP
+artifact summaries report `final_acceptance_passed=true` with zero error, but
+this is a plumbing/primary-background consistency check only. It is not the
+production corrected-model full-window run with a resolved mesh, terrain,
+leakage channel, or 3D IP anomaly.
+
 ## Current Accuracy Status
 
 The current no-IP DOLFINx runs still exceed the 5% target. The corrected
@@ -2150,8 +2165,9 @@ source-term substitution inside the existing total-field equation.
   corrected-model runner scaffold with injected runners. A WSL smoke now runs
   the default DOLFINx no-IP uniform-background forward backend on a tiny mesh;
   the IP empymod reference path now uses the corrected Prony/Debye material
-  metadata and has a finite two-time smoke. These do not yet prove full-window
-  5% physical agreement for the corrected model.
+  metadata, and a two-time WSL CLI smoke writes both no-IP/IP artifact sets.
+  These do not yet prove production full-window 5% physical agreement for the
+  corrected model.
 - P7 CLI reads precomputed prediction/reference CSV files for
   `validate-noip-3comp` and `validate-ip-3comp`. `corrected-model-run` now
   exists as the orchestration entry point; its default DOLFINx forward runner
