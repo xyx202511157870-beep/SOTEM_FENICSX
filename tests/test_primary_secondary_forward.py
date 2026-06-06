@@ -284,3 +284,7 @@ def test_primary_secondary_forward_records_actual_internal_time_grid_diagnostics
     assert summary["contains_all_observation_outputs"] is True
     assert summary["first_stepped_internal_time_s"] == pytest.approx(0.5e-5)
     assert summary["last_output_internal_time_s"] == pytest.approx(3.0e-5)
+    assert summary["primary_time_origin"] == "after_turnoff_observation_time"
+    assert summary["first_primary_time_s"] == pytest.approx(1.0e-5)
+    assert summary["first_output_primary_time_s"] == pytest.approx(1.0e-5)
+    assert summary["last_output_primary_time_s"] == pytest.approx(2.0e-5)

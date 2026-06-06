@@ -3617,6 +3617,23 @@ source-term substitution inside the existing total-field equation.
   corrected source/receiver geometry, not yet a claim that nonzero terrain or
   leakage-channel physics passes the final 5% gate. The WSL run was followed by
   `wsl --shutdown`, and `wsl -l -v` confirmed `Ubuntu Stopped`.
+- Primary-time diagnostics checkpoint (2026-06-06): the primary-secondary
+  internal-grid diagnostics now explicitly record the primary-provider time
+  convention used after the time-origin correction. The
+  `primary_secondary_internal_time_grid` block includes
+  `primary_time_origin = after_turnoff_observation_time`,
+  `primary_time_mapping = t_primary=max(t_internal-turnoff_time,
+  first_observation_time)`, `first_primary_time_s`,
+  `first_output_primary_time_s`, and `last_output_primary_time_s`. This makes
+  future reports auditable for the distinction between solver time
+  `t_internal` and empymod/1D provider time `t_obs`. Verification ran
+  `python -m pytest -q tests/test_primary_secondary_forward.py::test_primary_secondary_forward_records_actual_internal_time_grid_diagnostics`,
+  `python -m pytest -q tests/test_primary_secondary_forward.py tests/test_corrected_model_runner.py tests/test_final_acceptance.py`,
+  and `python -m pytest -q`, all with exit code 0. A WSL `conda activate
+  fenicsx` no-IP corrected-model run with 3 observation times also wrote the
+  new diagnostic fields into `diagnostics.json` and returned
+  `final_acceptance_passed=True`; the WSL run was followed by `wsl --shutdown`,
+  and `wsl -l -v` confirmed `Ubuntu Stopped`.
 
 ## Next Steps
 

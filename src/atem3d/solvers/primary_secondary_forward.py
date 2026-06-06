@@ -208,6 +208,11 @@ class PrimarySecondaryForwardOperator:
         if stepped_internal_times.size:
             summary["first_stepped_internal_time_s"] = float(stepped_internal_times[0])
             summary["last_stepped_internal_time_s"] = float(stepped_internal_times[-1])
+        summary["primary_time_origin"] = "after_turnoff_observation_time"
+        summary["primary_time_mapping"] = "t_primary=max(t_internal-turnoff_time, first_observation_time)"
+        summary["first_primary_time_s"] = float(observation_times[0])
+        summary["first_output_primary_time_s"] = float(observation_times[0])
+        summary["last_output_primary_time_s"] = float(observation_times[-1])
         self.diagnostics["primary_secondary_internal_time_grid"] = summary
 
     def _receiver_row(
