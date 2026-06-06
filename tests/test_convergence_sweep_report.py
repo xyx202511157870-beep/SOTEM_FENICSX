@@ -43,6 +43,12 @@ def test_write_convergence_sweep_report_summarizes_runs(tmp_path):
     assert json_payload["runs"][1]["reference_cells"] == [4, 4, 2]
     assert json_payload["runs"][0]["prediction_leakage_cell_count"] == 1
     assert json_payload["runs"][0]["reference_leakage_cell_count"] == 8
+    assert json_payload["runs"][0]["prediction_initial_leakage_cell_count"] == 0
+    assert json_payload["runs"][0]["prediction_marker_fallback_used"] is True
+    assert json_payload["runs"][0]["prediction_marker_fallback_added_cell_count"] == 1
+    assert json_payload["runs"][0]["prediction_min_marked_cells"] == 1
+    assert json_payload["runs"][0]["leakage_cell_count_ratio"] == 0.125
+    assert json_payload["runs"][0]["leakage_marker_issue"] == "fallback_used"
 
     with (tmp_path / "sweep" / "convergence_sweep_summary.csv").open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
@@ -50,6 +56,9 @@ def test_write_convergence_sweep_report_summarizes_runs(tmp_path):
     assert rows[0]["physical_failed_components"] == "Ex;dBzdt"
     assert rows[0]["prediction_leakage_cell_count"] == "1"
     assert rows[0]["reference_leakage_cell_count"] == "8"
+    assert rows[0]["prediction_marker_fallback_used"] == "True"
+    assert rows[0]["leakage_cell_count_ratio"] == "0.125"
+    assert rows[0]["leakage_marker_issue"] == "fallback_used"
     assert rows[1]["max_physical_error"] == "0.21"
 
 
@@ -140,13 +149,21 @@ def _write_run(
                 },
                 "leakage_marker_preflight": {
                     "prediction": {
+                        "initial_leakage_cell_count": 0,
                         "leakage_cell_count": 1,
                         "nearest_channel_distance_m": 670.0,
+                        "fallback_used": True,
+                        "fallback_added_cell_count": 1,
+                        "min_marked_cells": 1,
                         "marked": True,
                     },
                     "reference": {
+                        "initial_leakage_cell_count": 8,
                         "leakage_cell_count": 8,
                         "nearest_channel_distance_m": 335.0,
+                        "fallback_used": False,
+                        "fallback_added_cell_count": 0,
+                        "min_marked_cells": 1,
                         "marked": True,
                     },
                 },

@@ -50,6 +50,8 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
     marker = dict(diagnostics.get("leakage_marker_preflight", {}))
     marker_prediction = dict(marker.get("prediction", {}))
     marker_reference = dict(marker.get("reference", {}))
+    prediction_marker_count = int(marker_prediction.get("leakage_cell_count", 0))
+    reference_marker_count = int(marker_reference.get("leakage_cell_count", 0))
     runtime = dict(diagnostics.get("runtime_seconds", {}))
     physical_failed = [
         str(component)
@@ -70,8 +72,33 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
         "failed_time_band": str(convergence.get("failed_time_band", "")),
         "prediction_cells": list(convergence.get("prediction_cells", [])),
         "reference_cells": list(convergence.get("reference_cells", [])),
-        "prediction_leakage_cell_count": int(marker_prediction.get("leakage_cell_count", 0)),
-        "reference_leakage_cell_count": int(marker_reference.get("leakage_cell_count", 0)),
+        "prediction_initial_leakage_cell_count": int(
+            marker_prediction.get("initial_leakage_cell_count", prediction_marker_count)
+        ),
+        "reference_initial_leakage_cell_count": int(
+            marker_reference.get("initial_leakage_cell_count", reference_marker_count)
+        ),
+        "prediction_leakage_cell_count": prediction_marker_count,
+        "reference_leakage_cell_count": reference_marker_count,
+        "prediction_marker_fallback_used": bool(marker_prediction.get("fallback_used", False)),
+        "reference_marker_fallback_used": bool(marker_reference.get("fallback_used", False)),
+        "prediction_marker_fallback_added_cell_count": int(
+            marker_prediction.get("fallback_added_cell_count", 0)
+        ),
+        "reference_marker_fallback_added_cell_count": int(
+            marker_reference.get("fallback_added_cell_count", 0)
+        ),
+        "prediction_min_marked_cells": int(marker_prediction.get("min_marked_cells", 0)),
+        "reference_min_marked_cells": int(marker_reference.get("min_marked_cells", 0)),
+        "leakage_cell_count_ratio": _leakage_cell_count_ratio(
+            prediction_marker_count,
+            reference_marker_count,
+        ),
+        "leakage_marker_issue": _leakage_marker_issue(
+            marker_prediction,
+            prediction_marker_count,
+            reference_marker_count,
+        ),
         "prediction_nearest_channel_distance_m": float(
             marker_prediction.get("nearest_channel_distance_m", 0.0)
         ),
@@ -99,6 +126,26 @@ def _max_physical_error(summary: dict, physical_failed: list[str]) -> float:
     return max(values) if values else 0.0
 
 
+def _leakage_cell_count_ratio(prediction_count: int, reference_count: int) -> float:
+    if reference_count <= 0:
+        return 0.0
+    return float(prediction_count / reference_count)
+
+
+def _leakage_marker_issue(
+    marker_prediction: dict,
+    prediction_count: int,
+    reference_count: int,
+) -> str:
+    if prediction_count <= 0:
+        return "prediction_unmarked"
+    if bool(marker_prediction.get("fallback_used", False)):
+        return "fallback_used"
+    if reference_count > 0 and prediction_count / reference_count < 0.5:
+        return "coarse_underrepresented"
+    return ""
+
+
 def _write_sweep_csv(path: Path, runs: list[dict]) -> None:
     columns = [
         "label",
@@ -111,8 +158,18 @@ def _write_sweep_csv(path: Path, runs: list[dict]) -> None:
         "failed_time_band",
         "prediction_cells",
         "reference_cells",
+        "prediction_initial_leakage_cell_count",
+        "reference_initial_leakage_cell_count",
         "prediction_leakage_cell_count",
         "reference_leakage_cell_count",
+        "prediction_marker_fallback_used",
+        "reference_marker_fallback_used",
+        "prediction_marker_fallback_added_cell_count",
+        "reference_marker_fallback_added_cell_count",
+        "prediction_min_marked_cells",
+        "reference_min_marked_cells",
+        "leakage_cell_count_ratio",
+        "leakage_marker_issue",
         "prediction_nearest_channel_distance_m",
         "reference_nearest_channel_distance_m",
         "max_error_Ex",

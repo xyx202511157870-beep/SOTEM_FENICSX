@@ -2891,6 +2891,20 @@ source-term substitution inside the existing total-field equation.
   corrected leakage specs, runner preflight, and CLI diagnostics path; it does
   not change the current conclusion that nonzero corrected leakage/terrain
   final 5% acceptance remains unresolved.
+- Convergence sweep summaries now expose the marker fallback state directly:
+  `prediction_initial_leakage_cell_count`,
+  `reference_initial_leakage_cell_count`,
+  `prediction_marker_fallback_used`,
+  `reference_marker_fallback_used`,
+  fallback-added cell counts, `min_marked_cells`,
+  `leakage_cell_count_ratio`, and a categorical `leakage_marker_issue`
+  (`prediction_unmarked`, `fallback_used`, or `coarse_underrepresented`).
+  This makes invalid or weakly represented leakage-channel sweeps visible from
+  the CSV/JSON summary instead of requiring manual inspection of each
+  `diagnostics.json`. Windows verification ran
+  `python -m pytest -q tests/test_convergence_sweep_report.py` with `2 passed`
+  and `python -m pytest -q` with all tests passing (`703 passed`,
+  `2 skipped`).
 
 ## Next Steps
 
