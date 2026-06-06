@@ -308,6 +308,8 @@ def _main_published_paper_curve_artifacts(argv: list[str]) -> int:
     parser.add_argument("--output-dir", type=Path, default=Path("paper_curve_artifacts"))
     parser.add_argument("--case-type", choices=("noip", "ip"), default="ip")
     parser.add_argument("--curve-label", default="paper_ip")
+    parser.add_argument("--paper-spec", type=Path, help="Optional paper model spec for inferring figures")
+    parser.add_argument("--model-key", help="Paper model key used with --paper-spec to infer figures")
     parser.add_argument(
         "--component-figure",
         action="append",
@@ -316,9 +318,19 @@ def _main_published_paper_curve_artifacts(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
 
-    from .paper_digitization import write_published_paper_curve_artifacts
+    from .paper_digitization import (
+        component_figures_for_model_key,
+        write_published_paper_curve_artifacts,
+    )
 
     component_figures = _parse_component_figure_args(args.component_figure)
+    inferred_model_key = None
+    if not component_figures and (args.paper_spec is not None or args.model_key is not None):
+        if args.paper_spec is None or args.model_key is None:
+            parser.error("--paper-spec and --model-key must be provided together")
+        paper_spec = _load_yaml(args.paper_spec)
+        component_figures = component_figures_for_model_key(paper_spec, args.model_key)
+        inferred_model_key = args.model_key
     summary = write_published_paper_curve_artifacts(
         predictions_csv=args.predictions_csv,
         digitized_csv=args.digitized_csv,
@@ -326,6 +338,7 @@ def _main_published_paper_curve_artifacts(argv: list[str]) -> int:
         case_type=args.case_type,
         curve_label=args.curve_label,
         component_figures=component_figures or None,
+        model_key=inferred_model_key,
     )
     print(f"wrote {args.output_dir}")
     print(f"reference_type: {summary['reference_type']}")

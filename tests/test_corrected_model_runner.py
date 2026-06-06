@@ -965,6 +965,65 @@ def test_published_paper_curve_artifacts_cli_writes_overlay_outputs(tmp_path):
     assert diagnostics["published_response_curve"]["component_figures"] == {"Ex": "Fig. 12", "Hz": "Fig. 15"}
 
 
+def test_published_paper_curve_artifacts_cli_infers_figures_from_model_key(tmp_path):
+    spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
+    spec_path = tmp_path / "paper_model_target.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    predictions = tmp_path / "predictions.csv"
+    predictions.write_text(
+        "\n".join(
+            [
+                "time_obs,Ex,Hz",
+                "1e-05,1.02,2.04e-09",
+                "0.001,0.51,1.02e-09",
+                "1.0,0.102,2.04e-10",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    digitized = tmp_path / "digitized.csv"
+    digitized.write_text(
+        "\n".join(
+            [
+                "figure,model_key,component,curve_label,time_obs,value,notes",
+                "Fig. 7,layered_polarization_model,Ex,paper_ip,1e-05,1.0,",
+                "Fig. 7,layered_polarization_model,Ex,paper_ip,0.001,0.5,",
+                "Fig. 7,layered_polarization_model,Ex,paper_ip,1.0,0.1,",
+                "Fig. 8,layered_polarization_model,Hz,paper_ip,1e-05,2.0e-09,",
+                "Fig. 8,layered_polarization_model,Hz,paper_ip,0.001,1.0e-09,",
+                "Fig. 8,layered_polarization_model,Hz,paper_ip,1.0,2.0e-10,",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "paper_overlay"
+
+    exit_code = main(
+        [
+            "published-paper-curve-artifacts",
+            str(predictions),
+            str(digitized),
+            "--output-dir",
+            str(output_dir),
+            "--case-type",
+            "ip",
+            "--curve-label",
+            "paper_ip",
+            "--paper-spec",
+            str(spec_path),
+            "--model-key",
+            "layered_polarization_model",
+        ]
+    )
+
+    assert exit_code == 0
+    diagnostics = json.loads((output_dir / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["published_response_curve"]["component_figures"] == {"Ex": "Fig. 7", "Hz": "Fig. 8"}
+    assert diagnostics["published_response_curve"]["model_key"] == "layered_polarization_model"
+
+
 def test_published_paper_prony_materials_cli_writes_fit_json(tmp_path):
     spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
     spec_path = tmp_path / "paper_model_target.json"

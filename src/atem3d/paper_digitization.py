@@ -240,6 +240,7 @@ def write_published_paper_curve_artifacts(
     case_type: str,
     curve_label: str,
     component_figures: dict[str, str] | None = None,
+    model_key: str | None = None,
 ) -> dict:
     """Write validation artifacts comparing predictions to digitized paper curves."""
 
@@ -263,6 +264,7 @@ def write_published_paper_curve_artifacts(
             "component_figures": {name: figures[name] for name in selected_components},
             "digitized_csv": str(Path(digitized_csv)),
             "predictions_csv": str(Path(predictions_csv)),
+            "model_key": "" if model_key is None else str(model_key),
         }
     }
     summary = write_three_component_validation_artifacts(
@@ -311,6 +313,22 @@ def _targets_from_spec(paper_spec: dict) -> list[dict]:
         for target in PAPER_CURVE_TARGETS
         if str(target["figure"]) in available_figures
     ]
+
+
+def component_figures_for_model_key(paper_spec: dict, model_key: str) -> dict[str, str]:
+    """Return component-to-figure mapping for one published-paper model target."""
+
+    key = str(model_key)
+    targets = [target for target in _targets_from_spec(paper_spec) if str(target["model_key"]) == key]
+    if not targets:
+        raise ValueError(f"unknown paper model_key: {key}")
+    mapping: dict[str, str] = {}
+    for target in targets:
+        component = str(target["component"])
+        if component in mapping:
+            raise ValueError(f"duplicate component target for {key}: {component}")
+        mapping[component] = str(target["figure"])
+    return mapping
 
 
 def _group_targets_by_page(targets: list[dict]) -> dict[int, list[dict]]:
