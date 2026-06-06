@@ -2577,6 +2577,13 @@ source-term substitution inside the existing total-field equation.
   error. It still uses collision-cell selection for quadrature points on an
   embedded curve, so a stricter de Rham-compatible source assembly or exact
   source-edge orientation audit remains a long-term improvement.
+- E-form source diagnostics now include an explicit edge source orientation
+  audit. `diagnose_edge_source_orientation` checks whether the x/y/z edge-block
+  source-vector sums, after current normalization, recover
+  `source_end - source_start`; it reports signed parallel projection,
+  transverse residual, orientation cosine, relative parallel length error, and
+  reversed-orientation status. `source-geometry-audit` includes this as
+  `source_vector.edge_orientation` for E-form/edge runs.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.
@@ -2684,6 +2691,11 @@ source-term substitution inside the existing total-field equation.
   now makes the weight dimensionless relative to the implicit LHS matrix, but
   it is still a diagnostic path and does not meet the P2 5% gate. A controlled
   short-window sweep over relative weights `0..1e-3` did not improve Ex/dBzdt.
+- Windows verification after the edge source orientation audit ran
+  `python -m pytest -q` with all tests passing (`2 skipped`). This verifies
+  the pure source diagnostic, the source geometry audit JSON integration, and
+  existing source/primary-secondary regressions; it does not prove the final
+  full-window no-IP/IP 5% physical acceptance gate.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
   regenerated with `--postprocess-partial` before comparing error numbers.

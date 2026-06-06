@@ -1,6 +1,9 @@
 import numpy as np
 
-from atem3d.source_diagnostics import diagnose_source_consistency
+from atem3d.source_diagnostics import (
+    diagnose_edge_source_orientation,
+    diagnose_source_consistency,
+)
 
 
 def test_source_consistency_diagnostics_report_zero_residuals_for_balanced_inputs():
@@ -57,3 +60,38 @@ def test_source_consistency_diagnostics_measure_nonzero_residuals():
     assert diagnostics["dc_current_conservation_residual"] == np.sqrt(5.0)
     assert diagnostics["initial_curl_residual"] == 2.0
     assert diagnostics["waveform_integral_residual"] == 7.0
+
+
+def test_edge_source_orientation_diagnostic_reports_aligned_source_vector():
+    diagnostics = diagnose_edge_source_orientation(
+        source_start=(-500.0, 200.0, -0.1),
+        source_end=(500.0, 200.0, -0.1),
+        edge_source_vector=np.array([2500.0, 2500.0, 2500.0, 2500.0]),
+        edge_block_sizes=(4, 0, 0),
+        current=10.0,
+    )
+
+    assert diagnostics["source_length_m"] == 1000.0
+    np.testing.assert_allclose(diagnostics["expected_displacement_m"], [1000.0, 0.0, 0.0])
+    np.testing.assert_allclose(diagnostics["integrated_displacement_m"], [1000.0, 0.0, 0.0])
+    assert diagnostics["signed_parallel_projection_m"] == 1000.0
+    assert diagnostics["transverse_residual_m"] == 0.0
+    assert diagnostics["orientation_cosine"] == 1.0
+    assert diagnostics["relative_parallel_length_error"] == 0.0
+    assert diagnostics["reversed_orientation"] is False
+
+
+def test_edge_source_orientation_diagnostic_flags_reversed_source_vector():
+    diagnostics = diagnose_edge_source_orientation(
+        source_start=(-500.0, 200.0, -0.1),
+        source_end=(500.0, 200.0, -0.1),
+        edge_source_vector=-np.array([2500.0, 2500.0, 2500.0, 2500.0]),
+        edge_block_sizes=(4, 0, 0),
+        current=10.0,
+    )
+
+    np.testing.assert_allclose(diagnostics["integrated_displacement_m"], [-1000.0, 0.0, 0.0])
+    assert diagnostics["signed_parallel_projection_m"] == -1000.0
+    assert diagnostics["orientation_cosine"] == -1.0
+    assert diagnostics["relative_parallel_length_error"] == 2.0
+    assert diagnostics["reversed_orientation"] is True

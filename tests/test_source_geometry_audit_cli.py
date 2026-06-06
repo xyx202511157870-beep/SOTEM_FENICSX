@@ -39,6 +39,35 @@ def _small_hj_config():
     }
 
 
+def _small_eb_config():
+    config = _small_hj_config()
+    config["formulation"] = "eb"
+    config["receiver_line"]["components"] = ["Ex"]
+    config["magnetic_receiver_mode"] = "stored_b"
+    config.pop("magnetic_recovery_source_history")
+    return config
+
+
+def test_audit_source_geometry_reports_eb_edge_orientation():
+    from atem3d.source_geometry_audit_cli import audit_source_geometry
+
+    payload = audit_source_geometry(_small_eb_config(), config_path="small-eb.yaml")
+
+    assert payload["formulation"] == "eb"
+    assert payload["source_vector"]["location"] == "edge"
+    orientation = payload["source_vector"]["edge_orientation"]
+    assert orientation["source_length_m"] == 1.0
+    assert orientation["edge_block_sizes"] == [
+        payload["mesh"]["n_edges_x"],
+        payload["mesh"]["n_edges_y"],
+        payload["mesh"]["n_edges_z"],
+    ]
+    assert orientation["orientation_cosine"] > 0.99
+    assert orientation["relative_parallel_length_error"] < 1.0e-12
+    assert orientation["transverse_residual_m"] < 1.0e-12
+    assert orientation["reversed_orientation"] is False
+
+
 def test_audit_source_geometry_reports_hj_face_metrics():
     from atem3d.source_geometry_audit_cli import audit_source_geometry
 

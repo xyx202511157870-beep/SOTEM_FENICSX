@@ -15,6 +15,7 @@ from scipy.constants import mu_0
 
 from .config import build_simulation, load_config
 from .magnetic_recovery import face_current_biot_matrix
+from .source_diagnostics import diagnose_edge_source_orientation
 from .source_history_runtime import (
     SourceDiffusionKernelSourceHistoryCorrection,
     source_history_correction_terms,
@@ -104,6 +105,14 @@ def audit_source_geometry(
         field_location,
         ip_model,
     )
+    if field_location == "edge":
+        source_vector_metrics["edge_orientation"] = diagnose_edge_source_orientation(
+            source_start=source.locations[0],
+            source_end=source.locations[-1],
+            edge_source_vector=source.unit_edge_vector(mesh),
+            edge_block_sizes=(mesh.nEx, mesh.nEy, mesh.nEz),
+            current=1.0,
+        )
     source_vector_metrics["receiver_static_response"] = _receiver_static_response(
         simulation,
         source_vector,
@@ -186,7 +195,13 @@ def _mesh_metrics(mesh) -> dict[str, Any]:
     return {
         "n_cells": int(mesh.n_cells),
         "n_edges": int(mesh.n_edges),
+        "n_edges_x": int(mesh.nEx),
+        "n_edges_y": int(mesh.nEy),
+        "n_edges_z": int(mesh.nEz),
         "n_faces": int(mesh.n_faces),
+        "n_faces_x": int(mesh.nFx),
+        "n_faces_y": int(mesh.nFy),
+        "n_faces_z": int(mesh.nFz),
         "shape_cells": [int(value) for value in mesh.shape_cells],
         "origin": _float_list(mesh.origin),
         "min_cell_width_m": [float(np.min(values)) for values in widths],
