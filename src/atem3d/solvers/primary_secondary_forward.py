@@ -26,6 +26,11 @@ SecondaryReceiverProjector = Callable[
     np.ndarray,
 ]
 
+SecondaryStateStepper = Callable[
+    [SecondaryState, np.ndarray, np.ndarray, PronyConductivity, float, float],
+    SecondaryState,
+]
+
 
 @dataclass(frozen=True)
 class PrimarySecondaryForwardOperator:
@@ -45,6 +50,7 @@ class PrimarySecondaryForwardOperator:
     secondary_field_solver: Callable[[np.ndarray], tuple[np.ndarray | None, np.ndarray]] | None = None
     secondary_step_solver: SecondarySolver | None = None
     secondary_receiver_projector: SecondaryReceiverProjector | None = None
+    secondary_state_stepper: SecondaryStateStepper | None = None
     contrast_atol: float = 0.0
 
     def __post_init__(self) -> None:
@@ -91,7 +97,16 @@ class PrimarySecondaryForwardOperator:
             if dt <= 0.0:
                 raise ValueError("times must be greater than initial time 0")
             Ep_new = primary_fem.sample_Ep(float(time_value))
-            if self.material.terms:
+            if self.secondary_state_stepper is not None:
+                state = self.secondary_state_stepper(
+                    state,
+                    Ep_old,
+                    Ep_new,
+                    self.material,
+                    self.sigma_background,
+                    dt,
+                )
+            elif self.material.terms:
                 state = secondary_step_ip(
                     state,
                     Ep_old=Ep_old,

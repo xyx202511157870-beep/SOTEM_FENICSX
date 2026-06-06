@@ -4020,7 +4020,8 @@ def _make_dolfinx_secondary_step_solver(
     solver_context = {"ksp": None}
 
     def solve(rhs_density, sigma_eff: float, dt: float):
-        rhs_array = np.asarray(rhs_density, dtype=float)
+        rhs_is_function = hasattr(rhs_density, "x") and hasattr(rhs_density, "function_space")
+        rhs_array = None if rhs_is_function else np.asarray(rhs_density, dtype=float)
         dt_value = float(dt)
         if dt_value <= 0.0 or not math.isfinite(dt_value):
             raise ValueError("dt must be finite and positive")
@@ -4041,7 +4042,12 @@ def _make_dolfinx_secondary_step_solver(
         _zero_rows_columns(A, operators["bc_global"], diag=1.0)
 
         b = solution.x.petsc_vec.duplicate()
-        if np.allclose(rhs_array, 0.0, rtol=0.0, atol=0.0):
+        if rhs_is_function:
+            if float(rhs_density.x.petsc_vec.norm()) == 0.0:
+                b.set(0.0)
+            else:
+                operators["M"].mult(rhs_density.x.petsc_vec, b)
+        elif np.allclose(rhs_array, 0.0, rtol=0.0, atol=0.0):
             b.set(0.0)
         else:
             if rhs_to_function is None:
@@ -4069,7 +4075,7 @@ def _make_dolfinx_secondary_step_solver(
 
         if solution_to_samples is not None:
             result = np.asarray(solution_to_samples(solution, rhs_array), dtype=float)
-        elif np.allclose(rhs_array, 0.0, rtol=0.0, atol=0.0):
+        elif (not rhs_is_function) and np.allclose(rhs_array, 0.0, rtol=0.0, atol=0.0):
             result = np.zeros_like(rhs_array)
         else:
             b.destroy()
@@ -4094,12 +4100,11 @@ def _make_dolfinx_primary_secondary_forward_adapters(
 ):
     """Wire DOLFINx secondary solves into the pure primary-secondary core.
 
-    The pure core currently passes the no-IP DC secondary callback a scalar
+    The pure core currently passes the DC secondary callback a scalar
     contrast-weighted ``(sigma0 - sigma_b) Ep0`` sample table.  This adapter
-    is therefore limited to uniform scalar ``sigma_initial`` contrast and
-    reconstructs ``Ep0`` before calling the DOLFINx scalar-potential DC solve.
-    Variable-material primary-secondary wiring should use a DOLFINx-native
-    operator path instead of this scalar bridge.
+    reconstructs ``Ep0`` from that scalar bridge for initialization, then keeps
+    the no-IP transient current contrast and RHS in DOLFINx Function form so
+    variable DG0 material contrast is represented in the step solve.
     """
 
     import numpy as np
@@ -4115,13 +4120,15 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     sigma_values = np.asarray(sigma_initial.x.array, dtype=float)
     if sigma_values.size == 0:
         raise ValueError("sigma_initial must contain local DG values")
-    sigma0 = float(sigma_values[0])
-    if not np.allclose(sigma_values, sigma0, rtol=1.0e-12, atol=1.0e-14):
-        raise ValueError("DOLFINx primary-secondary scalar adapter requires uniform sigma_initial")
-    contrast = sigma0 - sigma_b
-    if abs(contrast) <= max(1.0e-14, 1.0e-12 * abs(sigma_b)):
+    local_contrast = sigma_values - sigma_b
+    contrast_index = int(np.argmax(np.abs(local_contrast)))
+    nominal_contrast = float(local_contrast[contrast_index])
+    if abs(nominal_contrast) <= max(1.0e-14, 1.0e-12 * abs(sigma_b)):
         raise ValueError("nonzero contrast is required for this adapter")
 
+    V = spaces["V"]
+    sigma = materials["sigma"]
+    sigma_b_const = fem.Constant(msh, float(sigma_b))
     sample_to_function = _make_nedelec_rhs_interpolator_from_samples(
         spaces,
         sample_points=points,
@@ -4129,15 +4136,23 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     )
     sample_solution = _make_nedelec_solution_sampler_at_points(msh, points)
     latest_secondary = {
-        "E": fem.Function(spaces["V"], name="E_secondary_latest"),
+        "E": fem.Function(V, name="E_secondary_latest"),
+        "deltaJ": None,
         "dc_result": None,
     }
     latest_secondary["E"].x.array[:] = 0.0
     latest_secondary["E"].x.scatter_forward()
 
+    def interpolate_vector_expression(name: str, expression):
+        function = fem.Function(V, name=name)
+        expr = fem.Expression(expression, V.element.interpolation_points(), comm=msh.comm)
+        function.interpolate(expr)
+        function.x.scatter_forward()
+        return function
+
     def secondary_field_solver(contrast_weighted_Ep0):
         contrast_weighted = np.asarray(contrast_weighted_Ep0, dtype=float)
-        Ep0_samples = contrast_weighted / contrast
+        Ep0_samples = contrast_weighted / nominal_contrast
         Ep0_function = sample_to_function(Ep0_samples)
         result = _solve_dc_secondary_field(
             msh,
@@ -4149,6 +4164,10 @@ def _make_dolfinx_primary_secondary_forward_adapters(
         )
         latest_secondary["E"] = result["Es0"]
         latest_secondary["dc_result"] = result
+        latest_secondary["deltaJ"] = interpolate_vector_expression(
+            "primary_secondary_deltaJ_dc",
+            sigma * (Ep0_function + result["Es0"]) - sigma_b_const * Ep0_function,
+        )
         return None, sample_solution(result["Es0"], Ep0_samples)
 
     def solution_to_samples(solution, rhs_samples):
@@ -4173,6 +4192,38 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     def dbdt_getter(_state, _Ep_new, _time_value, _dt):
         return compute_dbdt(latest_secondary["E"], spaces)
 
+    def secondary_state_stepper(state, Ep_old, Ep_new, material, sigma_background_value, dt):
+        from atem3d.solvers.tdem_secondary import SecondaryState
+
+        if material.terms:
+            raise NotImplementedError("DOLFINx variable-contrast primary-secondary IP stepping is not implemented yet")
+        if abs(float(sigma_background_value) - sigma_b) > max(1.0e-14, 1.0e-12 * abs(sigma_b)):
+            raise ValueError("sigma_background mismatch in DOLFINx primary-secondary adapter")
+        if latest_secondary["deltaJ"] is None:
+            raise RuntimeError("secondary_field_solver must run before secondary_state_stepper")
+        dt_value = float(dt)
+        if dt_value <= 0.0 or not math.isfinite(dt_value):
+            raise ValueError("dt must be finite and positive")
+        Ep_new_function = sample_to_function(Ep_new)
+        c_new = interpolate_vector_expression(
+            "primary_secondary_c_new",
+            (sigma - sigma_b_const) * Ep_new_function,
+        )
+        rhs_function = fem.Function(V, name="primary_secondary_rhs_density")
+        rhs_function.x.array[:] = (latest_secondary["deltaJ"].x.array - c_new.x.array) / dt_value
+        rhs_function.x.scatter_forward()
+        Es_new = secondary_step_solver(rhs_function, material.sigma_inf, dt_value)
+        deltaJ_new = interpolate_vector_expression(
+            "primary_secondary_deltaJ",
+            sigma * (Ep_new_function + latest_secondary["E"]) - sigma_b_const * Ep_new_function,
+        )
+        latest_secondary["deltaJ"] = deltaJ_new
+        return SecondaryState(
+            Es=Es_new,
+            deltaJ=sample_solution(deltaJ_new, Ep_new),
+            chi=[],
+        )
+
     return {
         "secondary_field_solver": secondary_field_solver,
         "secondary_step_solver": secondary_step_solver,
@@ -4182,6 +4233,7 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             msh=msh,
             config=config,
         ),
+        "secondary_state_stepper": secondary_state_stepper,
         "diagnostics": latest_secondary,
     }
 
