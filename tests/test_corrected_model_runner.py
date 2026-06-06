@@ -61,6 +61,10 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
         assert (output_dir / name).exists()
     payload = json.loads((output_dir / "error_summary.json").read_text(encoding="utf-8"))
     assert payload["validation_scope"] == "corrected_model_full"
+    diagnostics = json.loads((output_dir / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["runtime_seconds"]["forward"] >= 0.0
+    assert diagnostics["runtime_seconds"]["reference"] >= 0.0
+    assert diagnostics["runtime_seconds"]["artifact_total"] >= 0.0
 
 
 def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):

@@ -913,6 +913,8 @@ default DOLFINx forward path can run a small no-IP uniform-background
 primary-secondary case by sampling `EmpymodPrimaryProvider` on the DOLFINx
 Nedelec interpolation points and using the zero-secondary receiver projector.
 This is a backend smoke, not a full corrected-model 5% acceptance run.
+The runner records `runtime_seconds.forward`, `runtime_seconds.reference`, and
+`runtime_seconds.artifact_total` in `diagnostics.json` for each validation case.
 For IP cases, the corrected-model reference path now converts the Prony/Debye
 material metadata into empymod's Debye `res` dictionary, so the reference uses
 the same `sigma_inf`, `delta_sigma_list`, and `tau_list` stored in the case

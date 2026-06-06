@@ -6,6 +6,7 @@ from copy import deepcopy
 import importlib.util
 from pathlib import Path
 import sys
+import time
 from typing import Callable
 
 import numpy as np
@@ -39,9 +40,18 @@ def run_corrected_model_validation(
     components = [str(value) for value in spec["components"]]
     forward = forward_runner or _default_forward_runner
     reference = reference_runner or _default_reference_runner
+    forward_t0 = time.perf_counter()
     predictions = _validate_response_table(forward(spec), times, components, "forward_runner")
+    forward_runtime = time.perf_counter() - forward_t0
+    reference_t0 = time.perf_counter()
     reference_values = _validate_response_table(reference(spec), times, components, "reference_runner")
+    reference_runtime = time.perf_counter() - reference_t0
     material = _material_from_case_spec(spec)
+    runtime_seconds = {
+        "forward": float(forward_runtime),
+        "reference": float(reference_runtime),
+    }
+    artifact_t0 = time.perf_counter()
     case = ThreeComponentValidationInput(
         output_dir=spec["output_dir"],
         times=times,
@@ -56,12 +66,16 @@ def run_corrected_model_validation(
             "source_start": spec.get("source_start"),
             "source_end": spec.get("source_end"),
             "receiver": spec.get("receiver"),
+            "runtime_seconds": runtime_seconds,
         },
         resolved_config=spec,
         material=material,
         validation_scope=str(spec.get("validation_scope", "smoke")),
     )
-    return write_three_component_validation_artifacts(case)
+    summary = write_three_component_validation_artifacts(case)
+    runtime_seconds["artifact_total"] = float(time.perf_counter() - artifact_t0)
+    _update_runtime_diagnostics(Path(spec["output_dir"]), runtime_seconds)
+    return summary
 
 
 def _default_forward_runner(case_spec: dict) -> np.ndarray:
@@ -266,6 +280,15 @@ def _validate_response_table(values, times: np.ndarray, components: list[str], r
     if not np.all(np.isfinite(table)):
         raise ValueError(f"{runner_name} returned non-finite values")
     return table
+
+
+def _update_runtime_diagnostics(output_dir: Path, runtime_seconds: dict[str, float]) -> None:
+    import json
+
+    diagnostics_path = output_dir / "diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    diagnostics["runtime_seconds"] = dict(runtime_seconds)
+    diagnostics_path.write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _material_from_case_spec(case_spec: dict) -> PronyConductivity | None:
