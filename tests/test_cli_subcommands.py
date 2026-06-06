@@ -299,6 +299,7 @@ def _write_required_acceptance_artifacts(directory):
         "comparison_3comp.png",
         "error_curves_3comp.png",
         "diagnostics.json",
+        "model_schematic.png",
         "run_config_resolved.yaml",
     ):
         if name.endswith(".png"):

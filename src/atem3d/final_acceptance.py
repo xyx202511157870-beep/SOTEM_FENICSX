@@ -14,6 +14,7 @@ REQUIRED_CASE_ARTIFACTS = (
     "comparison_3comp.png",
     "error_curves_3comp.png",
     "diagnostics.json",
+    "model_schematic.png",
     "run_config_resolved.yaml",
 )
 REQUIRED_POLARIZATION_EFFECT_ARTIFACTS = (

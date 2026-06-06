@@ -3522,8 +3522,9 @@ source-term substitution inside the existing total-field equation.
   checks that each case directory contains the required validation artifact set:
   `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
   `error_summary.json`, `comparison_3comp.png`, `error_curves_3comp.png`,
-  `diagnostics.json`, and `run_config_resolved.yaml`; missing files now block
-  the combined report with `validation_artifacts_missing`. Corrected-model
+  `diagnostics.json`, `model_schematic.png`, and `run_config_resolved.yaml`;
+  missing files now block the combined report with
+  `validation_artifacts_missing`. Corrected-model
   acceptance configs now include `polarization_effect_dir`, and the final
   report checks the dedicated IP-minus-noIP artifacts:
   `polarization_effect_predictions.csv`, `polarization_effect_reference.csv`,

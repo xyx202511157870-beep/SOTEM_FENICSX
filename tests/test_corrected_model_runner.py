@@ -447,6 +447,7 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
         (output_dir / "errors.csv").write_text("time_obs,component,error\n", encoding="utf-8")
         (output_dir / "comparison_3comp.png").write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
         (output_dir / "error_curves_3comp.png").write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
+        (output_dir / "model_schematic.png").write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
         (output_dir / "run_config_resolved.yaml").write_text("case_type: fake\n", encoding="utf-8")
         case_spec["output_dir"] = str(output_dir)
         return {"final_acceptance_passed": True}
