@@ -11,7 +11,7 @@ from atem3d.materials.prony import PronyConductivity
 from atem3d.primary.base import PrimaryFieldProvider, as_points
 from atem3d.primary.interpolation import PrimaryFEMInterpolator
 
-from .dc_secondary import initialize_dc_secondary_from_primary
+from .dc_secondary import DCSecondaryInitialization, initialize_dc_secondary_from_primary
 from .tdem_secondary import (
     SecondarySolver,
     SecondaryState,
@@ -29,6 +29,11 @@ SecondaryReceiverProjector = Callable[
 SecondaryStateStepper = Callable[
     [SecondaryState, np.ndarray, np.ndarray, PronyConductivity, float, float],
     SecondaryState,
+]
+
+SecondaryStateInitializer = Callable[
+    [np.ndarray, PronyConductivity, float],
+    DCSecondaryInitialization,
 ]
 
 
@@ -50,6 +55,7 @@ class PrimarySecondaryForwardOperator:
     secondary_field_solver: Callable[[np.ndarray], tuple[np.ndarray | None, np.ndarray]] | None = None
     secondary_step_solver: SecondarySolver | None = None
     secondary_receiver_projector: SecondaryReceiverProjector | None = None
+    secondary_state_initializer: SecondaryStateInitializer | None = None
     secondary_state_stepper: SecondaryStateStepper | None = None
     contrast_atol: float = 0.0
 
@@ -79,14 +85,21 @@ class PrimarySecondaryForwardOperator:
 
         time_array = _as_strictly_increasing_times(times)
         primary_fem = PrimaryFEMInterpolator(provider=self.primary, points=self.fem_points)
-        initialization = initialize_dc_secondary_from_primary(
-            primary=primary_fem,
-            sigma0=self.material.sigma0,
-            sigma_background=self.sigma_background,
-            material=self.material,
-            secondary_field_solver=self.secondary_field_solver,
-            contrast_atol=self.contrast_atol,
-        )
+        if self.secondary_state_initializer is None:
+            initialization = initialize_dc_secondary_from_primary(
+                primary=primary_fem,
+                sigma0=self.material.sigma0,
+                sigma_background=self.sigma_background,
+                material=self.material,
+                secondary_field_solver=self.secondary_field_solver,
+                contrast_atol=self.contrast_atol,
+            )
+        else:
+            initialization = self.secondary_state_initializer(
+                primary_fem.sample_Ep_dc(),
+                self.material,
+                self.sigma_background,
+            )
         state = secondary_state_from_dc_initialization(initialization)
         Ep_old = initialization.Ep0
         previous_time = 0.0

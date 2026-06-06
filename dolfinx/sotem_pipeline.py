@@ -4097,6 +4097,7 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     fem_points,
     *,
     sigma_background: float,
+    debye=None,
 ):
     """Wire DOLFINx secondary solves into the pure primary-secondary core.
 
@@ -4128,7 +4129,12 @@ def _make_dolfinx_primary_secondary_forward_adapters(
 
     V = spaces["V"]
     sigma = materials["sigma"]
+    sigma_infinity = materials.get("sigma_infinity", sigma)
     sigma_b_const = fem.Constant(msh, float(sigma_b))
+    debye_terms = tuple(debye.get("terms", ())) if debye is not None else ()
+    delta_functions = tuple(debye.get("delta_functions", ())) if debye is not None else ()
+    if delta_functions and len(delta_functions) != len(debye_terms):
+        raise ValueError("debye delta_functions must match debye terms")
     sample_to_function = _make_nedelec_rhs_interpolator_from_samples(
         spaces,
         sample_points=points,
@@ -4151,10 +4157,18 @@ def _make_dolfinx_primary_secondary_forward_adapters(
         function.x.scatter_forward()
         return function
 
-    def secondary_field_solver(contrast_weighted_Ep0):
-        contrast_weighted = np.asarray(contrast_weighted_Ep0, dtype=float)
-        Ep0_samples = contrast_weighted / nominal_contrast
-        Ep0_function = sample_to_function(Ep0_samples)
+    def delta_expression(term, index: int):
+        if index < len(delta_functions):
+            return delta_functions[index]
+        return float(term.delta_sigma)
+
+    def build_initialization(Ep0_samples, material, sigma_background_value):
+        from atem3d.solvers.dc_secondary import DCSecondaryInitialization
+
+        if abs(float(sigma_background_value) - sigma_b) > max(1.0e-14, 1.0e-12 * abs(sigma_b)):
+            raise ValueError("sigma_background mismatch in DOLFINx primary-secondary initializer")
+        Ep0_array = np.asarray(Ep0_samples, dtype=float)
+        Ep0_function = sample_to_function(Ep0_array)
         result = _solve_dc_secondary_field(
             msh,
             spaces,
@@ -4165,18 +4179,45 @@ def _make_dolfinx_primary_secondary_forward_adapters(
         )
         latest_secondary["E"] = result["Es0"]
         latest_secondary["dc_result"] = result
+        Es0_samples = sample_solution(result["Es0"], Ep0_array)
+        Etotal0_samples = Ep0_array + Es0_samples
+        Etotal0_expr = Ep0_function + result["Es0"]
+        if material.terms:
+            latest_secondary["chi"] = [
+                interpolate_vector_expression(f"primary_secondary_chi_{index}_dc", Etotal0_expr)
+                for index, _term in enumerate(material.terms)
+            ]
+            deltaJ_expr = sigma_infinity * Etotal0_expr - sigma_b_const * Ep0_function
+            for index, (term, memory) in enumerate(zip(material.terms, latest_secondary["chi"])):
+                deltaJ_expr = deltaJ_expr - delta_expression(term, index) * memory
+        else:
+            latest_secondary["chi"] = []
+            deltaJ_expr = sigma * Etotal0_expr - sigma_b_const * Ep0_function
         latest_secondary["deltaJ"] = interpolate_vector_expression(
             "primary_secondary_deltaJ_dc",
-            sigma * (Ep0_function + result["Es0"]) - sigma_b_const * Ep0_function,
+            deltaJ_expr,
         )
-        latest_secondary["chi"] = [
-            interpolate_vector_expression(
-                f"primary_secondary_chi_{index}_dc",
-                Ep0_function + result["Es0"],
-            )
-            for index, _term in enumerate([])
-        ]
-        return None, sample_solution(result["Es0"], Ep0_samples)
+        deltaJ0_samples = sample_solution(latest_secondary["deltaJ"], Ep0_array)
+        chi0_samples = [sample_solution(memory, Ep0_array) for memory in latest_secondary["chi"]]
+        return DCSecondaryInitialization(
+            Ep0=Ep0_array,
+            Es0=Es0_samples,
+            Etotal0=Etotal0_samples,
+            chi0=chi0_samples,
+            deltaJ0=deltaJ0_samples,
+            phi_s=None,
+            contrast_is_zero=bool(result["contrast_is_zero"]),
+        )
+
+    def secondary_field_solver(contrast_weighted_Ep0):
+        contrast_weighted = np.asarray(contrast_weighted_Ep0, dtype=float)
+        Ep0_samples = contrast_weighted / nominal_contrast
+        initialization = build_initialization(
+            Ep0_samples,
+            material=type("_NoIPMaterial", (), {"terms": ()})(),
+            sigma_background_value=sigma_b,
+        )
+        return None, initialization.Es0
 
     def solution_to_samples(solution, rhs_samples):
         latest_secondary["E"] = solution
@@ -4220,9 +4261,14 @@ def _make_dolfinx_primary_secondary_forward_adapters(
                 raise ValueError("state.chi must contain one memory field per Debye term")
         if material.terms:
             alpha = material.alpha(dt_value)
-            c_expr = (float(material.sigma_eff(dt_value)) - sigma_b) * Ep_new_function
-            for term, memory, alpha_i in zip(material.terms, latest_secondary["chi"], alpha):
-                c_expr = c_expr - term.delta_sigma * float(alpha_i) * memory
+            beta = material.beta(dt_value)
+            c_expr = (sigma_infinity - sigma_b_const) * Ep_new_function
+            for index, (term, memory, alpha_i, beta_i) in enumerate(
+                zip(material.terms, latest_secondary["chi"], alpha, beta)
+            ):
+                delta = delta_expression(term, index)
+                c_expr = c_expr - delta * float(beta_i) * Ep_new_function
+                c_expr = c_expr - delta * float(alpha_i) * memory
         else:
             c_expr = (sigma - sigma_b_const) * Ep_new_function
         c_new = interpolate_vector_expression("primary_secondary_c_new", c_expr)
@@ -4244,9 +4290,9 @@ def _make_dolfinx_primary_secondary_forward_adapters(
                     )
                 )
             latest_secondary["chi"] = chi_new
-            deltaJ_expr = material.sigma_inf * Etotal_new - sigma_b_const * Ep_new_function
-            for term, memory in zip(material.terms, latest_secondary["chi"]):
-                deltaJ_expr = deltaJ_expr - term.delta_sigma * memory
+            deltaJ_expr = sigma_infinity * Etotal_new - sigma_b_const * Ep_new_function
+            for index, (term, memory) in enumerate(zip(material.terms, latest_secondary["chi"])):
+                deltaJ_expr = deltaJ_expr - delta_expression(term, index) * memory
         else:
             deltaJ_expr = sigma * Etotal_new - sigma_b_const * Ep_new_function
             latest_secondary["chi"] = []
@@ -4259,6 +4305,7 @@ def _make_dolfinx_primary_secondary_forward_adapters(
         )
 
     return {
+        "secondary_state_initializer": build_initialization,
         "secondary_field_solver": secondary_field_solver,
         "secondary_step_solver": secondary_step_solver,
         "secondary_receiver_projector": _make_secondary_receiver_projector_from_evaluate_receivers(
