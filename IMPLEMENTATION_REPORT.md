@@ -78,6 +78,9 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     matrix/weak-form diagnostic inputs to the reusable
     `atem3d.source_diagnostics` core while preserving the old self-contained
     fallback path.
+  - E-form runs now measure the residual initial-field curl,
+    `-curl(E_initial)`, and write it to both `diagnostics["initial_field"]`
+    and `diagnostics["source_consistency"]["initial_curl_residual"]`.
   - `write_validation_artifacts` and `write_source_only_diagnostics` now read
     `source_info["consistency_diagnostic_inputs"]` and write those computed
     residuals into `diagnostics.json`.
@@ -1774,6 +1777,38 @@ after-ramp output for this non-polarizable one-point audit. The new
 diagnosis that the remaining short-window failure is not mainly a Biot `Hz`
 recovery problem; it is tied to electric/source/receiver-curl consistency in
 the total-field E-form path.
+
+## P2 Initial Field Curl Diagnostic
+
+I added a runtime diagnostic for the DC/on-time initial electric field:
+
+```text
+diagnostics["initial_field"]["quantity"] = "-curl(E_initial)"
+diagnostics["initial_field"]["initial_curl_residual"]
+diagnostics["initial_field"]["initial_curl_max_abs"]
+diagnostics["source_consistency"]["initial_curl_residual"]
+```
+
+A small WSL smoke run using the corrected default geometry completed under:
+
+```text
+dolfinx/analyticdc_small_smoke
+```
+
+The smoke used a deliberately small finite box and `--initial-dc-mode
+analytic_halfspace`, so it is not an accuracy claim. It verifies the DOLFINx
+runtime path and produced:
+
+```text
+initial_curl_residual = 1334.1011123823428
+initial_curl_max_abs  = 1321.9773822219981
+```
+
+Interpretation: the new diagnostic is active and can expose whether the
+interpolated/initialized DC field is curl-free in the discrete receiver/FEM
+spaces. The large value in this small analytic-halfspace smoke is a warning
+that the initial-field interpolation/source transition must be audited before
+treating late/early electric-field errors as only boundary or receiver issues.
 
 ## Known Limitations
 

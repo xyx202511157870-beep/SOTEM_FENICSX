@@ -374,6 +374,36 @@ def test_validation_artifacts_use_source_consistency_inputs_from_source_info(tmp
     assert source["waveform_integral_residual"] == pytest.approx(7.0)
 
 
+def test_validation_artifacts_use_initial_field_curl_diagnostic_from_source_info(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5])
+    pred = np.array([[1.0, 0.0, 2.0]])
+    ref = pred.copy()
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        source_info={
+            "mode": "manual_line",
+            "initial_field_diagnostics": {
+                "initial_curl_residual": 1.25e-6,
+                "initial_curl_max_abs": 2.5e-7,
+            },
+        },
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["source_consistency"]["initial_curl_residual"] == pytest.approx(1.25e-6)
+    assert diagnostics["initial_field"]["initial_curl_residual"] == pytest.approx(1.25e-6)
+    assert diagnostics["initial_field"]["initial_curl_max_abs"] == pytest.approx(2.5e-7)
+
+
 def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path, source_only=True)

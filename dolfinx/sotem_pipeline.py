@@ -2643,6 +2643,23 @@ def compute_dbdt(E, spaces: dict[str, Any]):
     return dbdt
 
 
+def _initial_field_curl_diagnostics(E_initial, spaces: dict[str, Any]) -> dict[str, float | str]:
+    """Measure the residual curl of the DC initial electric field."""
+
+    import numpy as np
+    from mpi4py import MPI
+
+    dbdt0 = compute_dbdt(E_initial, spaces)
+    values = np.asarray(dbdt0.x.array, dtype=float)
+    local_max = float(np.max(np.abs(values))) if values.size else 0.0
+    max_abs = float(E_initial.function_space.mesh.comm.allreduce(local_max, op=MPI.MAX))
+    return {
+        "quantity": "-curl(E_initial)",
+        "initial_curl_residual": float(dbdt0.x.petsc_vec.norm()),
+        "initial_curl_max_abs": max_abs,
+    }
+
+
 def _receiver_sampling_points(config: PipelineConfig):
     """Return deterministic diagnostic sample points for the configured receiver."""
 
@@ -3791,6 +3808,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         }
     V = spaces["V"]
     E_initial = _solve_initial_dc_field(msh, spaces, materials, facet_tags, config)
+    source["initial_field_diagnostics"] = _initial_field_curl_diagnostics(E_initial, spaces)
     source_term_mode = str(config.source_term_mode).strip().lower()
     if source_term_mode == "primary_dc":
         E_old = fem.Function(V, name="E_secondary_old")
@@ -5045,6 +5063,7 @@ def diagnose_source_consistency(
     *,
     source_projection_residual: float | None = None,
     source_diagnostic_inputs: dict[str, Any] | None = None,
+    initial_field_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return source/waveform consistency diagnostics available without FEM matrices."""
 
@@ -5062,7 +5081,12 @@ def diagnose_source_consistency(
     return {
         "source_endpoint_balance_residual": source_projection_residual,
         "dc_current_conservation_residual": None,
-        "initial_curl_residual": None,
+        "initial_curl_residual": (
+            float(initial_field_diagnostics["initial_curl_residual"])
+            if isinstance(initial_field_diagnostics, dict)
+            and initial_field_diagnostics.get("initial_curl_residual") is not None
+            else None
+        ),
         "waveform_integral_residual": float(abs(integrated - expected)),
         "endpoint_source_total_sum": 0.0,
         "current_initial": float(initial),
@@ -5274,6 +5298,15 @@ def _source_consistency_inputs_from_info(source_info) -> dict[str, Any] | None:
     return dict(diagnostics)
 
 
+def _source_initial_field_diagnostics_from_info(source_info) -> dict[str, Any] | None:
+    if not isinstance(source_info, dict):
+        return None
+    diagnostics = source_info.get("initial_field_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    return json.loads(json.dumps(diagnostics, allow_nan=False, default=float))
+
+
 def write_validation_artifacts(
     times,
     pred_data,
@@ -5321,13 +5354,17 @@ def write_validation_artifacts(
     diagnostics["validation_failure"] = dict(diagnostics)
     source_projection = _source_projection_diagnostics_from_info(source_info)
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
+    initial_field_diagnostics = _source_initial_field_diagnostics_from_info(source_info)
     diagnostics["source_consistency"] = diagnose_source_consistency(
         config,
         source_projection_residual=source_projection.get("after_residual") if source_projection else None,
         source_diagnostic_inputs=source_consistency_inputs,
+        initial_field_diagnostics=initial_field_diagnostics,
     )
     if source_projection is not None:
         diagnostics["source_projection"] = source_projection
+    if initial_field_diagnostics is not None:
+        diagnostics["initial_field"] = initial_field_diagnostics
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
     if source_local_projection is not None:
         diagnostics["source_local_projection"] = source_local_projection
@@ -5408,6 +5445,7 @@ def write_source_only_diagnostics(
     source_projection = _source_projection_diagnostics_from_info(source_info)
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
+    initial_field_diagnostics = _source_initial_field_diagnostics_from_info(source_info)
     diagnostics: dict[str, Any] = {
         "source_only": True,
         "source_mode": str(source_info.get("mode")) if isinstance(source_info, dict) else None,
@@ -5415,6 +5453,7 @@ def write_source_only_diagnostics(
             config,
             source_projection_residual=source_projection.get("after_residual") if source_projection else None,
             source_diagnostic_inputs=source_consistency_inputs,
+            initial_field_diagnostics=initial_field_diagnostics,
         ),
         "runtime": {str(key): float(value) for key, value in runtime.items() if isinstance(value, (int, float))},
     }
@@ -5422,6 +5461,8 @@ def write_source_only_diagnostics(
         diagnostics["source_projection"] = source_projection
     if source_local_projection is not None:
         diagnostics["source_local_projection"] = source_local_projection
+    if initial_field_diagnostics is not None:
+        diagnostics["initial_field"] = initial_field_diagnostics
     (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
 
