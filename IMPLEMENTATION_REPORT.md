@@ -3515,12 +3515,17 @@ source-term substitution inside the existing total-field equation.
   (`primary_secondary_internal_time_grid`, `primary_secondary_step_equation`,
   and `dc_result`) back into the validation case before artifact writing, so
   real primary-secondary DOLFINx runs can provide this final-acceptance
-  evidence. WSL was rechecked and then shut down; `/usr/bin/python3` still lacks
+  evidence. The combined no-IP/IP final-acceptance report now also requires
+  internal-grid evidence from either `error_summary.json.acceptance_status`,
+  `diagnostics.json.acceptance_status`, or the persisted primary-secondary
+  internal-grid diagnostic blocks before marking a case as passed. WSL was
+  rechecked and then shut down; `/usr/bin/python3` still lacks
   `numpy`, `pytest`, `dolfinx.fem`, `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`,
   and `petsc4py`, and `wsl -l -v` confirmed `Ubuntu Stopped`. Windows
   verification ran
   `python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_failure_diagnostics.py tests/test_final_acceptance.py tests/test_corrected_model_runner.py`
-  with exit code 0.
+  and `python -m pytest -q tests/test_final_acceptance.py tests/test_corrected_model_runner.py::test_corrected_model_run_cli_writes_acceptance_config_for_both_cases tests/test_cli_subcommands.py::test_cli_acceptance_report_writes_noip_ip_gate_summary`,
+  both with exit code 0.
 
 ## Next Steps
 

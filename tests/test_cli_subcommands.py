@@ -285,5 +285,6 @@ def _acceptance_summary(case_type: str, passed: bool, reasons=None):
         "acceptance_status": {
             "final_acceptance_passed": passed,
             "blocking_reasons": reasons,
+            "internal_time_grid_verified": bool(passed),
         },
     }

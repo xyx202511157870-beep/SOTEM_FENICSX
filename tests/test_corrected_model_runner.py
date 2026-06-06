@@ -431,6 +431,19 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
             ),
             encoding="utf-8",
         )
+        (output_dir / "diagnostics.json").write_text(
+            json.dumps(
+                {
+                    "primary_secondary_internal_time_grid": {
+                        "contains_turnoff_start": True,
+                        "contains_turnoff_end": True,
+                        "contains_all_observation_outputs": True,
+                        "last_output_internal_time_s": 1.00001,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
         case_spec["output_dir"] = str(output_dir)
         return {"final_acceptance_passed": True}
 

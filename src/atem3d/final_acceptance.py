@@ -34,8 +34,18 @@ def summarize_final_acceptance(
             passed = False
             reasons = [f"case_type_mismatch:{actual_case_type or 'missing'}"]
         else:
-            passed = bool(summary.get("final_acceptance_passed", False))
+            summary_passed = bool(summary.get("final_acceptance_passed", False))
             reasons = _blocking_reasons(summary)
+            internal_grid_verified = _case_internal_time_grid_verified(
+                summary,
+                diagnostics_by_case.get(case, {}),
+            )
+            if summary_passed and not internal_grid_verified:
+                passed = False
+                if "internal_time_grid_not_verified" not in reasons:
+                    reasons.append("internal_time_grid_not_verified")
+            else:
+                passed = summary_passed
         if passed:
             passed_cases.append(case)
         else:
@@ -48,6 +58,10 @@ def summarize_final_acceptance(
             "reference_type": str(summary.get("reference_type", "")),
             "magnetic_quantity": str(summary.get("magnetic_quantity", "")),
             "final_acceptance_passed": passed,
+            "internal_time_grid_verified": _case_internal_time_grid_verified(
+                summary,
+                diagnostics_by_case.get(case, {}),
+            ),
             "blocking_reasons": reasons,
             "failure_diagnostics": failure_diagnostics,
         }
@@ -131,6 +145,33 @@ def _blocking_reasons(summary: dict) -> list[str]:
     if bool(summary.get("final_acceptance_passed", False)):
         return []
     return ["final_acceptance_passed_false"]
+
+
+def _case_internal_time_grid_verified(summary: dict, diagnostics: dict) -> bool:
+    for source in (summary, diagnostics):
+        status = source.get("acceptance_status", {})
+        if isinstance(status, dict) and bool(status.get("internal_time_grid_verified", False)):
+            return True
+    return _diagnostic_internal_time_grid_verified(diagnostics)
+
+
+def _diagnostic_internal_time_grid_verified(diagnostics: dict) -> bool:
+    candidates = []
+    direct = diagnostics.get("primary_secondary_internal_time_grid")
+    if isinstance(direct, dict):
+        candidates.append(direct)
+    equation = diagnostics.get("primary_secondary_step_equation")
+    if isinstance(equation, dict) and isinstance(equation.get("internal_time_grid"), dict):
+        candidates.append(equation["internal_time_grid"])
+    for candidate in candidates:
+        if (
+            bool(candidate.get("contains_turnoff_start", False))
+            and bool(candidate.get("contains_turnoff_end", False))
+            and bool(candidate.get("contains_all_observation_outputs", False))
+            and float(candidate.get("last_output_internal_time_s", 0.0)) >= 1.0
+        ):
+            return True
+    return False
 
 
 def _failure_diagnostics(diagnostics: dict) -> dict:

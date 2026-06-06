@@ -7,7 +7,7 @@ from atem3d.final_acceptance import (
 
 
 def test_final_acceptance_summary_requires_noip_and_ip_final_pass():
-    noip = _summary("noip", True)
+    noip = _summary("noip", True, internal_time_grid_verified=True)
     ip = _summary("ip", False, reasons=["physical_error_gate_failed"])
 
     summary = summarize_final_acceptance({"noip": noip, "ip": ip})
@@ -23,8 +23,8 @@ def test_final_acceptance_summary_requires_noip_and_ip_final_pass():
 def test_final_acceptance_summary_passes_when_both_cases_pass():
     summary = summarize_final_acceptance(
         {
-            "noip": _summary("noip", True),
-            "ip": _summary("ip", True),
+            "noip": _summary("noip", True, internal_time_grid_verified=True),
+            "ip": _summary("ip", True, internal_time_grid_verified=True),
         }
     )
 
@@ -33,12 +33,45 @@ def test_final_acceptance_summary_passes_when_both_cases_pass():
     assert summary["missing_cases"] == []
 
 
+def test_final_acceptance_summary_requires_internal_grid_evidence_for_each_case():
+    summary = summarize_final_acceptance(
+        {
+            "noip": _summary("noip", True, internal_time_grid_verified=True),
+            "ip": _summary("ip", True),
+        }
+    )
+
+    assert summary["final_acceptance_passed"] is False
+    assert summary["passed_cases"] == ["noip"]
+    assert summary["failed_cases"] == ["ip"]
+    assert summary["blocking_reasons_by_case"]["ip"] == ["internal_time_grid_not_verified"]
+
+
+def test_final_acceptance_can_use_diagnostics_internal_grid_evidence():
+    diagnostics = {
+        "noip": _diagnostics_with_internal_grid(),
+        "ip": _diagnostics_with_internal_grid(),
+    }
+
+    summary = summarize_final_acceptance(
+        {
+            "noip": _summary("noip", True),
+            "ip": _summary("ip", True),
+        },
+        case_diagnostics=diagnostics,
+    )
+
+    assert summary["final_acceptance_passed"] is True
+    assert summary["cases"]["noip"]["internal_time_grid_verified"] is True
+    assert summary["cases"]["ip"]["internal_time_grid_verified"] is True
+
+
 def test_write_final_acceptance_report_reads_summary_paths(tmp_path):
     noip_path = tmp_path / "noip" / "error_summary.json"
     ip_path = tmp_path / "ip" / "error_summary.json"
     noip_path.parent.mkdir()
     ip_path.parent.mkdir()
-    noip_path.write_text(json.dumps(_summary("noip", True)), encoding="utf-8")
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
     ip_path.write_text(
         json.dumps(_summary("ip", False, reasons=["validation_scope_not_corrected_model_full"])),
         encoding="utf-8",
@@ -65,7 +98,7 @@ def test_write_final_acceptance_report_summarizes_case_diagnostics(tmp_path):
     ip_diag_path = tmp_path / "ip" / "diagnostics.json"
     noip_path.parent.mkdir()
     ip_path.parent.mkdir()
-    noip_path.write_text(json.dumps(_summary("noip", True)), encoding="utf-8")
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
     ip_path.write_text(json.dumps(_summary("ip", False, reasons=["physical_error_gate_failed"])), encoding="utf-8")
     noip_diag_path.write_text(json.dumps({"validation_failure": {"failed": False}}), encoding="utf-8")
     ip_diag_path.write_text(
@@ -103,7 +136,7 @@ def test_write_final_acceptance_report_summarizes_case_diagnostics(tmp_path):
     assert "ip: physical_error_gate_failed" in text
 
 
-def _summary(case_type: str, passed: bool, *, reasons=None):
+def _summary(case_type: str, passed: bool, *, reasons=None, internal_time_grid_verified=False):
     reasons = [] if reasons is None else list(reasons)
     return {
         "case_type": case_type,
@@ -113,5 +146,17 @@ def _summary(case_type: str, passed: bool, *, reasons=None):
         "acceptance_status": {
             "final_acceptance_passed": passed,
             "blocking_reasons": reasons,
+            "internal_time_grid_verified": bool(internal_time_grid_verified),
         },
+    }
+
+
+def _diagnostics_with_internal_grid():
+    return {
+        "primary_secondary_internal_time_grid": {
+            "contains_turnoff_start": True,
+            "contains_turnoff_end": True,
+            "contains_all_observation_outputs": True,
+            "last_output_internal_time_s": 1.00001,
+        }
     }
