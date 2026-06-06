@@ -94,6 +94,39 @@ def test_validation_rejects_magnetic_quantity_not_present_in_components(tmp_path
         )
 
 
+def test_summary_magnetic_alias_uses_declared_magnetic_quantity(tmp_path):
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    reference = np.array(
+        [
+            [1.0, 0.2, 1.0e-9, 2.0e-9],
+            [0.5, 0.1, 5.0e-10, 1.0e-9],
+            [0.1, 0.02, 1.0e-10, 2.0e-10],
+        ]
+    )
+    predictions = reference.copy()
+    predictions[:, 2] *= 1.01
+    predictions[:, 3] *= 1.2
+
+    summary = write_three_component_validation_artifacts(
+        ThreeComponentValidationInput(
+            output_dir=tmp_path,
+            times=times,
+            predictions=predictions,
+            reference=reference,
+            component_names=["Ex", "Ey", "Hz", "Hx"],
+            case_type="noip",
+            reference_type="empymod",
+            magnetic_quantity="Hz",
+        )
+    )
+
+    payload = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    assert summary["max_error_Hz_or_dBzdt"] == pytest.approx(summary["max_error_Hz"])
+    assert summary["rms_error_Hz_or_dBzdt"] == pytest.approx(summary["rms_error_Hz"])
+    assert payload["max_error_Hz_or_dBzdt"] == pytest.approx(payload["max_error_Hz"])
+    assert payload["max_error_Hz_or_dBzdt"] != pytest.approx(payload["max_error_Hx"])
+
+
 def test_corrected_model_full_scope_can_claim_final_acceptance(tmp_path):
     times = np.array([1.0e-5, 1.0e-3, 1.0])
     reference = np.array(

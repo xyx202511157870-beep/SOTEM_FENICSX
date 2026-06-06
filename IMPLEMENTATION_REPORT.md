@@ -384,6 +384,27 @@ python -m pytest -q
 Results: the new mismatch regression test passed, validation/corrected-model
 pytest passed (`33 passed`), and full pytest exited `0`.
 
+## Magnetic Summary Alias Binding Checkpoint (2026-06-06)
+
+When validation outputs include extra magnetic components, the task-book
+generic summary fields now bind to the declared `magnetic_quantity` instead of
+whichever non-electric component was processed last. For example, with
+`component_names=[Ex,Ey,Hz,Hx]` and `magnetic_quantity=Hz`,
+`max_error_Hz_or_dBzdt`, `rms_error_Hz_or_dBzdt`, and
+`max_peak_normalized_error_Hz_or_dBzdt` are copied from the `Hz` component
+metrics, not from `Hx`.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_noip_3comp_validation_smoke.py::test_summary_magnetic_alias_uses_declared_magnetic_quantity
+python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_metrics.py
+python -m pytest -q
+```
+
+Results: the new alias-binding regression test passed, validation/metrics
+pytest passed (`18 passed`), and full pytest exited `0`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

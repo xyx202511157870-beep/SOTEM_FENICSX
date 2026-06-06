@@ -262,6 +262,7 @@ def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict
     values["reference_type"] = case.reference_type
     values["magnetic_quantity"] = case.magnetic_quantity
     values["validation_scope"] = case.validation_scope
+    _bind_declared_magnetic_aliases(values, str(case.magnetic_quantity))
     if case.material is not None:
         terms = list(case.material.terms)
         sum_delta = float(sum(term.delta_sigma for term in terms))
@@ -278,6 +279,14 @@ def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict
             }
         )
     return values
+
+
+def _bind_declared_magnetic_aliases(summary: dict, magnetic_quantity: str) -> None:
+    for prefix in ("max_error", "rms_error", "max_peak_normalized_error"):
+        source_key = f"{prefix}_{magnetic_quantity}"
+        alias_key = f"{prefix}_Hz_or_dBzdt"
+        if source_key in summary:
+            summary[alias_key] = summary[source_key]
 
 
 def _automatic_failure_diagnostics(
