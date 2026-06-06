@@ -124,12 +124,18 @@ class PrimarySecondaryForwardOperator:
         previous_time = 0.0
         rows: list[np.ndarray] = []
         output_index = 0
+        first_primary_time = float(observation_times[0])
 
         for internal_time in internal_times:
             dt = float(internal_time - previous_time)
             if dt <= 0.0:
                 raise ValueError("internal times must be greater than initial time 0")
-            Ep_new = primary_fem.sample_Ep(float(internal_time))
+            primary_time = _primary_time_from_internal_time(
+                float(internal_time),
+                turnoff_time=float(self.turnoff_time),
+                first_primary_time=first_primary_time,
+            )
+            Ep_new = primary_fem.sample_Ep(primary_time)
             if self.secondary_state_stepper is not None:
                 state = self.secondary_state_stepper(
                     state,
@@ -167,7 +173,15 @@ class PrimarySecondaryForwardOperator:
                 rtol=0.0,
                 atol=1.0e-15,
             ):
-                rows.append(self._receiver_row(state, Ep_new, float(internal_time), dt))
+                rows.append(
+                    self._receiver_row(
+                        state,
+                        Ep_new,
+                        internal_time=float(internal_time),
+                        primary_time=float(observation_times[output_index]),
+                        dt=dt,
+                    )
+                )
                 output_index += 1
             Ep_old = Ep_new
             previous_time = float(internal_time)
@@ -200,16 +214,17 @@ class PrimarySecondaryForwardOperator:
         self,
         state: SecondaryState,
         Ep_new: np.ndarray,
-        time_value: float,
+        internal_time: float,
+        primary_time: float,
         dt: float,
     ) -> np.ndarray:
-        primary_E = self.primary.get_receiver_E(time_value, self.receiver_locations)
-        primary_dbdt = self.primary.get_receiver_dBdt(time_value, self.receiver_locations)
+        primary_E = self.primary.get_receiver_E(primary_time, self.receiver_locations)
+        primary_dbdt = self.primary.get_receiver_dBdt(primary_time, self.receiver_locations)
         primary_row = _flatten_components(primary_E, primary_dbdt, self.components)
         if self.secondary_receiver_projector is None:
             return primary_row
         secondary = np.asarray(
-            self.secondary_receiver_projector(state, Ep_new, time_value, dt, self.components),
+            self.secondary_receiver_projector(state, Ep_new, internal_time, dt, self.components),
             dtype=float,
         )
         if secondary.ndim == 2 and secondary.shape == (
@@ -265,6 +280,16 @@ def _as_strictly_increasing_times(times: Sequence[float]) -> np.ndarray:
     if np.any(np.diff(values) <= 0.0):
         raise ValueError("times must be strictly increasing")
     return values.copy()
+
+
+def _primary_time_from_internal_time(
+    internal_time: float,
+    *,
+    turnoff_time: float,
+    first_primary_time: float,
+) -> float:
+    primary_time = float(internal_time) - float(turnoff_time)
+    return max(float(first_primary_time), primary_time)
 
 
 def _internal_time_grid(

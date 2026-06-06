@@ -110,6 +110,53 @@ def test_primary_secondary_forward_adds_2d_secondary_receiver_projection():
     assert seen["receiver_components"] == ("Ex", "Ey", "dBzdt")
 
 
+def test_primary_secondary_forward_outputs_use_observation_time_primary_after_turnoff():
+    points = np.array([[0.0, 0.0, 0.0]])
+    receivers = np.array([[0.0, -300.0, -0.1]])
+    observation_times = np.array([1.0e-5, 2.0e-5])
+    provider = CachedPrimaryProvider(
+        times=np.array([1.0e-5, 2.0e-5, 3.0e-5]),
+        points=points,
+        receivers=receivers,
+        Ep_on_V=np.array(
+            [
+                [[1.0, 0.0, 0.0]],
+                [[2.0, 0.0, 0.0]],
+                [[3.0, 0.0, 0.0]],
+            ]
+        ),
+        receiver_E=np.array(
+            [
+                [[10.0, 1.0, 0.0]],
+                [[20.0, 2.0, 0.0]],
+                [[30.0, 3.0, 0.0]],
+            ]
+        ),
+        receiver_dBdt=np.array(
+            [
+                [[0.0, 0.0, -1.0]],
+                [[0.0, 0.0, -2.0]],
+                [[0.0, 0.0, -3.0]],
+            ]
+        ),
+        Ep_dc_on_V=np.array([[10.0, 0.0, 0.0]]),
+    )
+    operator = PrimarySecondaryForwardOperator(
+        primary=provider,
+        fem_points=points,
+        receiver_locations=receivers,
+        components=("Ex", "Ey", "dBzdt"),
+        material=PronyConductivity(sigma_inf=0.01, terms=[]),
+        sigma_background=0.01,
+        turnoff_time=1.0e-5,
+        turnoff_steps=2,
+    )
+
+    predicted = operator.forward(observation_times)
+
+    np.testing.assert_allclose(predicted, [[10.0, 1.0, -1.0], [20.0, 2.0, -2.0]])
+
+
 def test_primary_secondary_forward_samples_internal_times_after_turnoff():
     points = np.array([[0.0, 0.0, 0.0]])
     receivers = np.array([[0.0, -300.0, -0.1]])
@@ -172,7 +219,7 @@ def test_primary_secondary_forward_samples_internal_times_after_turnoff():
 
     predicted = operator.forward(observation_times)
 
-    np.testing.assert_allclose(predicted, [[20.0, 2.0, -2.0], [30.0, 3.0, -3.0]])
+    np.testing.assert_allclose(predicted, [[10.0, 1.0, -1.0], [20.0, 2.0, -2.0]])
     np.testing.assert_allclose(seen["step_dt"], [0.5e-5, 0.5e-5, 1.0e-5, 1.0e-5])
     np.testing.assert_allclose(seen["receiver_time"], output_internal_times)
 

@@ -3589,6 +3589,34 @@ source-term substitution inside the existing total-field equation.
   Each WSL run was followed by `wsl --shutdown`, and `wsl -l -v` confirmed
   `Ubuntu Stopped`. Windows verification after the test-wiring correction ran
   `python -m pytest -q` with exit code 0.
+- Primary-provider time-origin correction checkpoint (2026-06-06): a real WSL
+  corrected-model run with 80 logarithmic observation times over `1e-5 s <=
+  t_obs <= 1 s` initially failed the no-IP and IP final gates even for the
+  zero-secondary background baseline. The maximum no-IP `Ex` robust relative
+  error was reproduced exactly by comparing `EmpymodPrimaryProvider(t_obs +
+  t_off)` against `EmpymodPrimaryProvider(t_obs)`, proving that the
+  primary-secondary core was querying the empymod/1D primary provider with
+  internal ramp-start time instead of after-ramp observation time. The fix keeps
+  the internal solver grid and `dt` on `t_internal`, but maps primary-provider
+  samples to after-ramp time with `t_primary = max(t_internal - t_off,
+  first_observation_time)` and queries output receiver primary fields at the
+  requested `t_obs`. The secondary receiver projector still receives
+  `t_internal`, preserving runtime diagnostics. Regression tests now cover that
+  output primary rows are not shifted by `t_off` while the solver still steps
+  through the turnoff grid. Verification ran
+  `python -m pytest -q tests/test_primary_secondary_forward.py::test_primary_secondary_forward_outputs_use_observation_time_primary_after_turnoff tests/test_primary_secondary_forward.py::test_primary_secondary_forward_samples_internal_times_after_turnoff`,
+  `python -m pytest -q tests/test_primary_secondary_forward.py tests/test_time_grid.py tests/test_corrected_model_runner.py tests/test_dolfinx_primary_secondary_metadata.py`,
+  and `python -m pytest -q`, all with exit code 0. A WSL `conda activate
+  fenicsx` corrected-model run then generated no-IP/IP artifacts in
+  `dolfinx/runs/latest_corrected_model_wsl_80t_timefix` and the combined
+  final report returned `FINAL_ACCEPTANCE_PASSED=true`. For that
+  zero-secondary background baseline, no-IP and IP both had
+  `max_error_Ex = 0`, `max_error_Ey = 0`, and `max_error_dBzdt = 0`; recorded
+  forward runtimes were about 89.09 s for no-IP and 82.43 s for IP. This is a
+  successful full-window empymod primary/reference acceptance check for the
+  corrected source/receiver geometry, not yet a claim that nonzero terrain or
+  leakage-channel physics passes the final 5% gate. The WSL run was followed by
+  `wsl --shutdown`, and `wsl -l -v` confirmed `Ubuntu Stopped`.
 
 ## Next Steps
 
