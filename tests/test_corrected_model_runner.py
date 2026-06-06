@@ -60,6 +60,7 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
         "error_summary.json",
         "comparison_3comp.png",
         "error_curves_3comp.png",
+        "model_schematic.png",
         "diagnostics.json",
         "run_config_resolved.yaml",
     ):
@@ -70,6 +71,7 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
     assert diagnostics["runtime_seconds"]["forward"] >= 0.0
     assert diagnostics["runtime_seconds"]["reference"] >= 0.0
     assert diagnostics["runtime_seconds"]["artifact_total"] >= 0.0
+    assert diagnostics["model_schematic"]["source_length_m"] == 1000.0
 
 
 def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):

@@ -28,6 +28,9 @@ This report covers the implementation rounds currently committed or staged from 
   from injected forward/reference runners. The default DOLFINx forward backend
   now has a memory-safe no-IP zero-secondary smoke path; nonzero-contrast/IP
   corrected-model backend validation remains pending.
+- Corrected-model schematic integration: `corrected-model-run` now writes
+  `model_schematic.png` into each case output directory and records schematic
+  metadata in `diagnostics.json`.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 Validation artifacts now write an explicit `acceptance_status` object and a
@@ -946,6 +949,8 @@ default DOLFINx forward path can run a small no-IP uniform-background
 primary-secondary case by sampling `EmpymodPrimaryProvider` on the DOLFINx
 Nedelec interpolation points and using the zero-secondary receiver projector.
 This is a backend smoke, not a full corrected-model 5% acceptance run.
+Each corrected-model run now also writes `model_schematic.png` beside the
+response/error artifacts and records `diagnostics["model_schematic"]`.
 The runner records `runtime_seconds.forward`, `runtime_seconds.reference`, and
 `runtime_seconds.artifact_total` in `diagnostics.json` for each validation case.
 For IP cases, the corrected-model reference path now converts the Prony/Debye

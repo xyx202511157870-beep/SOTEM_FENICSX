@@ -73,8 +73,13 @@ def run_corrected_model_validation(
         validation_scope=str(spec.get("validation_scope", "smoke")),
     )
     summary = write_three_component_validation_artifacts(case)
+    schematic_info = _write_model_schematic_if_possible(spec)
     runtime_seconds["artifact_total"] = float(time.perf_counter() - artifact_t0)
-    _update_runtime_diagnostics(Path(spec["output_dir"]), runtime_seconds)
+    _update_runtime_diagnostics(
+        Path(spec["output_dir"]),
+        runtime_seconds,
+        model_schematic=schematic_info,
+    )
     return summary
 
 
@@ -400,12 +405,28 @@ def _validate_response_table(values, times: np.ndarray, components: list[str], r
     return table
 
 
-def _update_runtime_diagnostics(output_dir: Path, runtime_seconds: dict[str, float]) -> None:
+def _write_model_schematic_if_possible(case_spec: dict) -> dict | None:
+    required = ("source_start", "source_end", "receiver", "output_dir")
+    if not all(name in case_spec for name in required):
+        return None
+    from atem3d.model_schematic import write_model_schematic
+
+    return write_model_schematic(case_spec, Path(case_spec["output_dir"]) / "model_schematic.png")
+
+
+def _update_runtime_diagnostics(
+    output_dir: Path,
+    runtime_seconds: dict[str, float],
+    *,
+    model_schematic: dict | None = None,
+) -> None:
     import json
 
     diagnostics_path = output_dir / "diagnostics.json"
     diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
     diagnostics["runtime_seconds"] = dict(runtime_seconds)
+    if model_schematic is not None:
+        diagnostics["model_schematic"] = dict(model_schematic)
     diagnostics_path.write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
 
 
