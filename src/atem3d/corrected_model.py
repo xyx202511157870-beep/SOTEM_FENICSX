@@ -224,6 +224,16 @@ def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
             "doi": "10.1016/j.jappgeo.2024.105613",
             "url": "https://www.sciencedirect.com/science/article/pii/S092698512400329X",
             "reproduction_status": "target_defined_full_text_parameters_pending",
+            "public_method_summary": {
+                "frequency_domain_solver": "COMSOL",
+                "time_domain_transform": "frequency-time transformation",
+                "reported_components": ["Ex", "Hz"],
+            },
+            "public_model_classes": [
+                "polarized_layer",
+                "high_resistivity_polarized_body",
+                "low_resistivity_polarized_body",
+            ],
         },
         "model": {
             "source_start": [float(value) for value in cfg.source_start],

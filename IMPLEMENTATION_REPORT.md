@@ -983,6 +983,13 @@ calculation domain of `4000 m x 4000 m x 1000 m`. The latest corrected
 coordinates used here remain source `(-500, 200, -0.1) -> (500, 200, -0.1)` and
 receiver `(0, -300, -0.1)`.
 
+Publicly visible method/model metadata also indicate that the paper solves the
+SOTEM response in the frequency domain with COMSOL, transforms to time domain
+with frequency-time transformation, and discusses `Ex` and `Hz` responses for
+polarized layers plus high-resistivity and low-resistivity polarized bodies.
+These entries are recorded in `published_paper_model_target.json` as public
+metadata only; they are not enough to reconstruct the full response curves.
+
 Write the reproduction target metadata with:
 
 ```bash

@@ -239,6 +239,16 @@ def test_published_paper_model_target_spec_records_public_reference_metadata(tmp
     assert spec["published_reference"]["article_id"] == "S092698512400329X"
     assert spec["published_reference"]["doi"] == "10.1016/j.jappgeo.2024.105613"
     assert spec["published_reference"]["reproduction_status"] == "target_defined_full_text_parameters_pending"
+    assert spec["published_reference"]["public_method_summary"] == {
+        "frequency_domain_solver": "COMSOL",
+        "time_domain_transform": "frequency-time transformation",
+        "reported_components": ["Ex", "Hz"],
+    }
+    assert spec["published_reference"]["public_model_classes"] == [
+        "polarized_layer",
+        "high_resistivity_polarized_body",
+        "low_resistivity_polarized_body",
+    ]
     assert spec["model"]["source_start"] == [-500.0, 200.0, -0.1]
     assert spec["model"]["source_end"] == [500.0, 200.0, -0.1]
     assert spec["model"]["receiver"] == [0.0, -300.0, -0.1]
