@@ -3702,6 +3702,24 @@ source-term substitution inside the existing total-field equation.
   and `python -m pytest -q`, both with exit code 0. This is a P8 stability
   smoke for complex terrain plus leakage-channel transient execution, not a
   final empymod/1D 5% acceptance run.
+- Corrected-runner Gmsh terrain artifact smoke checkpoint (2026-06-06): the
+  constant-primary Gmsh terrain/leakage transient path now has a validation
+  artifact smoke. The WSL test runs the DOLFINx terrain/leakage forward once,
+  uses the same prediction table as a `self_convergence` diagnostic reference,
+  and verifies that the full artifact set is written:
+  `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
+  `error_summary.json`, `comparison_3comp.png`, `error_curves_3comp.png`,
+  `diagnostics.json`, `run_config_resolved.yaml`, and `model_schematic.png`.
+  The diagnostics also prove `primary_provider_mode = constant`,
+  `mesh_runtime.terrain_mesh.mode = small_gmsh_terrain_leakage`, and nonzero
+  leakage marker coverage. WSL verification ran
+  `python -u -m pytest -vv tests/test_dolfinx_complex_terrain_leakage_forward.py::test_corrected_leakage_gmsh_terrain_constant_primary_writes_validation_artifacts`
+  and passed in about 3.4 s; WSL was shut down afterward and `Ubuntu Stopped`
+  was confirmed. Windows verification ran
+  `python -m pytest -q tests/test_dolfinx_complex_terrain_leakage_forward.py tests/test_corrected_model_runner.py`
+  and `python -m pytest -q`, both with exit code 0. This remains a diagnostic
+  P8 artifact smoke and is deliberately blocked from final acceptance by
+  `reference_type = self_convergence`.
 
 ## Next Steps
 

@@ -336,3 +336,77 @@ def test_corrected_leakage_gmsh_terrain_constant_primary_forward_runs(tmp_path):
     assert diagnostics["primary_provider_mode"] == "constant"
     assert diagnostics["mesh_runtime"]["terrain_mesh"]["mode"] == "small_gmsh_terrain_leakage"
     assert diagnostics["leakage_marker_runtime"]["leakage_cell_count"] > 0
+
+
+def test_corrected_leakage_gmsh_terrain_constant_primary_writes_validation_artifacts(tmp_path):
+    pytest.importorskip("gmsh")
+
+    from atem3d.corrected_model import (
+        CorrectedModelValidationConfig,
+        build_corrected_leakage_channel_case_specs,
+    )
+    from atem3d.corrected_model_runner import (
+        _default_forward_runner,
+        run_corrected_model_validation,
+    )
+
+    config = CorrectedModelValidationConfig(n_observation_times=2, turnoff_steps=1)
+    spec = build_corrected_leakage_channel_case_specs(tmp_path, config=config)["noip"]
+    spec["reference_type"] = "self_convergence"
+    spec["receiver"] = [0.25, 0.25, -0.25]
+    spec["observation_times"] = [1.0e-5, 1.0]
+    spec["turnoff_steps"] = 1
+    spec["output_dir"] = str(tmp_path / "terrain_artifacts")
+    forward = spec["dolfinx_forward"]
+    forward["primary_provider_mode"] = "constant"
+    forward["constant_primary_E"] = [1.0, 0.0, 0.0]
+    forward["constant_primary_dBdt"] = [0.0, 0.0, 0.0]
+    forward["terrain_mesh"] = {
+        "mode": "small_gmsh_terrain_leakage",
+        "mesh_size": 0.9,
+        "msh_name": "terrain_leakage.msh",
+    }
+    forward["receiver_evaluation_mode"] = "first_cell"
+    forward["rtol"] = 1.0e-7
+    forward["atol"] = 1.0e-9
+    forward["max_it"] = 300
+    forward["leakage_channel"] = {
+        "points": [[0.05, 0.5, -0.45], [0.95, 0.5, -0.45]],
+        "radius": 0.35,
+        "min_marked_cells": 1,
+        "sigma": 0.04,
+    }
+    captured = {}
+
+    def forward_runner(case_spec):
+        captured["values"] = _default_forward_runner(case_spec)
+        return captured["values"]
+
+    def reference_runner(_case_spec):
+        return captured["values"].copy()
+
+    summary = run_corrected_model_validation(
+        spec,
+        forward_runner=forward_runner,
+        reference_runner=reference_runner,
+    )
+
+    assert summary["reference_type"] == "self_convergence"
+    assert summary["final_acceptance_passed"] is False
+    assert "reference_type_not_final_acceptance" in summary["acceptance_status"]["blocking_reasons"]
+    for name in (
+        "predictions.csv",
+        "reference_empymod_or_1d.csv",
+        "errors.csv",
+        "error_summary.json",
+        "comparison_3comp.png",
+        "error_curves_3comp.png",
+        "diagnostics.json",
+        "run_config_resolved.yaml",
+        "model_schematic.png",
+    ):
+        assert (tmp_path / "terrain_artifacts" / name).is_file()
+    diagnostics = json.loads((tmp_path / "terrain_artifacts" / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["primary_provider_mode"] == "constant"
+    assert diagnostics["mesh_runtime"]["terrain_mesh"]["mode"] == "small_gmsh_terrain_leakage"
+    assert diagnostics["leakage_marker_runtime"]["leakage_cell_count"] > 0
