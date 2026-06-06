@@ -427,6 +427,30 @@ python -m pytest -q
 Results: the new YAML config regression test passed, config/waveform/source
 pytest passed, and full pytest exited `0`.
 
+## YAML Tabulated Waveform CSV Checkpoint (2026-06-06)
+
+The legacy `tdem-ip-forward run CONFIG` path now accepts task-book tabulated
+waveform CSV files with `time,current` columns through
+`waveform: {type: tabulated, path: waveform.csv}`. CSV `current` values are
+treated as actual amperes and converted into the existing
+`GroundedWireSource.current * waveform.value(t)` scale convention, preventing
+source-current double counting. The first CSV current is used as the default
+initial-field current unless `initial_field_value` or `initial_field_current`
+is provided. Existing inline `times`/`values` tabulated configs remain
+supported, and inline `times`/`currents` can now be supplied as actual
+currents.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_config_and_io.py::test_build_simulation_supports_tabulated_waveform_csv_currents
+python -m pytest -q tests/test_config_and_io.py tests/test_waveform.py tests/test_sources.py
+python -m pytest -q
+```
+
+Results: the new CSV waveform regression test passed, config/waveform/source
+pytest passed, and full pytest exited `0`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

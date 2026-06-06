@@ -84,6 +84,42 @@ def test_build_simulation_supports_linear_ramp_off_waveform():
     assert source_current * waveform.previous_value(1.0e-5) == 0.0
 
 
+def test_build_simulation_supports_tabulated_waveform_csv_currents(tmp_path):
+    waveform_csv = tmp_path / "waveform.csv"
+    waveform_csv.write_text(
+        "time,current\n0.0,10.0\n5e-6,5.0\n1e-5,0.0\n",
+        encoding="utf-8",
+    )
+    config = {
+        "mesh": {
+            "hx": [1.0, 1.0, 1.0],
+            "hy": [1.0, 1.0, 1.0],
+            "hz": [1.0, 1.0],
+            "origin": [-1.5, -1.5, -1.0],
+        },
+        "model": {"sigma_infinity": 0.1},
+        "source": {
+            "start": [-0.5, 0.0, 0.0],
+            "end": [0.5, 0.0, 0.0],
+            "current": 10.0,
+            "waveform": {
+                "type": "tabulated",
+                "path": str(waveform_csv),
+            },
+        },
+        "time_steps": [1.0e-6],
+        "receivers": [],
+    }
+
+    simulation = build_simulation(config)
+    waveform = simulation.sources[0].waveform
+    source_current = simulation.sources[0].current
+
+    assert source_current * waveform.value(0.0) == 10.0
+    assert source_current * waveform.value(2.5e-6) == 7.5
+    assert source_current * waveform.value(1.0e-5) == 0.0
+
+
 def test_save_result_hdf5_accepts_receiver_data_only_result(tmp_path):
     result = ReceiverDataResult(
         times=np.array([0.0, 1.0e-3]),

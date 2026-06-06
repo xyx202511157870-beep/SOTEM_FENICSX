@@ -212,11 +212,7 @@ def _build_source(source_cfg: dict[str, Any]) -> GroundedWireSource:
             final_value_scale=current_final / source_current,
         )
     elif waveform_type == "tabulated":
-        waveform = TabulatedWaveform(
-            times=np.asarray(waveform_cfg["times"], dtype=float),
-            values=np.asarray(waveform_cfg["values"], dtype=float),
-            initial_field_value=float(waveform_cfg.get("initial_field_value", 0.0)),
-        )
+        waveform = _build_tabulated_source_waveform(waveform_cfg, source_current)
     else:
         raise ValueError(f"unsupported waveform type: {waveform_type}")
 
@@ -226,6 +222,45 @@ def _build_source(source_cfg: dict[str, Any]) -> GroundedWireSource:
         current=source_current,
         waveform=waveform,
         face_projection=str(source_cfg.get("face_projection", "auto")),
+    )
+
+
+def _build_tabulated_source_waveform(
+    waveform_cfg: dict[str, Any],
+    source_current: float,
+) -> TabulatedWaveform:
+    path = waveform_cfg.get("path", waveform_cfg.get("csv_path"))
+    if path is not None:
+        if source_current == 0.0:
+            raise ValueError("current must be nonzero")
+        table = np.genfromtxt(path, delimiter=",", names=True)
+        if table.dtype.names is None or "time" not in table.dtype.names or "current" not in table.dtype.names:
+            raise ValueError("tabulated waveform CSV must contain time,current columns")
+        times = np.atleast_1d(np.asarray(table["time"], dtype=float))
+        currents = np.atleast_1d(np.asarray(table["current"], dtype=float))
+        values = currents / source_current
+        if "initial_field_current" in waveform_cfg:
+            initial_field_value = float(waveform_cfg["initial_field_current"]) / source_current
+        else:
+            initial_field_value = float(waveform_cfg.get("initial_field_value", values[0]))
+        return TabulatedWaveform(
+            times=times,
+            values=values,
+            initial_field_value=initial_field_value,
+        )
+    if "currents" in waveform_cfg:
+        if source_current == 0.0:
+            raise ValueError("current must be nonzero")
+        currents = np.asarray(waveform_cfg["currents"], dtype=float)
+        values = currents / source_current
+        initial_field_value = float(waveform_cfg.get("initial_field_value", values[0]))
+    else:
+        values = np.asarray(waveform_cfg["values"], dtype=float)
+        initial_field_value = float(waveform_cfg.get("initial_field_value", 0.0))
+    return TabulatedWaveform(
+        times=np.asarray(waveform_cfg["times"], dtype=float),
+        values=values,
+        initial_field_value=initial_field_value,
     )
 
 
