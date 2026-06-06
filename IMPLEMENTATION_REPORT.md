@@ -3544,6 +3544,26 @@ source-term substitution inside the existing total-field equation.
   and `python -m pytest -q tests/test_final_acceptance.py tests/test_corrected_model_runner.py::test_corrected_model_run_cli_writes_acceptance_config_for_both_cases tests/test_cli_subcommands.py::test_cli_acceptance_report_writes_noip_ip_gate_summary`,
   `python -m pytest -q tests/test_final_acceptance.py tests/test_cli_subcommands.py tests/test_corrected_model_runner.py tests/test_polarization_effect.py`,
   and `python -m pytest -q`, all with exit code 0.
+- Final artifact schema checkpoint (2026-06-06): tightened the combined final
+  acceptance report so required artifacts are not accepted merely because the
+  files exist. Case response CSVs (`predictions.csv` and
+  `reference_empymod_or_1d.csv`) must contain `time_obs`, `Ex`, `Ey`, and at
+  least one accepted magnetic response column (`Hz` or `dBzdt`). `errors.csv`
+  must contain the task-book error columns: `time_obs`, `component`, `pred`,
+  `ref`, `abs_error`, `ordinary_relative_error`,
+  `relative_error_with_floor`, `peak_normalized_error`, and `pass_5pct`.
+  `diagnostics.json` must be valid JSON. Polarization-effect response and
+  error CSVs are checked with the same schema rules, and
+  `polarization_effect_summary.json` must be valid JSON with
+  `artifact_type = polarization_effect`. Invalid schema/content now blocks
+  final acceptance with `validation_artifacts_invalid` or
+  `polarization_effect_artifacts_invalid`. Windows verification ran
+  `python -m pytest -q tests/test_final_acceptance.py`,
+  `python -m pytest -q tests/test_final_acceptance.py tests/test_cli_subcommands.py tests/test_corrected_model_runner.py tests/test_polarization_effect.py`,
+  and `python -m pytest -q`, all with exit code 0. WSL was rechecked and then
+  shut down; `/usr/bin/python3` still lacks `numpy`, `pytest`, `dolfinx.fem`,
+  `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`, and `petsc4py`, and
+  `wsl -l -v` confirmed `Ubuntu Stopped`.
 
 ## Next Steps
 
