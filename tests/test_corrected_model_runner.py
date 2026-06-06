@@ -469,6 +469,77 @@ def test_published_paper_digitization_template_cli_writes_manifest_and_csv(tmp_p
     assert "Fig. 15,three_dimensional_polarized_body,Hz,paper_noip,,,digitize from published plot" in csv_lines
 
 
+def test_published_paper_curve_artifacts_cli_writes_overlay_outputs(tmp_path):
+    predictions = tmp_path / "predictions.csv"
+    predictions.write_text(
+        "\n".join(
+            [
+                "time_obs,Ex,Hz",
+                "1e-05,1.02,2.04e-09",
+                "0.001,0.51,1.02e-09",
+                "1.0,0.102,2.04e-10",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    digitized = tmp_path / "digitized.csv"
+    digitized.write_text(
+        "\n".join(
+            [
+                "figure,model_key,component,curve_label,time_obs,value,notes",
+                "Fig. 12,three_dimensional_polarized_body,Ex,paper_ip,1e-05,1.0,",
+                "Fig. 12,three_dimensional_polarized_body,Ex,paper_ip,0.001,0.5,",
+                "Fig. 12,three_dimensional_polarized_body,Ex,paper_ip,1.0,0.1,",
+                "Fig. 15,three_dimensional_polarized_body,Hz,paper_ip,1e-05,2.0e-09,",
+                "Fig. 15,three_dimensional_polarized_body,Hz,paper_ip,0.001,1.0e-09,",
+                "Fig. 15,three_dimensional_polarized_body,Hz,paper_ip,1.0,2.0e-10,",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "paper_overlay"
+
+    exit_code = main(
+        [
+            "published-paper-curve-artifacts",
+            str(predictions),
+            str(digitized),
+            "--output-dir",
+            str(output_dir),
+            "--case-type",
+            "ip",
+            "--curve-label",
+            "paper_ip",
+            "--component-figure",
+            "Ex=Fig. 12",
+            "--component-figure",
+            "Hz=Fig. 15",
+        ]
+    )
+
+    assert exit_code == 0
+    for name in (
+        "predictions.csv",
+        "reference_empymod_or_1d.csv",
+        "errors.csv",
+        "error_summary.json",
+        "comparison_3comp.png",
+        "error_curves_3comp.png",
+        "diagnostics.json",
+        "run_config_resolved.yaml",
+    ):
+        assert (output_dir / name).is_file()
+    payload = json.loads((output_dir / "error_summary.json").read_text(encoding="utf-8"))
+    assert payload["reference_type"] == "published_response_curve"
+    assert payload["final_acceptance_passed"] is False
+    assert "reference_type_not_final_acceptance" in payload["acceptance_status"]["blocking_reasons"]
+    diagnostics = json.loads((output_dir / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["published_response_curve"]["curve_label"] == "paper_ip"
+    assert diagnostics["published_response_curve"]["component_figures"] == {"Ex": "Fig. 12", "Hz": "Fig. 15"}
+
+
 def test_corrected_leakage_channel_case_specs_define_memory_safe_3d_anomaly(tmp_path):
     specs = build_corrected_leakage_channel_case_specs(tmp_path)
 

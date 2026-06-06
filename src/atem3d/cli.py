@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_published_paper_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-digitization-template":
         return _main_published_paper_digitization_template(argv[1:])
+    if argv and argv[0] == "published-paper-curve-artifacts":
+        return _main_published_paper_curve_artifacts(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
@@ -220,6 +222,52 @@ def _main_published_paper_digitization_template(argv: list[str]) -> int:
     print(f"wrote {args.output_dir / 'paper_curve_digitization_manifest.json'}")
     print(f"wrote {args.output_dir / manifest['template_csv']}")
     return 0
+
+
+def _main_published_paper_curve_artifacts(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write artifacts from digitized published response curves.")
+    parser.add_argument("predictions_csv", type=Path, help="Prediction CSV with time_obs and component columns")
+    parser.add_argument("digitized_csv", type=Path, help="Long-form digitized paper response CSV")
+    parser.add_argument("--output-dir", type=Path, default=Path("paper_curve_artifacts"))
+    parser.add_argument("--case-type", choices=("noip", "ip"), default="ip")
+    parser.add_argument("--curve-label", default="paper_ip")
+    parser.add_argument(
+        "--component-figure",
+        action="append",
+        default=[],
+        help="Component-to-figure mapping such as Ex=Fig. 12; may be repeated",
+    )
+    args = parser.parse_args(argv)
+
+    from .paper_digitization import write_published_paper_curve_artifacts
+
+    component_figures = _parse_component_figure_args(args.component_figure)
+    summary = write_published_paper_curve_artifacts(
+        predictions_csv=args.predictions_csv,
+        digitized_csv=args.digitized_csv,
+        output_dir=args.output_dir,
+        case_type=args.case_type,
+        curve_label=args.curve_label,
+        component_figures=component_figures or None,
+    )
+    print(f"wrote {args.output_dir}")
+    print(f"reference_type: {summary['reference_type']}")
+    print(f"final_acceptance_passed: {summary['final_acceptance_passed']}")
+    return 0
+
+
+def _parse_component_figure_args(values: list[str]) -> dict[str, str]:
+    parsed = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError("--component-figure entries must use Component=Figure")
+        component, figure = value.split("=", 1)
+        component = component.strip()
+        figure = figure.strip()
+        if not component or not figure:
+            raise ValueError("--component-figure entries must use Component=Figure")
+        parsed[component] = figure
+    return parsed
 
 
 def _main_corrected_leakage_model_spec(argv: list[str]) -> int:

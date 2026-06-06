@@ -6,6 +6,13 @@ from pathlib import Path
 import csv
 import json
 
+import numpy as np
+
+from atem3d.validation_3comp import (
+    ThreeComponentValidationInput,
+    write_three_component_validation_artifacts,
+)
+
 
 PAPER_CURVE_TARGETS = [
     {
@@ -76,6 +83,58 @@ def write_published_paper_digitization_template(paper_spec: dict, output_dir: st
     return manifest
 
 
+def write_published_paper_curve_artifacts(
+    *,
+    predictions_csv: str | Path,
+    digitized_csv: str | Path,
+    output_dir: str | Path,
+    case_type: str,
+    curve_label: str,
+    component_figures: dict[str, str] | None = None,
+) -> dict:
+    """Write validation artifacts comparing predictions to digitized paper curves."""
+
+    times, component_names, predictions = _read_prediction_csv(predictions_csv)
+    figures = dict(component_figures or {"Ex": "Fig. 12", "Hz": "Fig. 15"})
+    selected_components = [name for name in component_names if name in figures]
+    if not selected_components:
+        raise ValueError("predictions_csv must contain at least one component listed in component_figures")
+    selected_indices = [component_names.index(name) for name in selected_components]
+    selected_predictions = predictions[:, selected_indices]
+    reference = _read_digitized_reference(
+        digitized_csv,
+        times=times,
+        components=selected_components,
+        curve_label=curve_label,
+        component_figures=figures,
+    )
+    diagnostics = {
+        "published_response_curve": {
+            "curve_label": str(curve_label),
+            "component_figures": {name: figures[name] for name in selected_components},
+            "digitized_csv": str(Path(digitized_csv)),
+            "predictions_csv": str(Path(predictions_csv)),
+        }
+    }
+    return write_three_component_validation_artifacts(
+        ThreeComponentValidationInput(
+            output_dir=output_dir,
+            times=times,
+            predictions=selected_predictions,
+            reference=reference,
+            component_names=selected_components,
+            case_type=case_type,
+            reference_type="published_response_curve",
+            magnetic_quantity="Hz" if "Hz" in selected_components else selected_components[-1],
+            diagnostics=diagnostics,
+            resolved_config={
+                "published_response_curve": diagnostics["published_response_curve"],
+            },
+            validation_scope="published_paper_reproduction_target",
+        )
+    )
+
+
 def _targets_from_spec(paper_spec: dict) -> list[dict]:
     available_figures = set(dict(paper_spec.get("paper_response_targets", {})).get("candidate_overlay_figures", []))
     if not available_figures:
@@ -105,3 +164,70 @@ def _write_template_csv(path: Path, targets: list[dict]) -> None:
                         "notes": "digitize from published plot",
                     }
                 )
+
+
+def _read_prediction_csv(path: str | Path) -> tuple[np.ndarray, list[str], np.ndarray]:
+    with Path(path).open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or "time_obs" not in reader.fieldnames:
+            raise ValueError("predictions_csv must contain time_obs")
+        component_names = [name for name in reader.fieldnames if name != "time_obs"]
+        rows = list(reader)
+    if not rows:
+        raise ValueError("predictions_csv must contain at least one row")
+    times = np.asarray([float(row["time_obs"]) for row in rows], dtype=float)
+    values = np.asarray(
+        [[float(row[name]) for name in component_names] for row in rows],
+        dtype=float,
+    )
+    return times, component_names, values
+
+
+def _read_digitized_reference(
+    path: str | Path,
+    *,
+    times: np.ndarray,
+    components: list[str],
+    curve_label: str,
+    component_figures: dict[str, str],
+) -> np.ndarray:
+    with Path(path).open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"figure", "component", "curve_label", "time_obs", "value"}
+        missing = sorted(required.difference(reader.fieldnames or ()))
+        if missing:
+            raise ValueError(f"digitized_csv missing columns: {missing}")
+        records = list(reader)
+    table: dict[tuple[str, float], float] = {}
+    for row in records:
+        component = str(row["component"])
+        if component not in components:
+            continue
+        if str(row["curve_label"]) != str(curve_label):
+            continue
+        if str(row["figure"]) != str(component_figures[component]):
+            continue
+        table[(component, float(row["time_obs"]))] = float(row["value"])
+    columns = []
+    for component in components:
+        values = []
+        for time in times:
+            key = _matching_digitized_key(table, component, float(time))
+            if key is None:
+                raise ValueError(
+                    f"digitized_csv missing {curve_label} {component} value at time {float(time):.17g}"
+                )
+            values.append(table[key])
+        columns.append(values)
+    return np.column_stack(columns)
+
+
+def _matching_digitized_key(
+    table: dict[tuple[str, float], float],
+    component: str,
+    time: float,
+) -> tuple[str, float] | None:
+    for key_component, key_time in table:
+        if key_component == component and np.isclose(key_time, time, rtol=1.0e-10, atol=1.0e-15):
+            return (key_component, key_time)
+    return None

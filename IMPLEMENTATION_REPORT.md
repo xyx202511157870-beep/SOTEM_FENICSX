@@ -2945,6 +2945,17 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_corrected_model_runner.py` with `16 passed`
   and `python -m pytest -q` with all tests passing (`705 passed`,
   `2 skipped`).
+- Added `tdem-ip-forward published-paper-curve-artifacts`, which reads an
+  algorithm prediction CSV plus the long-form digitized paper curve CSV,
+  selects component-to-figure mappings such as `Ex=Fig. 12` and
+  `Hz=Fig. 15`, and writes the standard `published_response_curve` validation
+  artifact set. This closes the mechanical path from manually/digitally
+  extracted paper curves to response overlays and error curves; the actual
+  figure digitization and DOLFINx production response for the paper models are
+  still pending. Windows verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py` with `17 passed`
+  and `python -m pytest -q` with all tests passing (`706 passed`,
+  `2 skipped`).
 
 ## Next Steps
 
