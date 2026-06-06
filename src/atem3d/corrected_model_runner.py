@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import importlib
 import importlib.util
 import json
@@ -404,7 +405,6 @@ def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: n
 
 
 def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
-    from atem3d.primary import EmpymodPrimaryProvider
     from atem3d.solvers import PrimarySecondaryForwardOperator
     fem, mesh, MPI = _import_dolfinx_backend()
 
@@ -451,15 +451,13 @@ def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     secondary_material = _secondary_material_for_forward(case_spec, material, sigma_background)
     turnoff_time = _turnoff_time_from_case_spec(case_spec)
     turnoff_steps = _turnoff_steps_from_case_spec(case_spec)
-    primary = EmpymodPrimaryProvider(
-        config=_empymod_primary_config_for_case_spec(case_spec),
-        empymod_kwargs=dict(case_spec.get("empymod_kwargs", {})),
-    )
+    primary = _primary_provider_for_case_spec(case_spec)
     interpolation = sp._nedelec_interpolation_points(msh, spaces)
     fem_points = interpolation["points"]
     receiver_locations = np.asarray([case_spec["receiver"]], dtype=float)
     components = tuple(str(value) for value in case_spec["components"])
     forward_diagnostics = case_spec.setdefault("diagnostics", {})
+    forward_diagnostics["primary_provider_mode"] = str(forward_cfg.get("primary_provider_mode", "empymod"))
 
     if "leakage_channel" in forward_cfg:
         return _run_dolfinx_leakage_channel_forward(
@@ -802,6 +800,56 @@ def _default_reference_runner(case_spec: dict) -> np.ndarray:
         }
         rows.append([values[name] for name in components])
     return np.asarray(rows, dtype=float)
+
+
+def _primary_provider_for_case_spec(case_spec: dict):
+    forward_cfg = dict(case_spec.get("dolfinx_forward", {}))
+    mode = str(forward_cfg.get("primary_provider_mode", "empymod"))
+    if mode == "empymod":
+        from atem3d.primary import EmpymodPrimaryProvider
+
+        return EmpymodPrimaryProvider(
+            config=_empymod_primary_config_for_case_spec(case_spec),
+            empymod_kwargs=dict(case_spec.get("empymod_kwargs", {})),
+        )
+    if mode == "constant":
+        return _ConstantPrimaryProvider(
+            electric=_constant_primary_vector(forward_cfg, "constant_primary_E", [1.0, 0.0, 0.0]),
+            dbdt=_constant_primary_vector(forward_cfg, "constant_primary_dBdt", [0.0, 0.0, 0.0]),
+        )
+    raise ValueError("primary_provider_mode must be 'empymod' or 'constant'")
+
+
+def _constant_primary_vector(forward_cfg: dict, key: str, default: list[float]) -> tuple[float, float, float]:
+    values = np.asarray(forward_cfg.get(key, default), dtype=float)
+    if values.shape != (3,) or not np.all(np.isfinite(values)):
+        raise ValueError(f"{key} must be a finite 3-vector")
+    return tuple(float(value) for value in values)
+
+
+@dataclass(frozen=True)
+class _ConstantPrimaryProvider:
+    electric: tuple[float, float, float]
+    dbdt: tuple[float, float, float]
+
+    def get_Ep_on_V(self, _t: float, V) -> np.ndarray:
+        return self._tile(self.electric, V, "points")
+
+    def get_Ep_dc_on_V(self, V) -> np.ndarray:
+        return self._tile(self.electric, V, "points")
+
+    def get_receiver_E(self, _t: float, receivers) -> np.ndarray:
+        return self._tile(self.electric, receivers, "receivers")
+
+    def get_receiver_dBdt(self, _t: float, receivers) -> np.ndarray:
+        return self._tile(self.dbdt, receivers, "receivers")
+
+    @staticmethod
+    def _tile(vector: tuple[float, float, float], points, name: str) -> np.ndarray:
+        from atem3d.primary.base import as_points
+
+        pts = as_points(points, name)
+        return np.tile(np.asarray(vector, dtype=float), (pts.shape[0], 1))
 
 
 def _empymod_primary_config_for_case_spec(case_spec: dict) -> dict:

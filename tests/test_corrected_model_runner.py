@@ -21,6 +21,7 @@ from atem3d.corrected_model_runner import run_corrected_model_convergence_valida
 from atem3d.corrected_model_runner import _default_forward_runner
 from atem3d.corrected_model_runner import _default_reference_runner
 from atem3d.corrected_model_runner import _copy_dolfinx_forward_diagnostics_to_case_spec
+from atem3d.corrected_model_runner import _primary_provider_for_case_spec
 from atem3d.corrected_model_runner import _terrain_mesh_runtime_config
 from atem3d.corrected_model_runner import dolfinx_backend_status
 
@@ -254,6 +255,31 @@ def test_terrain_mesh_runtime_config_resolves_small_gmsh_mesh_path(tmp_path):
         "workdir": str(tmp_path / "run"),
         "mesh_path": str(tmp_path / "run" / "terrain_leakage.msh"),
     }
+
+
+def test_primary_provider_for_case_spec_supports_constant_diagnostic_mode():
+    provider = _primary_provider_for_case_spec(
+        {
+            "empymod_primary": {
+                "source_start": [-500.0, 200.0, -0.1],
+                "source_end": [500.0, 200.0, -0.1],
+                "current": 10.0,
+                "depths": [350.0, 650.0],
+                "resistivities": [100.0, 100.0, 100.0],
+            },
+            "dolfinx_forward": {
+                "primary_provider_mode": "constant",
+                "constant_primary_E": [1.0, 0.0, 0.0],
+                "constant_primary_dBdt": [0.0, 0.0, 0.0],
+            },
+        }
+    )
+
+    points = np.array([[0.0, 0.0, 0.0], [1.0, 0.5, -0.2]])
+    np.testing.assert_allclose(provider.get_Ep_on_V(1.0e-5, points), [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    np.testing.assert_allclose(provider.get_Ep_dc_on_V(points), [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    np.testing.assert_allclose(provider.get_receiver_E(1.0e-5, points), [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    np.testing.assert_allclose(provider.get_receiver_dBdt(1.0e-5, points), np.zeros((2, 3)))
 
 
 def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):

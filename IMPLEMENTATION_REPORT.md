@@ -3687,6 +3687,21 @@ source-term substitution inside the existing total-field equation.
   same small terrain mesh exceeded the 300 s command limit, so the committed
   WSL test intentionally validates mesh loading, facet tags, and leakage
   marking without starting the expensive transient solve.
+- Corrected-runner Gmsh terrain transient smoke checkpoint (2026-06-06): the
+  corrected DOLFINx forward runner now supports
+  `dolfinx_forward.primary_provider_mode = constant` for diagnostic smokes.
+  This mode uses a constant background primary field and avoids expensive
+  per-FEM-point empymod sampling, while still exercising the DOLFINx
+  primary-secondary transient stepper, Gmsh terrain mesh, leakage-channel
+  material map, receiver projection, and runtime diagnostics. A WSL
+  `conda activate fenicsx` check
+  `python -u -m pytest -vv tests/test_dolfinx_complex_terrain_leakage_forward.py::test_corrected_leakage_gmsh_terrain_constant_primary_forward_runs`
+  passed in about 2.2 s, and WSL was shut down afterward with `Ubuntu Stopped`
+  confirmed. Windows verification also ran
+  `python -m pytest -q tests/test_corrected_model_runner.py tests/test_dolfinx_complex_terrain_leakage_forward.py`
+  and `python -m pytest -q`, both with exit code 0. This is a P8 stability
+  smoke for complex terrain plus leakage-channel transient execution, not a
+  final empymod/1D 5% acceptance run.
 
 ## Next Steps
 

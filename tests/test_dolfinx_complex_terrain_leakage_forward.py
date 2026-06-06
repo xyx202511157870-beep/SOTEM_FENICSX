@@ -291,3 +291,48 @@ def test_corrected_runner_gmsh_terrain_mesh_preflight_marks_leakage_cells(tmp_pa
     assert terrain["mode"] == "small_gmsh_terrain_leakage"
     assert terrain["terrain_elevation_max"] > terrain["terrain_elevation_min"]
     assert Path(terrain["mesh_path"]).is_file()
+
+
+def test_corrected_leakage_gmsh_terrain_constant_primary_forward_runs(tmp_path):
+    pytest.importorskip("gmsh")
+
+    from atem3d.corrected_model import (
+        CorrectedModelValidationConfig,
+        build_corrected_leakage_channel_case_specs,
+    )
+    from atem3d.corrected_model_runner import _default_forward_runner
+
+    config = CorrectedModelValidationConfig(n_observation_times=2, turnoff_steps=1)
+    spec = build_corrected_leakage_channel_case_specs(tmp_path, config=config)["noip"]
+    spec["receiver"] = [0.25, 0.25, -0.25]
+    spec["observation_times"] = [1.0e-5]
+    spec["turnoff_steps"] = 1
+    spec["output_dir"] = str(tmp_path / "terrain_constant_primary_forward")
+    forward = spec["dolfinx_forward"]
+    forward["primary_provider_mode"] = "constant"
+    forward["constant_primary_E"] = [1.0, 0.0, 0.0]
+    forward["constant_primary_dBdt"] = [0.0, 0.0, 0.0]
+    forward["terrain_mesh"] = {
+        "mode": "small_gmsh_terrain_leakage",
+        "mesh_size": 0.9,
+        "msh_name": "terrain_leakage.msh",
+    }
+    forward["receiver_evaluation_mode"] = "first_cell"
+    forward["rtol"] = 1.0e-7
+    forward["atol"] = 1.0e-9
+    forward["max_it"] = 300
+    forward["leakage_channel"] = {
+        "points": [[0.05, 0.5, -0.45], [0.95, 0.5, -0.45]],
+        "radius": 0.35,
+        "min_marked_cells": 1,
+        "sigma": 0.04,
+    }
+
+    values = _default_forward_runner(spec)
+
+    assert values.shape == (1, 3)
+    assert np.all(np.isfinite(values))
+    diagnostics = spec["diagnostics"]
+    assert diagnostics["primary_provider_mode"] == "constant"
+    assert diagnostics["mesh_runtime"]["terrain_mesh"]["mode"] == "small_gmsh_terrain_leakage"
+    assert diagnostics["leakage_marker_runtime"]["leakage_cell_count"] > 0
