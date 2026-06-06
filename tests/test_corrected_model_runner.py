@@ -738,10 +738,20 @@ def test_published_paper_model_target_spec_records_public_reference_metadata(tmp
     assert figure_targets["Fig. 2"]["pdf_page_number"] == 3
     assert figure_targets["Fig. 2"]["component"] == "Ex"
     assert figure_targets["Fig. 2"]["response_units"] == "V/m"
+    assert figure_targets["Fig. 2"]["response_axis"] == {
+        "x_scale": "log10",
+        "x_min_s": 1.0e-5,
+        "x_max_s": 1.0,
+        "y_scale": "log10",
+        "y_min": 1.0e-8,
+        "y_max": 1.0e-3,
+    }
     assert figure_targets["Fig. 2"]["figure_crop_fraction"] == [0.15, 0.07, 0.88, 0.335]
     assert figure_targets["Fig. 15"]["pdf_page_number"] == 9
     assert figure_targets["Fig. 15"]["component"] == "Hz"
     assert figure_targets["Fig. 15"]["response_units"] == "nT"
+    assert figure_targets["Fig. 15"]["response_axis"]["x_min_s"] == 1.0e-4
+    assert figure_targets["Fig. 15"]["response_axis"]["y_max"] == 1.0e-2
     assert "digitized_or_tabulated_published_response_values" in spec["remaining_reproduction_requirements"]
 
 
@@ -789,14 +799,14 @@ def test_published_paper_digitization_template_cli_writes_manifest_and_csv(tmp_p
     csv_lines = (output_dir / "paper_curve_digitization_template.csv").read_text(encoding="utf-8").splitlines()
     assert csv_lines[0] == (
         "figure,pdf_page_number,model_key,component,response_panel,value_kind,"
-        "curve_label,time_obs,value,units,axis_notes,figure_crop_fraction,caption,notes"
+        "curve_label,time_obs,value,units,response_axis,axis_notes,figure_crop_fraction,caption,notes"
     )
     assert any(
-        line.startswith("Fig. 12,7,three_dimensional_polarized_body,Ex,a,response,paper_ip,,,V/m,")
+        line.startswith("Fig. 12,7,three_dimensional_polarized_body,Ex,a,response,paper_ip,,,V/m,\"{\"\"x_max_s\"\": 1.0")
         for line in csv_lines
     )
     assert any(
-        line.startswith("Fig. 15,9,three_dimensional_polarized_body,Hz,a,response,paper_noip,,,nT,")
+        line.startswith("Fig. 15,9,three_dimensional_polarized_body,Hz,a,response,paper_noip,,,nT,\"{\"\"x_max_s\"\": 1.0")
         for line in csv_lines
     )
 
