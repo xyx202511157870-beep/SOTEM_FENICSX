@@ -6,17 +6,31 @@ from pathlib import Path
 import json
 
 REQUIRED_CASES = ("noip", "ip")
+REQUIRED_CASE_ARTIFACTS = (
+    "predictions.csv",
+    "reference_empymod_or_1d.csv",
+    "errors.csv",
+    "error_summary.json",
+    "comparison_3comp.png",
+    "error_curves_3comp.png",
+    "diagnostics.json",
+    "run_config_resolved.yaml",
+)
 
 
 def summarize_final_acceptance(
     case_summaries: dict[str, dict],
     case_diagnostics: dict[str, dict] | None = None,
+    case_artifacts: dict[str, dict] | None = None,
 ) -> dict:
     """Summarize task-book final acceptance across no-IP and IP cases."""
 
     cases = {str(key): dict(value) for key, value in dict(case_summaries).items()}
     diagnostics_by_case = {
         str(key): dict(value) for key, value in dict(case_diagnostics or {}).items()
+    }
+    artifacts_by_case = {
+        str(key): dict(value) for key, value in dict(case_artifacts or {}).items()
     }
     missing_cases = [case for case in REQUIRED_CASES if case not in cases]
     passed_cases: list[str] = []
@@ -46,11 +60,17 @@ def summarize_final_acceptance(
                     reasons.append("internal_time_grid_not_verified")
             else:
                 passed = summary_passed
+            artifact_status = artifacts_by_case.get(case, {"complete": True, "missing": []})
+            if passed and not bool(artifact_status.get("complete", False)):
+                passed = False
+                if "validation_artifacts_missing" not in reasons:
+                    reasons.append("validation_artifacts_missing")
         if passed:
             passed_cases.append(case)
         else:
             failed_cases.append(case)
         failure_diagnostics = _failure_diagnostics(diagnostics_by_case.get(case, {}))
+        artifact_status = artifacts_by_case.get(case, {"complete": True, "missing": []})
         failure_diagnostics_by_case[case] = failure_diagnostics
         blocking_reasons_by_case[case] = reasons
         case_status[case] = {
@@ -62,6 +82,7 @@ def summarize_final_acceptance(
                 summary,
                 diagnostics_by_case.get(case, {}),
             ),
+            "artifact_status": artifact_status,
             "blocking_reasons": reasons,
             "failure_diagnostics": failure_diagnostics,
         }
@@ -103,15 +124,28 @@ def write_final_acceptance_report(
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    summaries = {
-        "noip": _read_summary_json(noip_summary_json),
-        "ip": _read_summary_json(ip_summary_json),
+    summary_paths = {
+        "noip": Path(noip_summary_json),
+        "ip": Path(ip_summary_json),
     }
+    diagnostics_paths = {
+        "noip": Path(noip_diagnostics_json) if noip_diagnostics_json is not None else None,
+        "ip": Path(ip_diagnostics_json) if ip_diagnostics_json is not None else None,
+    }
+    summaries = {case: _read_summary_json(path) for case, path in summary_paths.items()}
     diagnostics = {
-        "noip": _read_optional_json(noip_diagnostics_json),
-        "ip": _read_optional_json(ip_diagnostics_json),
+        case: _read_optional_json(path)
+        for case, path in diagnostics_paths.items()
     }
-    summary = summarize_final_acceptance(summaries, case_diagnostics=diagnostics)
+    artifacts = {
+        case: _case_artifact_status(summary_paths[case], diagnostics_paths[case])
+        for case in REQUIRED_CASES
+    }
+    summary = summarize_final_acceptance(
+        summaries,
+        case_diagnostics=diagnostics,
+        case_artifacts=artifacts,
+    )
     (output / "final_acceptance_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -134,6 +168,24 @@ def _read_optional_json(path: str | Path | None) -> dict:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _case_artifact_status(
+    summary_json: Path,
+    diagnostics_json: Path | None,
+) -> dict:
+    directory = Path(summary_json).parent
+    missing = []
+    for name in REQUIRED_CASE_ARTIFACTS:
+        path = Path(diagnostics_json) if name == "diagnostics.json" and diagnostics_json is not None else directory / name
+        if not path.exists():
+            missing.append(name)
+    return {
+        "complete": not missing,
+        "missing": missing,
+        "required": list(REQUIRED_CASE_ARTIFACTS),
+        "directory": str(directory),
+    }
 
 
 def _blocking_reasons(summary: dict) -> list[str]:

@@ -232,6 +232,7 @@ def test_cli_acceptance_report_writes_noip_ip_gate_summary(tmp_path):
     noip.parent.mkdir()
     ip.parent.mkdir()
     noip.write_text(json.dumps(_acceptance_summary("noip", True)), encoding="utf-8")
+    _write_required_acceptance_artifacts(noip.parent)
     ip.write_text(
         json.dumps(_acceptance_summary("ip", False, ["physical_error_gate_failed"])),
         encoding="utf-8",
@@ -288,3 +289,16 @@ def _acceptance_summary(case_type: str, passed: bool, reasons=None):
             "internal_time_grid_verified": bool(passed),
         },
     }
+
+
+def _write_required_acceptance_artifacts(directory):
+    for name in (
+        "predictions.csv",
+        "reference_empymod_or_1d.csv",
+        "errors.csv",
+        "comparison_3comp.png",
+        "error_curves_3comp.png",
+        "diagnostics.json",
+        "run_config_resolved.yaml",
+    ):
+        (directory / name).write_text("placeholder", encoding="utf-8")

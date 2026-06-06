@@ -3518,14 +3518,19 @@ source-term substitution inside the existing total-field equation.
   evidence. The combined no-IP/IP final-acceptance report now also requires
   internal-grid evidence from either `error_summary.json.acceptance_status`,
   `diagnostics.json.acceptance_status`, or the persisted primary-secondary
-  internal-grid diagnostic blocks before marking a case as passed. WSL was
+  internal-grid diagnostic blocks before marking a case as passed. It also
+  checks that each case directory contains the required validation artifact set:
+  `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
+  `error_summary.json`, `comparison_3comp.png`, `error_curves_3comp.png`,
+  `diagnostics.json`, and `run_config_resolved.yaml`; missing files now block
+  the combined report with `validation_artifacts_missing`. WSL was
   rechecked and then shut down; `/usr/bin/python3` still lacks
   `numpy`, `pytest`, `dolfinx.fem`, `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`,
   and `petsc4py`, and `wsl -l -v` confirmed `Ubuntu Stopped`. Windows
   verification ran
   `python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_failure_diagnostics.py tests/test_final_acceptance.py tests/test_corrected_model_runner.py`
   and `python -m pytest -q tests/test_final_acceptance.py tests/test_corrected_model_runner.py::test_corrected_model_run_cli_writes_acceptance_config_for_both_cases tests/test_cli_subcommands.py::test_cli_acceptance_report_writes_noip_ip_gate_summary`,
-  both with exit code 0.
+  and `python -m pytest -q`, all with exit code 0.
 
 ## Next Steps
 

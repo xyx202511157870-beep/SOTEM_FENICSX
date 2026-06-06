@@ -72,6 +72,7 @@ def test_write_final_acceptance_report_reads_summary_paths(tmp_path):
     noip_path.parent.mkdir()
     ip_path.parent.mkdir()
     noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    _write_required_case_artifacts(noip_path.parent)
     ip_path.write_text(
         json.dumps(_summary("ip", False, reasons=["validation_scope_not_corrected_model_full"])),
         encoding="utf-8",
@@ -89,6 +90,28 @@ def test_write_final_acceptance_report_reads_summary_paths(tmp_path):
     text = (tmp_path / "acceptance" / "final_acceptance_report.txt").read_text(encoding="utf-8")
     assert "FINAL_ACCEPTANCE_PASSED=false" in text
     assert "ip: validation_scope_not_corrected_model_full" in text
+
+
+def test_write_final_acceptance_report_requires_case_artifact_set(tmp_path):
+    noip_path = tmp_path / "noip" / "error_summary.json"
+    ip_path = tmp_path / "ip" / "error_summary.json"
+    noip_path.parent.mkdir()
+    ip_path.parent.mkdir()
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    ip_path.write_text(json.dumps(_summary("ip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    _write_required_case_artifacts(noip_path.parent, omit={"comparison_3comp.png"})
+    _write_required_case_artifacts(ip_path.parent)
+
+    summary = write_final_acceptance_report(
+        noip_summary_json=noip_path,
+        ip_summary_json=ip_path,
+        output_dir=tmp_path / "acceptance",
+    )
+
+    assert summary["final_acceptance_passed"] is False
+    assert summary["failed_cases"] == ["noip"]
+    assert summary["blocking_reasons_by_case"]["noip"] == ["validation_artifacts_missing"]
+    assert summary["cases"]["noip"]["artifact_status"]["missing"] == ["comparison_3comp.png"]
 
 
 def test_write_final_acceptance_report_summarizes_case_diagnostics(tmp_path):
@@ -160,3 +183,20 @@ def _diagnostics_with_internal_grid():
             "last_output_internal_time_s": 1.00001,
         }
     }
+
+
+def _write_required_case_artifacts(directory, *, omit=None):
+    omit = set() if omit is None else set(omit)
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "predictions.csv",
+        "reference_empymod_or_1d.csv",
+        "errors.csv",
+        "comparison_3comp.png",
+        "error_curves_3comp.png",
+        "diagnostics.json",
+        "run_config_resolved.yaml",
+    ):
+        if name in omit:
+            continue
+        (directory / name).write_text("placeholder", encoding="utf-8")
