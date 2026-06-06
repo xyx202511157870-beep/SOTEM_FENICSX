@@ -3523,13 +3523,22 @@ source-term substitution inside the existing total-field equation.
   `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
   `error_summary.json`, `comparison_3comp.png`, `error_curves_3comp.png`,
   `diagnostics.json`, and `run_config_resolved.yaml`; missing files now block
-  the combined report with `validation_artifacts_missing`. WSL was
+  the combined report with `validation_artifacts_missing`. Corrected-model
+  acceptance configs now include `polarization_effect_dir`, and the final
+  report checks the dedicated IP-minus-noIP artifacts:
+  `polarization_effect_predictions.csv`, `polarization_effect_reference.csv`,
+  `polarization_effect_errors.csv`, `polarization_effect_summary.json`,
+  `polarization_effect_comparison.png`, and
+  `polarization_effect_error_curves.png`. Missing polarization-effect files
+  now block the combined report with
+  `polarization_effect_artifacts_missing`. WSL was
   rechecked and then shut down; `/usr/bin/python3` still lacks
   `numpy`, `pytest`, `dolfinx.fem`, `dolfinx.mesh`, `mpi4py`, `ufl`, `basix`,
   and `petsc4py`, and `wsl -l -v` confirmed `Ubuntu Stopped`. Windows
   verification ran
   `python -m pytest -q tests/test_noip_3comp_validation_smoke.py tests/test_validation_3comp_cli.py tests/test_ip_3comp_validation_smoke.py tests/test_validation_failure_diagnostics.py tests/test_final_acceptance.py tests/test_corrected_model_runner.py`
   and `python -m pytest -q tests/test_final_acceptance.py tests/test_corrected_model_runner.py::test_corrected_model_run_cli_writes_acceptance_config_for_both_cases tests/test_cli_subcommands.py::test_cli_acceptance_report_writes_noip_ip_gate_summary`,
+  `python -m pytest -q tests/test_final_acceptance.py tests/test_cli_subcommands.py tests/test_corrected_model_runner.py tests/test_polarization_effect.py`,
   and `python -m pytest -q`, all with exit code 0.
 
 ## Next Steps

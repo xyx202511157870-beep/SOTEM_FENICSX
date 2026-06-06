@@ -114,6 +114,30 @@ def test_write_final_acceptance_report_requires_case_artifact_set(tmp_path):
     assert summary["cases"]["noip"]["artifact_status"]["missing"] == ["comparison_3comp.png"]
 
 
+def test_write_final_acceptance_report_requires_polarization_effect_artifacts(tmp_path):
+    noip_path = tmp_path / "noip" / "error_summary.json"
+    ip_path = tmp_path / "ip" / "error_summary.json"
+    effect_dir = tmp_path / "polarization_effect"
+    noip_path.parent.mkdir()
+    ip_path.parent.mkdir()
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    ip_path.write_text(json.dumps(_summary("ip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    _write_required_case_artifacts(noip_path.parent)
+    _write_required_case_artifacts(ip_path.parent)
+    _write_required_polarization_effect_artifacts(effect_dir, omit={"polarization_effect_error_curves.png"})
+
+    summary = write_final_acceptance_report(
+        noip_summary_json=noip_path,
+        ip_summary_json=ip_path,
+        polarization_effect_dir=effect_dir,
+        output_dir=tmp_path / "acceptance",
+    )
+
+    assert summary["final_acceptance_passed"] is False
+    assert summary["global_blocking_reasons"] == ["polarization_effect_artifacts_missing"]
+    assert summary["polarization_effect_status"]["missing"] == ["polarization_effect_error_curves.png"]
+
+
 def test_write_final_acceptance_report_summarizes_case_diagnostics(tmp_path):
     noip_path = tmp_path / "noip" / "error_summary.json"
     ip_path = tmp_path / "ip" / "error_summary.json"
@@ -196,6 +220,22 @@ def _write_required_case_artifacts(directory, *, omit=None):
         "error_curves_3comp.png",
         "diagnostics.json",
         "run_config_resolved.yaml",
+    ):
+        if name in omit:
+            continue
+        (directory / name).write_text("placeholder", encoding="utf-8")
+
+
+def _write_required_polarization_effect_artifacts(directory, *, omit=None):
+    omit = set() if omit is None else set(omit)
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "polarization_effect_predictions.csv",
+        "polarization_effect_reference.csv",
+        "polarization_effect_errors.csv",
+        "polarization_effect_summary.json",
+        "polarization_effect_comparison.png",
+        "polarization_effect_error_curves.png",
     ):
         if name in omit:
             continue

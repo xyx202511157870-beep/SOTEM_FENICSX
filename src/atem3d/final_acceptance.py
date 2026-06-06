@@ -16,12 +16,21 @@ REQUIRED_CASE_ARTIFACTS = (
     "diagnostics.json",
     "run_config_resolved.yaml",
 )
+REQUIRED_POLARIZATION_EFFECT_ARTIFACTS = (
+    "polarization_effect_predictions.csv",
+    "polarization_effect_reference.csv",
+    "polarization_effect_errors.csv",
+    "polarization_effect_summary.json",
+    "polarization_effect_comparison.png",
+    "polarization_effect_error_curves.png",
+)
 
 
 def summarize_final_acceptance(
     case_summaries: dict[str, dict],
     case_diagnostics: dict[str, dict] | None = None,
     case_artifacts: dict[str, dict] | None = None,
+    polarization_effect_status: dict | None = None,
 ) -> dict:
     """Summarize task-book final acceptance across no-IP and IP cases."""
 
@@ -38,6 +47,14 @@ def summarize_final_acceptance(
     blocking_reasons_by_case: dict[str, list[str]] = {}
     case_status: dict[str, dict] = {}
     failure_diagnostics_by_case: dict[str, dict] = {}
+    effect_status = (
+        {"enabled": False, "complete": True, "missing": [], "required": []}
+        if polarization_effect_status is None
+        else dict(polarization_effect_status)
+    )
+    global_blocking_reasons = []
+    if not bool(effect_status.get("complete", True)):
+        global_blocking_reasons.append("polarization_effect_artifacts_missing")
 
     for case in REQUIRED_CASES:
         if case in missing_cases:
@@ -99,13 +116,15 @@ def summarize_final_acceptance(
             "failure_diagnostics": {},
         }
 
-    final_passed = bool(not missing_cases and not failed_cases)
+    final_passed = bool(not missing_cases and not failed_cases and not global_blocking_reasons)
     return {
         "final_acceptance_passed": final_passed,
         "required_cases": list(REQUIRED_CASES),
         "passed_cases": passed_cases,
         "failed_cases": failed_cases,
         "missing_cases": missing_cases,
+        "global_blocking_reasons": global_blocking_reasons,
+        "polarization_effect_status": effect_status,
         "blocking_reasons_by_case": blocking_reasons_by_case,
         "failure_diagnostics_by_case": failure_diagnostics_by_case,
         "cases": case_status,
@@ -118,6 +137,7 @@ def write_final_acceptance_report(
     ip_summary_json: str | Path,
     noip_diagnostics_json: str | Path | None = None,
     ip_diagnostics_json: str | Path | None = None,
+    polarization_effect_dir: str | Path | None = None,
     output_dir: str | Path,
 ) -> dict:
     """Read no-IP/IP validation summaries and write final acceptance artifacts."""
@@ -141,10 +161,16 @@ def write_final_acceptance_report(
         case: _case_artifact_status(summary_paths[case], diagnostics_paths[case])
         for case in REQUIRED_CASES
     }
+    effect_status = (
+        None
+        if polarization_effect_dir is None
+        else _polarization_effect_artifact_status(Path(polarization_effect_dir))
+    )
     summary = summarize_final_acceptance(
         summaries,
         case_diagnostics=diagnostics,
         case_artifacts=artifacts,
+        polarization_effect_status=effect_status,
     )
     (output / "final_acceptance_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True),
@@ -184,6 +210,22 @@ def _case_artifact_status(
         "complete": not missing,
         "missing": missing,
         "required": list(REQUIRED_CASE_ARTIFACTS),
+        "directory": str(directory),
+    }
+
+
+def _polarization_effect_artifact_status(directory: Path) -> dict:
+    directory = Path(directory)
+    missing = [
+        name
+        for name in REQUIRED_POLARIZATION_EFFECT_ARTIFACTS
+        if not (directory / name).exists()
+    ]
+    return {
+        "enabled": True,
+        "complete": not missing,
+        "missing": missing,
+        "required": list(REQUIRED_POLARIZATION_EFFECT_ARTIFACTS),
         "directory": str(directory),
     }
 
@@ -244,6 +286,7 @@ def _format_final_acceptance_report(summary: dict) -> str:
         "passed_cases=" + ",".join(summary["passed_cases"]),
         "failed_cases=" + ",".join(summary["failed_cases"]),
         "missing_cases=" + ",".join(summary["missing_cases"]),
+        "global_blocking_reasons=" + ",".join(summary.get("global_blocking_reasons", [])),
         "",
         "blocking_reasons:",
     ]

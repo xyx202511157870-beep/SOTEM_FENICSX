@@ -477,6 +477,7 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
             "noip_diagnostics_json": str(tmp_path / "noip" / "diagnostics.json"),
             "ip_diagnostics_json": str(tmp_path / "ip" / "diagnostics.json"),
             "output_dir": str(output_root / "final_acceptance"),
+            "polarization_effect_dir": str(output_root / "polarization_effect"),
         }
     }
     assert main(["acceptance-report", str(output_root / "acceptance.yaml")]) == 0

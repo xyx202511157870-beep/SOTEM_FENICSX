@@ -209,6 +209,7 @@ def _main_acceptance_report(argv: list[str]) -> int:
         ip_summary_json=cfg["ip_summary_json"],
         noip_diagnostics_json=cfg.get("noip_diagnostics_json"),
         ip_diagnostics_json=cfg.get("ip_diagnostics_json"),
+        polarization_effect_dir=cfg.get("polarization_effect_dir"),
         output_dir=cfg.get("output_dir", "outputs/final_acceptance"),
     )
     output_dir = Path(cfg.get("output_dir", "outputs/final_acceptance"))
@@ -757,6 +758,7 @@ def _write_corrected_model_acceptance_config(output_root: Path, output_dirs: dic
             "noip_diagnostics_json": str(output_dirs["noip"] / "diagnostics.json"),
             "ip_diagnostics_json": str(output_dirs["ip"] / "diagnostics.json"),
             "output_dir": str(output_root / "final_acceptance"),
+            "polarization_effect_dir": str(output_root / "polarization_effect"),
         }
     }
     path = output_root / "acceptance.yaml"
