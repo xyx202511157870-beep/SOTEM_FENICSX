@@ -1190,6 +1190,43 @@ When both cases are run, `corrected-model-run` also writes
 `polarization_effect/` using the no-IP/IP case artifact directories, so the
 IP-minus-noIP response and error plots are regenerated automatically.
 
+Integrated corrected-scale leakage WSL run:
+
+```bash
+PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m atem3d.cli corrected-model-run dolfinx/runs/corrected_leakage_model/spec.json --case both --output-root dolfinx/runs/corrected_leakage_model_both_integrated
+```
+
+This run wrote:
+
+```text
+dolfinx/runs/corrected_leakage_model_both_integrated/noip_3comp
+dolfinx/runs/corrected_leakage_model_both_integrated/ip_3comp
+dolfinx/runs/corrected_leakage_model_both_integrated/acceptance.yaml
+dolfinx/runs/corrected_leakage_model_both_integrated/polarization_effect
+```
+
+The no-IP and IP case directories both contain `model_schematic.png`, and
+their `diagnostics.json` files record:
+
+```text
+source_length_m = 1000.0
+parallel_offset_m = 500.0
+domain_extent_m = [4000.0, 4000.0, 1100.0]
+leakage_point_count = 4
+```
+
+Runtime:
+
+```text
+no-IP forward = 34.298 s, reference = 0.436 s, artifact_total = 1.128 s
+IP    forward = 31.207 s, reference = 0.394 s, artifact_total = 0.733 s
+```
+
+As expected, both case summaries still report `final_acceptance_passed=false`
+with `validation_scope_not_corrected_model_full` and
+`physical_error_gate_failed`: this is a 3D leakage-channel diagnostic against
+a background empymod reference, not a final 3D anomaly accuracy reference.
+
 An 80-observation-time WSL smoke also completed under:
 
 ```text
