@@ -168,3 +168,51 @@ def test_cli_validate_secondary_supports_ip_zero_delta_material(tmp_path):
     assert summary["delta_sigma_list"] == [0.0]
     assert summary["pass_zero_contrast"] is True
     assert summary["max_abs_total_minus_primary"] == 0.0
+
+
+def test_cli_acceptance_report_writes_noip_ip_gate_summary(tmp_path):
+    noip = tmp_path / "noip" / "error_summary.json"
+    ip = tmp_path / "ip" / "error_summary.json"
+    noip.parent.mkdir()
+    ip.parent.mkdir()
+    noip.write_text(json.dumps(_acceptance_summary("noip", True)), encoding="utf-8")
+    ip.write_text(
+        json.dumps(_acceptance_summary("ip", False, ["physical_error_gate_failed"])),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "acceptance"
+    config_path = tmp_path / "acceptance.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "acceptance": {
+                    "noip_summary_json": str(noip),
+                    "ip_summary_json": str(ip),
+                    "output_dir": str(output_dir),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["acceptance-report", str(config_path)])
+
+    assert exit_code == 1
+    summary = json.loads((output_dir / "final_acceptance_summary.json").read_text(encoding="utf-8"))
+    assert summary["final_acceptance_passed"] is False
+    assert summary["failed_cases"] == ["ip"]
+    assert summary["blocking_reasons_by_case"]["ip"] == ["physical_error_gate_failed"]
+
+
+def _acceptance_summary(case_type: str, passed: bool, reasons=None):
+    reasons = [] if reasons is None else list(reasons)
+    return {
+        "case_type": case_type,
+        "reference_type": "empymod",
+        "magnetic_quantity": "dBzdt",
+        "final_acceptance_passed": passed,
+        "acceptance_status": {
+            "final_acceptance_passed": passed,
+            "blocking_reasons": reasons,
+        },
+    }

@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_plot(argv[1:])
     if argv and argv[0] == "validate-secondary":
         return _main_validate_secondary(argv[1:])
+    if argv and argv[0] == "acceptance-report":
+        return _main_acceptance_report(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
@@ -94,6 +96,26 @@ def _main_plot(argv: list[str]) -> int:
     print(f"wrote {run_dir / 'comparison_3comp.png'}")
     print(f"wrote {run_dir / 'error_curves_3comp.png'}")
     return 0
+
+
+def _main_acceptance_report(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Summarize no-IP/IP final validation acceptance.")
+    parser.add_argument("config", type=Path, help="YAML acceptance-report configuration")
+    args = parser.parse_args(argv)
+
+    from .final_acceptance import write_final_acceptance_report
+
+    config = _load_yaml(args.config)
+    cfg = dict(config.get("acceptance", config))
+    summary = write_final_acceptance_report(
+        noip_summary_json=cfg["noip_summary_json"],
+        ip_summary_json=cfg["ip_summary_json"],
+        output_dir=cfg.get("output_dir", "outputs/final_acceptance"),
+    )
+    output_dir = Path(cfg.get("output_dir", "outputs/final_acceptance"))
+    print(f"wrote {output_dir / 'final_acceptance_summary.json'}")
+    print(f"final_acceptance_passed: {summary['final_acceptance_passed']}")
+    return 0 if bool(summary["final_acceptance_passed"]) else 1
 
 
 def _main_validate_secondary(argv: list[str]) -> int:

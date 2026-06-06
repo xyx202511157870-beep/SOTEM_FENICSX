@@ -17,6 +17,9 @@ This report covers the implementation rounds currently committed or staged from 
   a small DOLFINx primary-secondary forward smoke, and a generated Gmsh
   terrain/leakage forward smoke.
 - P7 CLI: add `validate-noip-3comp` and `validate-ip-3comp` artifact commands from CSV inputs.
+- P7 acceptance gate: add a combined no-IP/IP final acceptance report command
+  that reads both `error_summary.json` files and fails unless both cases have
+  `final_acceptance_passed=true`.
 
 It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
 Validation artifacts now write an explicit `acceptance_status` object and a
@@ -40,6 +43,14 @@ final acceptance.
 - `src/atem3d/metrics.py`
   - `robust_relative_error`
   - `robust_component_errors`
+
+- `src/atem3d/final_acceptance.py`
+  - `summarize_final_acceptance`
+  - `write_final_acceptance_report`
+  - Writes `final_acceptance_summary.json` and
+    `final_acceptance_report.txt` from no-IP/IP `error_summary.json` files.
+  - Requires both no-IP and IP cases to pass their own
+    `final_acceptance_passed` gates before the combined final gate passes.
 
 - `src/atem3d/source_diagnostics.py`
   - `diagnose_source_consistency`
@@ -813,6 +824,33 @@ python dolfinx/sotem_pipeline.py \
 ```
 
 The run writes both the legacy combined plot and the new P2 validation artifacts.
+
+## Running Final No-IP/IP Acceptance Summary
+
+After generating no-IP and IP validation artifact directories, write a final
+combined gate report with:
+
+```bash
+tdem-ip-forward acceptance-report acceptance.yaml
+```
+
+Example config:
+
+```yaml
+acceptance:
+  noip_summary_json: outputs/noip_3comp/error_summary.json
+  ip_summary_json: outputs/ip_3comp/error_summary.json
+  output_dir: outputs/final_acceptance
+```
+
+Outputs:
+
+- `final_acceptance_summary.json`
+- `final_acceptance_report.txt`
+
+The command returns exit code `0` only if both no-IP and IP summaries have
+`final_acceptance_passed=true`. It returns exit code `1` and records blocking
+reasons when either case is missing or failed.
 
 ## Current Accuracy Status
 
@@ -2022,6 +2060,7 @@ source-term substitution inside the existing total-field equation.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, a pure primary-secondary forward orchestration core, a reusable secondary receiver projection adapter, a DOLFINx-backed secondary step solver with WSL zero-RHS and nonzero constant-RHS PETSc smoke tests, DOLFINx primary-secondary zero-contrast and uniform nonzero-contrast forward smokes, a variable-DG0 no-IP DOLFINx primary-secondary state-stepper smoke, a scalar Debye/Prony IP DOLFINx state-stepper smoke, a spatial-DG0 `delta_sigma` IP smoke using `debye["delta_functions"]`, physical Nedelec interpolation-point export for non-constant tabulated primary/RHS fields, and a DOLFINx operator helper that wires primary-provider FEM sampling into the primary-secondary operator. Corrected-model validation and full no-IP/IP 5% acceptance remain pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.
 - P7 CLI currently reads precomputed prediction/reference CSV files; it does not yet launch DOLFINx or empymod itself.
+- `tdem-ip-forward acceptance-report` summarizes no-IP/IP validation outputs; it does not create those outputs or repair failing component errors.
 - `atem3d-validate-empymod --artifact-dir` bridges real validation results to artifact files, but final 5% agreement still depends on the underlying simulation/reference result.
 - P8 currently verifies marker/material/channel geometry utilities, runs a
   small DOLFINx primary-secondary leakage-channel forward smoke on a unit-cube
