@@ -157,6 +157,50 @@ def test_write_final_acceptance_report_rejects_invalid_png_artifacts(tmp_path):
     assert summary["cases"]["noip"]["artifact_status"]["invalid"] == ["comparison_3comp.png"]
 
 
+def test_write_final_acceptance_report_rejects_error_csv_missing_required_columns(tmp_path):
+    noip_path = tmp_path / "noip" / "error_summary.json"
+    ip_path = tmp_path / "ip" / "error_summary.json"
+    noip_path.parent.mkdir()
+    ip_path.parent.mkdir()
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    ip_path.write_text(json.dumps(_summary("ip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    _write_required_case_artifacts(noip_path.parent)
+    _write_required_case_artifacts(ip_path.parent)
+    (noip_path.parent / "errors.csv").write_text("time_obs,component,pred\n1e-5,Ex,1.0\n", encoding="utf-8")
+
+    summary = write_final_acceptance_report(
+        noip_summary_json=noip_path,
+        ip_summary_json=ip_path,
+        output_dir=tmp_path / "acceptance",
+    )
+
+    assert summary["final_acceptance_passed"] is False
+    assert summary["blocking_reasons_by_case"]["noip"] == ["validation_artifacts_invalid"]
+    assert summary["cases"]["noip"]["artifact_status"]["invalid"] == ["errors.csv"]
+
+
+def test_write_final_acceptance_report_rejects_invalid_diagnostics_json(tmp_path):
+    noip_path = tmp_path / "noip" / "error_summary.json"
+    ip_path = tmp_path / "ip" / "error_summary.json"
+    noip_path.parent.mkdir()
+    ip_path.parent.mkdir()
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    ip_path.write_text(json.dumps(_summary("ip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    _write_required_case_artifacts(noip_path.parent)
+    _write_required_case_artifacts(ip_path.parent)
+    (noip_path.parent / "diagnostics.json").write_text("{not-json", encoding="utf-8")
+
+    summary = write_final_acceptance_report(
+        noip_summary_json=noip_path,
+        ip_summary_json=ip_path,
+        output_dir=tmp_path / "acceptance",
+    )
+
+    assert summary["final_acceptance_passed"] is False
+    assert summary["blocking_reasons_by_case"]["noip"] == ["validation_artifacts_invalid"]
+    assert summary["cases"]["noip"]["artifact_status"]["invalid"] == ["diagnostics.json"]
+
+
 def test_write_final_acceptance_report_requires_polarization_effect_artifacts(tmp_path):
     noip_path = tmp_path / "noip" / "error_summary.json"
     ip_path = tmp_path / "ip" / "error_summary.json"
@@ -179,6 +223,34 @@ def test_write_final_acceptance_report_requires_polarization_effect_artifacts(tm
     assert summary["final_acceptance_passed"] is False
     assert summary["global_blocking_reasons"] == ["polarization_effect_artifacts_missing"]
     assert summary["polarization_effect_status"]["missing"] == ["polarization_effect_error_curves.png"]
+
+
+def test_write_final_acceptance_report_rejects_invalid_polarization_effect_summary(tmp_path):
+    noip_path = tmp_path / "noip" / "error_summary.json"
+    ip_path = tmp_path / "ip" / "error_summary.json"
+    effect_dir = tmp_path / "polarization_effect"
+    noip_path.parent.mkdir()
+    ip_path.parent.mkdir()
+    noip_path.write_text(json.dumps(_summary("noip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    ip_path.write_text(json.dumps(_summary("ip", True, internal_time_grid_verified=True)), encoding="utf-8")
+    _write_required_case_artifacts(noip_path.parent)
+    _write_required_case_artifacts(ip_path.parent)
+    _write_required_polarization_effect_artifacts(effect_dir)
+    (effect_dir / "polarization_effect_summary.json").write_text(
+        json.dumps({"artifact_type": "not_polarization_effect"}),
+        encoding="utf-8",
+    )
+
+    summary = write_final_acceptance_report(
+        noip_summary_json=noip_path,
+        ip_summary_json=ip_path,
+        polarization_effect_dir=effect_dir,
+        output_dir=tmp_path / "acceptance",
+    )
+
+    assert summary["final_acceptance_passed"] is False
+    assert summary["global_blocking_reasons"] == ["polarization_effect_artifacts_invalid"]
+    assert summary["polarization_effect_status"]["invalid"] == ["polarization_effect_summary.json"]
 
 
 def test_write_final_acceptance_report_summarizes_case_diagnostics(tmp_path):
@@ -269,6 +341,19 @@ def _write_required_case_artifacts(directory, *, omit=None):
             continue
         if name.endswith(".png"):
             (directory / name).write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
+        elif name in {"predictions.csv", "reference_empymod_or_1d.csv"}:
+            (directory / name).write_text("time_obs,Ex,Ey,dBzdt\n1e-5,1.0,0.0,-1.0\n", encoding="utf-8")
+        elif name == "errors.csv":
+            (directory / name).write_text(
+                "time_obs,component,pred,ref,abs_error,ordinary_relative_error,"
+                "relative_error_with_floor,peak_normalized_error,pass_5pct\n"
+                "1e-5,Ex,1.0,1.0,0.0,0.0,0.0,0.0,true\n",
+                encoding="utf-8",
+            )
+        elif name == "diagnostics.json":
+            (directory / name).write_text("{}", encoding="utf-8")
+        elif name == "run_config_resolved.yaml":
+            (directory / name).write_text("case_type: noip\n", encoding="utf-8")
         else:
             (directory / name).write_text("placeholder", encoding="utf-8")
 
@@ -288,5 +373,19 @@ def _write_required_polarization_effect_artifacts(directory, *, omit=None):
             continue
         if name.endswith(".png"):
             (directory / name).write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
+        elif name in {"polarization_effect_predictions.csv", "polarization_effect_reference.csv"}:
+            (directory / name).write_text("time_obs,Ex,Ey,dBzdt\n1e-5,1.0,0.0,-1.0\n", encoding="utf-8")
+        elif name == "polarization_effect_errors.csv":
+            (directory / name).write_text(
+                "time_obs,component,pred,ref,abs_error,ordinary_relative_error,"
+                "relative_error_with_floor,peak_normalized_error,pass_5pct\n"
+                "1e-5,Ex,1.0,1.0,0.0,0.0,0.0,0.0,true\n",
+                encoding="utf-8",
+            )
+        elif name == "polarization_effect_summary.json":
+            (directory / name).write_text(
+                json.dumps({"artifact_type": "polarization_effect"}),
+                encoding="utf-8",
+            )
         else:
             (directory / name).write_text("placeholder", encoding="utf-8")

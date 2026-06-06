@@ -304,5 +304,18 @@ def _write_required_acceptance_artifacts(directory):
     ):
         if name.endswith(".png"):
             (directory / name).write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
+        elif name in {"predictions.csv", "reference_empymod_or_1d.csv"}:
+            (directory / name).write_text("time_obs,Ex,Ey,dBzdt\n1e-5,1.0,0.0,-1.0\n", encoding="utf-8")
+        elif name == "errors.csv":
+            (directory / name).write_text(
+                "time_obs,component,pred,ref,abs_error,ordinary_relative_error,"
+                "relative_error_with_floor,peak_normalized_error,pass_5pct\n"
+                "1e-5,Ex,1.0,1.0,0.0,0.0,0.0,0.0,true\n",
+                encoding="utf-8",
+            )
+        elif name == "diagnostics.json":
+            (directory / name).write_text("{}", encoding="utf-8")
+        elif name == "run_config_resolved.yaml":
+            (directory / name).write_text("case_type: noip\n", encoding="utf-8")
         else:
             (directory / name).write_text("placeholder", encoding="utf-8")

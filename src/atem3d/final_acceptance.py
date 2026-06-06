@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv
 import json
 
 REQUIRED_CASES = ("noip", "ip")
@@ -26,6 +27,19 @@ REQUIRED_POLARIZATION_EFFECT_ARTIFACTS = (
     "polarization_effect_error_curves.png",
 )
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+REQUIRED_RESPONSE_COLUMNS = ("time_obs", "Ex", "Ey")
+REQUIRED_MAGNETIC_COLUMNS = ("Hz", "dBzdt")
+REQUIRED_ERROR_COLUMNS = (
+    "time_obs",
+    "component",
+    "pred",
+    "ref",
+    "abs_error",
+    "ordinary_relative_error",
+    "relative_error_with_floor",
+    "peak_normalized_error",
+    "pass_5pct",
+)
 
 
 def summarize_final_acceptance(
@@ -206,7 +220,10 @@ def _read_optional_json(path: str | Path | None) -> dict:
     path = Path(path)
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 def _case_artifact_status(
@@ -221,6 +238,12 @@ def _case_artifact_status(
         if not path.exists():
             missing.append(name)
         elif _requires_png_signature(name) and not _has_png_signature(path):
+            invalid.append(name)
+        elif _requires_json_payload(name) and not _has_json_payload(path):
+            invalid.append(name)
+        elif name in {"predictions.csv", "reference_empymod_or_1d.csv"} and not _has_response_csv_schema(path):
+            invalid.append(name)
+        elif name == "errors.csv" and not _has_error_csv_schema(path):
             invalid.append(name)
     return {
         "complete": not missing and not invalid,
@@ -240,6 +263,12 @@ def _polarization_effect_artifact_status(directory: Path) -> dict:
         if not path.exists():
             missing.append(name)
         elif _requires_png_signature(name) and not _has_png_signature(path):
+            invalid.append(name)
+        elif name == "polarization_effect_summary.json" and not _has_polarization_effect_summary(path):
+            invalid.append(name)
+        elif name in {"polarization_effect_predictions.csv", "polarization_effect_reference.csv"} and not _has_response_csv_schema(path):
+            invalid.append(name)
+        elif name == "polarization_effect_errors.csv" and not _has_error_csv_schema(path):
             invalid.append(name)
     return {
         "enabled": True,
@@ -271,6 +300,56 @@ def _requires_png_signature(name: str) -> bool:
 def _has_png_signature(path: Path) -> bool:
     with Path(path).open("rb") as handle:
         return handle.read(len(PNG_SIGNATURE)) == PNG_SIGNATURE
+
+
+def _requires_json_payload(name: str) -> bool:
+    return str(name).lower().endswith(".json")
+
+
+def _has_json_payload(path: Path) -> bool:
+    try:
+        json.loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return False
+    return True
+
+
+def _has_polarization_effect_summary(path: Path) -> bool:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("artifact_type") == "polarization_effect"
+
+
+def _has_response_csv_schema(path: Path) -> bool:
+    try:
+        return _csv_has_columns(path, REQUIRED_RESPONSE_COLUMNS, magnetic_column_required=True)
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return False
+
+
+def _has_error_csv_schema(path: Path) -> bool:
+    try:
+        return _csv_has_columns(path, REQUIRED_ERROR_COLUMNS, magnetic_column_required=False)
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return False
+
+
+def _csv_has_columns(
+    path: Path,
+    required_columns: tuple[str, ...],
+    *,
+    magnetic_column_required: bool,
+) -> bool:
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = set(reader.fieldnames or [])
+        if not set(required_columns).issubset(fieldnames):
+            return False
+        if magnetic_column_required and not any(name in fieldnames for name in REQUIRED_MAGNETIC_COLUMNS):
+            return False
+        return any(True for _ in reader)
 
 
 def _blocking_reasons(summary: dict) -> list[str]:

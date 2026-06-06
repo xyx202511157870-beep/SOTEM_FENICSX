@@ -444,7 +444,13 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
             ),
             encoding="utf-8",
         )
-        (output_dir / "errors.csv").write_text("time_obs,component,error\n", encoding="utf-8")
+        (output_dir / "errors.csv").write_text(
+            "time_obs,component,pred,ref,abs_error,ordinary_relative_error,"
+            "relative_error_with_floor,peak_normalized_error,pass_5pct\n"
+            f"1e-05,Ex,{1.0 + offset},{1.0 + offset},0.0,0.0,0.0,0.0,true\n"
+            f"1.0,dBzdt,{3.0 + offset},{3.0 + offset},0.0,0.0,0.0,0.0,true\n",
+            encoding="utf-8",
+        )
         (output_dir / "comparison_3comp.png").write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
         (output_dir / "error_curves_3comp.png").write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
         (output_dir / "model_schematic.png").write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")
