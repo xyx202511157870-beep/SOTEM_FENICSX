@@ -45,6 +45,58 @@ def secondary_state_from_dc_initialization(initialization) -> SecondaryState:
     )
 
 
+def secondary_step_equation_metadata(
+    *,
+    material: PronyConductivity,
+    sigma_background: float,
+    dt: float,
+) -> dict:
+    """Return auditable primary-secondary BE step equation metadata."""
+
+    sigma_background = _positive_scalar(sigma_background, "sigma_background")
+    dt = _positive_scalar(dt, "dt")
+    common = {
+        "solver_mode": "primary_secondary",
+        "total_field": "Etotal = Ep + Es",
+        "sigma_background": sigma_background,
+        "dt": dt,
+    }
+    if not material.terms:
+        return {
+            **common,
+            "case_type": "noip",
+            "equation": "curl mu^-1 curl Es + d/dt[sigma(Ep+Es)-sigma_b Ep] = 0",
+            "current_difference": "deltaJ = sigma(Ep + Es) - sigma_b Ep",
+            "lhs_operator": "K + R + M(sigma)/dt",
+            "rhs_history": "M(deltaJ_old - (sigma - sigma_b) Ep_new)/dt",
+            "sigma": material.sigma_inf,
+            "zero_contrast_condition": "sigma == sigma_background",
+        }
+
+    alpha = material.alpha(dt)
+    beta = material.beta(dt)
+    return {
+        **common,
+        "case_type": "ip",
+        "ip_current": "J = sigma_inf(Ep + Es) - sum(delta_sigma_k chi_k)",
+        "background_current": "Jb = sigma_b Ep",
+        "current_difference": "deltaJ = J - Jb",
+        "memory_update": "chi_k_new = alpha_k * chi_k_old + beta_k * (Ep_new + Es_new)",
+        "lhs_operator": "K + R + M(sigma_eff)/dt",
+        "rhs_history": "M(deltaJ_old - c_new)/dt",
+        "c_new": "(sigma_eff - sigma_b) Ep_new - sum(delta_sigma_k * alpha_k * chi_old_k)",
+        "sigma_inf": material.sigma_inf,
+        "sigma0": material.sigma0,
+        "sigma_eff": material.sigma_eff(dt),
+        "delta_sigma": [term.delta_sigma for term in material.terms],
+        "tau": [term.tau for term in material.terms],
+        "alpha": alpha.tolist(),
+        "beta": beta.tolist(),
+        "zero_contrast_condition": "sigma_inf == sigma_background and all(delta_sigma_k == 0)",
+        "delta_sigma_zero_degenerates_to_noip": True,
+    }
+
+
 def secondary_step_noip(
     state: SecondaryState,
     *,

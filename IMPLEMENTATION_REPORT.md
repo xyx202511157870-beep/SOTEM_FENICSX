@@ -134,6 +134,38 @@ python -m pytest -q tests/test_dc_initialization.py tests/test_primary_provider.
 
 Result: `43 passed`.
 
+## P6 Secondary Step Metadata Checkpoint (2026-06-06)
+
+The primary-secondary transient kernel now exposes
+`secondary_step_equation_metadata(...)` for no-IP and IP Backward-Euler
+step diagnostics. The metadata records the task-book equation conventions for
+
+```text
+Etotal = Ep + Es
+deltaJ = sigma(Ep + Es) - sigma_b Ep
+J = sigma_inf(Ep + Es) - sum(delta_sigma_k chi_k)
+Jb = sigma_b Ep
+```
+
+and records the no-IP RHS
+`M(deltaJ_old - (sigma - sigma_b) Ep_new)/dt` plus the IP RHS
+`M(deltaJ_old - c_new)/dt`, where
+`c_new = (sigma_eff - sigma_b) Ep_new - sum(delta_sigma_k * alpha_k * chi_old_k)`.
+For IP materials it also writes `sigma_inf`, `sigma0`, `sigma_eff`,
+`delta_sigma`, `tau`, `alpha`, `beta`, and the
+`delta_sigma_zero_degenerates_to_noip` diagnostic flag. This does not change
+the numerical stepper; it gives the DOLFINx/validation layer a stable
+metadata source for P6 diagnostics.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_secondary_zero_contrast.py
+python -m pytest -q tests/test_secondary_zero_contrast.py tests/test_primary_secondary_forward.py tests/test_dc_initialization.py tests/test_prony.py
+```
+
+Results: `8 passed` and `23 passed`.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

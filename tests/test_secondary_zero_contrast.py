@@ -5,6 +5,7 @@ from atem3d.solvers.dc_secondary import DCSecondaryInitialization
 from atem3d.solvers.tdem_secondary import (
     SecondaryState,
     secondary_state_from_dc_initialization,
+    secondary_step_equation_metadata,
     secondary_step_ip,
     secondary_step_noip,
 )
@@ -158,3 +159,53 @@ def test_secondary_state_from_dc_initialization_is_exported_from_solvers_package
     from atem3d.solvers import secondary_state_from_dc_initialization as exported
 
     assert exported is secondary_state_from_dc_initialization
+
+
+def test_secondary_noip_equation_metadata_records_rhs_convention():
+    material = PronyConductivity(sigma_inf=0.02, terms=[])
+
+    metadata = secondary_step_equation_metadata(
+        material=material,
+        sigma_background=0.01,
+        dt=0.25,
+    )
+
+    assert metadata["solver_mode"] == "primary_secondary"
+    assert metadata["case_type"] == "noip"
+    assert metadata["total_field"] == "Etotal = Ep + Es"
+    assert metadata["current_difference"] == "deltaJ = sigma(Ep + Es) - sigma_b Ep"
+    assert metadata["lhs_operator"] == "K + R + M(sigma)/dt"
+    assert metadata["rhs_history"] == "M(deltaJ_old - (sigma - sigma_b) Ep_new)/dt"
+    assert metadata["sigma"] == 0.02
+    assert metadata["sigma_background"] == 0.01
+    assert metadata["dt"] == 0.25
+    assert metadata["zero_contrast_condition"] == "sigma == sigma_background"
+
+
+def test_secondary_ip_equation_metadata_records_prony_elimination():
+    material = PronyConductivity(
+        sigma_inf=0.3,
+        terms=[DebyeTerm(delta_sigma=0.06, tau=0.5)],
+    )
+
+    metadata = secondary_step_equation_metadata(
+        material=material,
+        sigma_background=0.1,
+        dt=0.5,
+    )
+
+    assert metadata["case_type"] == "ip"
+    assert metadata["ip_current"] == "J = sigma_inf(Ep + Es) - sum(delta_sigma_k chi_k)"
+    assert metadata["background_current"] == "Jb = sigma_b Ep"
+    assert metadata["memory_update"] == "chi_k_new = alpha_k * chi_k_old + beta_k * (Ep_new + Es_new)"
+    assert metadata["lhs_operator"] == "K + R + M(sigma_eff)/dt"
+    assert metadata["rhs_history"] == "M(deltaJ_old - c_new)/dt"
+    assert metadata["c_new"] == "(sigma_eff - sigma_b) Ep_new - sum(delta_sigma_k * alpha_k * chi_old_k)"
+    assert metadata["sigma_inf"] == 0.3
+    assert metadata["sigma0"] == 0.24
+    assert metadata["sigma_eff"] == 0.27
+    assert metadata["delta_sigma"] == [0.06]
+    assert metadata["tau"] == [0.5]
+    assert metadata["alpha"] == [0.5]
+    assert metadata["beta"] == [0.5]
+    assert metadata["delta_sigma_zero_degenerates_to_noip"] is True

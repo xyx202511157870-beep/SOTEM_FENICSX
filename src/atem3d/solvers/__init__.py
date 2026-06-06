@@ -10,6 +10,7 @@ from .receiver_projection import SecondaryReceiverProjection
 from .tdem_secondary import (
     SecondaryState,
     secondary_state_from_dc_initialization,
+    secondary_step_equation_metadata,
     secondary_step_ip,
     secondary_step_noip,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "initialize_dc_secondary",
     "initialize_dc_secondary_from_primary",
     "secondary_state_from_dc_initialization",
+    "secondary_step_equation_metadata",
     "secondary_step_ip",
     "secondary_step_noip",
 ]
