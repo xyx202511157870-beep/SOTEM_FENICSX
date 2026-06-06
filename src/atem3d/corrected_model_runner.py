@@ -197,13 +197,25 @@ def _is_zero_secondary_material(material: PronyConductivity, sigma_background: f
 
 
 def _default_reference_runner(case_spec: dict) -> np.ndarray:
+    from atem3d.empymod_compare import make_debye_resistivity_model
     from atem3d.primary import EmpymodPrimaryProvider
 
     components = [str(value) for value in case_spec["components"]]
     times = np.asarray(case_spec["observation_times"], dtype=float)
     receiver = np.asarray([case_spec["receiver"]], dtype=float)
+    provider_config = dict(case_spec["empymod_primary"])
+    material = _material_from_case_spec(case_spec)
+    if material is not None:
+        layer_count = len(provider_config["resistivities"])
+        provider_config["resistivities"] = make_debye_resistivity_model(
+            [material.sigma_inf] * layer_count,
+            [
+                {"delta_sigma": term.delta_sigma, "tau": term.tau}
+                for term in material.terms
+            ],
+        )
     provider = EmpymodPrimaryProvider(
-        config=dict(case_spec["empymod_primary"]),
+        config=provider_config,
         empymod_kwargs=dict(case_spec.get("empymod_kwargs", {})),
     )
     rows = []

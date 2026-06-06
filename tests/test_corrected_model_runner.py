@@ -8,6 +8,7 @@ from atem3d.cli import main
 from atem3d.cli import _load_yaml
 from atem3d.corrected_model import CorrectedModelValidationConfig, build_corrected_model_case_specs
 from atem3d.corrected_model_runner import run_corrected_model_validation
+from atem3d.corrected_model_runner import _default_reference_runner
 
 
 def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
@@ -60,6 +61,28 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
         assert (output_dir / name).exists()
     payload = json.loads((output_dir / "error_summary.json").read_text(encoding="utf-8"))
     assert payload["validation_scope"] == "corrected_model_full"
+
+
+def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):
+    from atem3d import empymod_compare
+
+    config = CorrectedModelValidationConfig(n_observation_times=2)
+    spec = build_corrected_model_case_specs(tmp_path, config=config)["ip"]
+    seen_resistivities = []
+
+    def fake_reference(survey, **_kwargs):
+        seen_resistivities.append(survey.resistivities)
+        return np.zeros((1, len(survey.receiver_components)), dtype=float)
+
+    monkeypatch.setattr(empymod_compare, "run_empymod_reference", fake_reference)
+
+    values = _default_reference_runner(spec)
+
+    assert values.shape == (2, 3)
+    assert seen_resistivities
+    assert all(isinstance(res, dict) for res in seen_resistivities)
+    assert all("func_eta" in res for res in seen_resistivities)
+    np.testing.assert_allclose(seen_resistivities[0]["res"], [1.0 / 0.012] * 3)
 
 
 def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch):

@@ -70,7 +70,7 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
             components=components,
             times=np.array([float(t)], dtype=float),
             depths=[float(value) for value in self.config["depths"]],
-            resistivities=list(self.config["resistivities"]),
+            resistivities=_resistivity_config(self.config["resistivities"]),
             strength=float(self.config.get("strength", self.config.get("current", 1.0))),
             signal=self.config.get("signal", -1),
             receiver_components=flat,
@@ -98,3 +98,9 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
         if "source_end" in self.config:
             return tuple(float(value) for value in self.config["source_end"])
         return tuple(float(value) for value in self.config["source"]["end"])
+
+
+def _resistivity_config(values):
+    if isinstance(values, dict):
+        return dict(values)
+    return list(values)

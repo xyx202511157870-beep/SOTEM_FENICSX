@@ -913,6 +913,10 @@ default DOLFINx forward path can run a small no-IP uniform-background
 primary-secondary case by sampling `EmpymodPrimaryProvider` on the DOLFINx
 Nedelec interpolation points and using the zero-secondary receiver projector.
 This is a backend smoke, not a full corrected-model 5% acceptance run.
+For IP cases, the corrected-model reference path now converts the Prony/Debye
+material metadata into empymod's Debye `res` dictionary, so the reference uses
+the same `sigma_inf`, `delta_sigma_list`, and `tau_list` stored in the case
+spec instead of silently falling back to the no-IP resistivity tuple.
 
 A WSL CLI smoke completed under:
 
@@ -927,6 +931,10 @@ artifact set and reported zero error against empymod because the total response
 is exactly the primary response in this uniform no-IP smoke. This verifies the
 CLI/artifact/backend plumbing only; it does not validate nonzero contrast,
 terrain/leakage, IP memory, or a production-resolution full-time run.
+
+A local two-time IP empymod reference smoke using the corrected Prony metadata
+also returned finite `Ex/Ey/dBzdt` values. This validates the IP reference
+plumbing only; it does not validate the DOLFINx IP forward response.
 
 ## Current Accuracy Status
 
@@ -2141,8 +2149,9 @@ source-term substitution inside the existing total-field equation.
 - P7 currently verifies artifact generation from supplied arrays and the
   corrected-model runner scaffold with injected runners. A WSL smoke now runs
   the default DOLFINx no-IP uniform-background forward backend on a tiny mesh;
-  it does not yet prove full-window 5% physical agreement for the corrected
-  model.
+  the IP empymod reference path now uses the corrected Prony/Debye material
+  metadata and has a finite two-time smoke. These do not yet prove full-window
+  5% physical agreement for the corrected model.
 - P7 CLI reads precomputed prediction/reference CSV files for
   `validate-noip-3comp` and `validate-ip-3comp`. `corrected-model-run` now
   exists as the orchestration entry point; its default DOLFINx forward runner
