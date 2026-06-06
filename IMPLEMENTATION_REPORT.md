@@ -2964,6 +2964,15 @@ source-term substitution inside the existing total-field equation.
   single-Debye case. Windows verification ran
   `python -m pytest -q tests/test_debye_fit.py` with `5 passed` and
   `python -m pytest -q` with all tests passing (`707 passed`, `2 skipped`).
+- Added `src/atem3d/materials/cole_cole.py` with `ColeColeConductivity`, a
+  conductivity-form Cole-Cole material wrapper that evaluates complex
+  conductivity and fits directly to `PronyConductivity`. This gives the
+  material package the task-book `materials/cole_cole.py` entry point and keeps
+  paper/config Cole-Cole parameters on the same production material path as
+  Debye/Prony time stepping. Windows verification ran
+  `python -m pytest -q tests/test_materials_cole_cole.py tests/test_debye_fit.py tests/test_prony.py`
+  with `14 passed` and `python -m pytest -q` with all tests passing
+  (`709 passed`, `2 skipped`).
 
 ## Next Steps
 
