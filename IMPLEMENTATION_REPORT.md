@@ -1045,6 +1045,43 @@ the reference is the empymod background response. Therefore this result proves
 the corrected-scale leakage diagnostic backend/artifact path runs, not that the
 3D anomaly response has an accepted reference-level error.
 
+A WSL IP diagnostic run using the same spec also completed with:
+
+```bash
+PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m atem3d.cli corrected-model-run dolfinx/runs/corrected_leakage_model/spec.json --case ip --output-root dolfinx/runs/corrected_leakage_model_run
+```
+
+Output directory:
+
+```text
+dolfinx/runs/corrected_leakage_model_run/ip_3comp
+```
+
+Runtime:
+
+```text
+forward = 35.159 s
+reference = 0.435 s
+artifact_total = 0.965 s
+```
+
+The IP artifact summary records the Prony background metadata:
+
+```text
+sigma0 = 0.01 S/m
+sigma_inf = 0.012 S/m
+delta_sigma_list = [0.002]
+tau_list = [0.1]
+prony_dc_constraint_error = 0.0
+```
+
+It also reports `final_acceptance_passed=false` with the same expected
+diagnostic blocking reasons. The weak `Ey` component is handled by the weak
+component policy; the physical failed component is `Ex`. This confirms the
+corrected-scale no-IP and IP leakage-channel diagnostic artifact paths both
+run under WSL on the 32 GB machine, while final 3D anomaly accuracy still
+requires a defensible 3D reference or published response data.
+
 A WSL CLI smoke completed under:
 
 ```text
