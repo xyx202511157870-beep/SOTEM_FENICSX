@@ -86,6 +86,33 @@ artifact writer, and diagnostics, but it does not claim the final full
 no-IP/IP DOLFINx production model reaches the task-book `<=5%` empymod/1D
 accuracy target. That target remains part of the later P7 acceptance path.
 
+### Fresh Task-Book Intake Verification (2026-06-06)
+
+After receiving the full task book, the repository was re-audited against the
+first-round scope. The git worktree was clean before this report update.
+
+Fresh verification commands:
+
+```powershell
+python -m pytest -q tests/test_waveform.py tests/test_time_grid.py tests/test_source_consistency.py tests/test_noip_3comp_validation_smoke.py tests/test_validation_failure_diagnostics.py tests/test_validation_3comp_cli.py tests/test_metrics.py
+python -m pytest -q
+python -m atem3d.cli dolfinx-backend-check --output $env:TEMP\atem3d_backend_status.json
+```
+
+Results:
+
+- The targeted P0-P2 pytest set passed: `25 passed`.
+- The full pytest suite exited `0` and reached `[100%]`; warnings were limited
+  to dependency deprecation/performance warnings from SimPEG/pymatsolver.
+- The Windows Python DOLFINx backend check exited `2`: missing
+  `dolfinx.fem`, `dolfinx.mesh`, and `mpi4py.MPI`.
+
+WSL was also checked with direct module imports and then immediately shut down.
+The current WSL Python is not a usable FEniCSx production runtime yet: it lacks
+`dolfinx.fem`, `dolfinx.mesh`, `mpi4py.MPI`, `numpy`, `pytest`, `ufl`,
+`basix`, and `petsc4py`. After the check, `wsl --shutdown; wsl -l -v`
+reported `Ubuntu Stopped`.
+
 ## P3 Total-Field IP Checkpoint (2026-06-06)
 
 The DOLFINx total-field Debye/Prony branch now records explicit task-book
