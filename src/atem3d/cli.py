@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_published_paper_digitization_template(argv[1:])
     if argv and argv[0] == "published-paper-curve-artifacts":
         return _main_published_paper_curve_artifacts(argv[1:])
+    if argv and argv[0] == "published-paper-prony-materials":
+        return _main_published_paper_prony_materials(argv[1:])
     if argv and argv[0] in {"validate-noip-3comp", "validate-ip-3comp"}:
         return _main_validate(argv)
     return _main_run(argv)
@@ -253,6 +255,26 @@ def _main_published_paper_curve_artifacts(argv: list[str]) -> int:
     print(f"wrote {args.output_dir}")
     print(f"reference_type: {summary['reference_type']}")
     print(f"final_acceptance_passed: {summary['final_acceptance_passed']}")
+    return 0
+
+
+def _main_published_paper_prony_materials(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write Prony material fits for published paper models.")
+    parser.add_argument("config", type=Path, help="JSON/YAML published paper model target spec")
+    parser.add_argument("--output", type=Path, default=Path("paper_prony_materials.json"))
+    parser.add_argument("--n-terms", type=int, default=10)
+    args = parser.parse_args(argv)
+
+    from .paper_materials import write_published_paper_prony_materials
+
+    spec = _load_yaml(args.config)
+    payload = write_published_paper_prony_materials(
+        spec,
+        args.output,
+        n_terms=args.n_terms,
+    )
+    print(f"wrote {args.output}")
+    print(f"materials: {len(payload['materials'])}")
     return 0
 
 

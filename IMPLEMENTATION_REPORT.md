@@ -2983,6 +2983,17 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_materials_cole_cole.py tests/test_debye_fit.py tests/test_prony.py`
   with `16 passed` and `python -m pytest -q` with all tests passing
   (`711 passed`, `2 skipped`).
+- Added `tdem-ip-forward published-paper-prony-materials`, which reads the
+  published-paper model target spec and writes fitted Prony material JSON for
+  the accuracy benchmark layer, layered polarization model, and high-/low-
+  resistivity 3D polarized bodies. The output records `rho0`, chargeability,
+  Cole-Cole `tau/c`, `sigma0`, `sigma_inf`, `relative_l2`, and Debye
+  `delta_sigma/tau` terms. The paper-material fit path enforces the DC
+  conductivity constraint by normalizing the fitted Debye strengths so
+  `sigma0=1/rho0` exactly before reporting the final fit error. Windows
+  verification ran `python -m pytest -q tests/test_corrected_model_runner.py`
+  with `18 passed` and `python -m pytest -q` with all tests passing
+  (`712 passed`, `2 skipped`).
 
 ## Next Steps
 

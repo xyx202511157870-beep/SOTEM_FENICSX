@@ -540,6 +540,48 @@ def test_published_paper_curve_artifacts_cli_writes_overlay_outputs(tmp_path):
     assert diagnostics["published_response_curve"]["component_figures"] == {"Ex": "Fig. 12", "Hz": "Fig. 15"}
 
 
+def test_published_paper_prony_materials_cli_writes_fit_json(tmp_path):
+    spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
+    spec_path = tmp_path / "paper_model_target.json"
+    output = tmp_path / "paper_prony_materials.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "published-paper-prony-materials",
+            str(spec_path),
+            "--output",
+            str(output),
+            "--n-terms",
+            "6",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["source_article_id"] == "S092698512400329X"
+    assert payload["frequency_count"] == 81
+    assert payload["n_terms"] == 6
+    assert set(payload["materials"]) == {
+        "accuracy_benchmark_layer",
+        "layered_polarization_model",
+        "three_dimensional_high_resistivity_body",
+        "three_dimensional_low_resistivity_body",
+    }
+    layered = payload["materials"]["layered_polarization_model"]
+    assert layered["rho0_ohm_m"] == 100.0
+    assert layered["chargeability"] == 0.3
+    assert layered["sigma0"] == 0.01
+    assert layered["sigma_inf"] > layered["sigma0"]
+    assert len(layered["terms"]) == 6
+    low = payload["materials"]["three_dimensional_low_resistivity_body"]
+    high = payload["materials"]["three_dimensional_high_resistivity_body"]
+    assert low["rho0_ohm_m"] == 10.0
+    assert high["rho0_ohm_m"] == 1000.0
+    assert low["relative_l2"] >= 0.0
+    assert high["relative_l2"] >= 0.0
+
+
 def test_corrected_leakage_channel_case_specs_define_memory_safe_3d_anomaly(tmp_path):
     specs = build_corrected_leakage_channel_case_specs(tmp_path)
 
