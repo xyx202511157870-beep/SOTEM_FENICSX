@@ -2973,6 +2973,16 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q tests/test_materials_cole_cole.py tests/test_debye_fit.py tests/test_prony.py`
   with `14 passed` and `python -m pytest -q` with all tests passing
   (`709 passed`, `2 skipped`).
+- `src/atem3d/materials/cole_cole.py` now also includes
+  `PeltonColeColeResistivity`, matching the paper/task-book resistivity-form
+  Cole-Cole convention (`rho0`, chargeability `M`, `tau`, `c`) before
+  converting to complex conductivity and Prony materials. The exact `c=1`
+  single-pole case is tested with the equivalent Debye time constant
+  `tau * (1-M)`, preserving both `sigma0=1/rho0` and the analytic
+  high-frequency conductivity. Windows verification ran
+  `python -m pytest -q tests/test_materials_cole_cole.py tests/test_debye_fit.py tests/test_prony.py`
+  with `16 passed` and `python -m pytest -q` with all tests passing
+  (`711 passed`, `2 skipped`).
 
 ## Next Steps
 
