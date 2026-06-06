@@ -13,6 +13,7 @@ from atem3d.corrected_model import (
     build_published_paper_model_target_spec,
 )
 from atem3d.corrected_model_runner import run_corrected_model_validation
+from atem3d.corrected_model_runner import run_corrected_model_convergence_validation
 from atem3d.corrected_model_runner import _default_reference_runner
 
 
@@ -74,6 +75,47 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
     assert diagnostics["model_schematic"]["source_length_m"] == 1000.0
 
 
+def test_run_corrected_model_convergence_validation_uses_refined_reference_case(tmp_path):
+    config = CorrectedModelValidationConfig(n_observation_times=3)
+    spec = build_corrected_leakage_channel_case_specs(tmp_path, config=config)["noip"]
+    spec["dolfinx_forward"]["cells"] = [2, 2, 1]
+    spec["convergence_reference"] = {
+        "dolfinx_forward": {
+            "cells": [4, 4, 2],
+            "rtol": 1.0e-9,
+        }
+    }
+    seen = []
+
+    def fake_forward(case_spec):
+        cells = tuple(case_spec["dolfinx_forward"]["cells"])
+        seen.append(cells)
+        scale = 1.0 if cells == (4, 4, 2) else 1.01
+        return scale * np.column_stack(
+            [
+                np.ones(len(case_spec["observation_times"])),
+                2.0 * np.ones(len(case_spec["observation_times"])),
+                3.0 * np.ones(len(case_spec["observation_times"])),
+            ]
+        )
+
+    summary = run_corrected_model_convergence_validation(
+        spec,
+        output_dir=tmp_path / "convergence_noip",
+        forward_runner=fake_forward,
+    )
+
+    assert seen == [(2, 2, 1), (4, 4, 2)]
+    assert summary["reference_type"] == "dolfinx_refined"
+    assert summary["physical_pass_all_components"] is True
+    assert summary["final_acceptance_passed"] is False
+    assert "reference_type_not_final_acceptance" in summary["acceptance_status"]["blocking_reasons"]
+    diagnostics = json.loads((tmp_path / "convergence_noip" / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["convergence_reference"]["reference_type"] == "dolfinx_refined"
+    assert diagnostics["convergence_reference"]["prediction_cells"] == [2, 2, 1]
+    assert diagnostics["convergence_reference"]["reference_cells"] == [4, 4, 2]
+
+
 def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path, monkeypatch):
     from atem3d import empymod_compare
 
@@ -123,6 +165,38 @@ def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch
 
     assert exit_code == 0
     assert calls == [("ip", str(tmp_path / "override" / "ip_3comp"))]
+
+
+def test_corrected_model_convergence_run_cli_dispatches_selected_cases(tmp_path, monkeypatch):
+    specs = build_corrected_leakage_channel_case_specs(tmp_path / "from_spec")
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(specs), encoding="utf-8")
+    calls = []
+
+    def fake_run(case_spec):
+        calls.append((case_spec["case_type"], case_spec["output_dir"]))
+        return {
+            "final_acceptance_passed": False,
+            "physical_pass_all_components": True,
+        }
+
+    import atem3d.corrected_model_runner as runner
+
+    monkeypatch.setattr(runner, "run_corrected_model_convergence_validation", fake_run)
+
+    exit_code = main(
+        [
+            "corrected-model-convergence-run",
+            str(spec_path),
+            "--case",
+            "noip",
+            "--output-root",
+            str(tmp_path / "convergence"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [("noip", str(tmp_path / "convergence" / "noip_convergence"))]
 
 
 def test_corrected_model_spec_cli_allows_observation_time_count_override(tmp_path):
@@ -348,6 +422,8 @@ def test_corrected_leakage_channel_case_specs_define_memory_safe_3d_anomaly(tmp_
     assert forward["domain_min"] == [-2000.0, -2000.0, -1000.0]
     assert forward["domain_max"] == [2000.0, 2000.0, 100.0]
     assert forward["cells"] == [2, 2, 1]
+    assert noip["convergence_reference"]["dolfinx_forward"]["cells"] == [4, 4, 2]
+    assert noip["convergence_reference"]["dolfinx_forward"]["rtol"] == 1.0e-9
     assert len(forward["leakage_channel"]["points"]) == 4
     assert forward["leakage_channel"]["radius"] == 900.0
     assert forward["leakage_channel"]["sigma"] == 0.04

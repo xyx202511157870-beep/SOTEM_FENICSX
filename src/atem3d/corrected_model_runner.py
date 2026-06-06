@@ -62,6 +62,7 @@ def run_corrected_model_validation(
         reference_type=str(spec.get("reference_type", "empymod")),
         magnetic_quantity=str(spec.get("magnetic_quantity", components[-1])),
         diagnostics={
+            **dict(spec.get("diagnostics", {})),
             "runner": spec.get("runner", {}),
             "source_start": spec.get("source_start"),
             "source_end": spec.get("source_end"),
@@ -81,6 +82,77 @@ def run_corrected_model_validation(
         model_schematic=schematic_info,
     )
     return summary
+
+
+def run_corrected_model_convergence_validation(
+    case_spec: dict,
+    *,
+    output_dir: str | Path | None = None,
+    forward_runner: ResponseRunner | None = None,
+    reference_runner: ResponseRunner | None = None,
+) -> dict:
+    """Run a coarse-vs-refined DOLFINx convergence validation artifact set.
+
+    This is a diagnostic validation path for nonzero secondary fields where a
+    one-dimensional empymod background is not a physical reference for the
+    three-dimensional anomaly. It deliberately writes ``reference_type`` as
+    ``dolfinx_refined`` so final task-book acceptance remains blocked until an
+    empymod/1D final-reference case is used.
+    """
+
+    prediction_spec, refined_spec = _build_dolfinx_refined_reference_specs(
+        case_spec,
+        output_dir=output_dir,
+    )
+    runner = forward_runner or _default_forward_runner
+    reference = reference_runner or runner
+
+    def run_refined_reference(_prediction_case_spec: dict) -> np.ndarray:
+        return reference(refined_spec)
+
+    return run_corrected_model_validation(
+        prediction_spec,
+        forward_runner=runner,
+        reference_runner=run_refined_reference,
+    )
+
+
+def _build_dolfinx_refined_reference_specs(
+    case_spec: dict,
+    *,
+    output_dir: str | Path | None = None,
+) -> tuple[dict, dict]:
+    prediction_spec = deepcopy(dict(case_spec))
+    if output_dir is not None:
+        prediction_spec["output_dir"] = str(output_dir)
+    prediction_spec["reference_type"] = "dolfinx_refined"
+    reference_spec = deepcopy(prediction_spec)
+    convergence_cfg = dict(prediction_spec.get("convergence_reference", {}))
+    reference_overrides = {key: value for key, value in convergence_cfg.items() if key != "metadata"}
+    reference_spec = _deep_merge_dict(reference_spec, reference_overrides)
+    reference_spec["reference_type"] = "dolfinx_refined"
+    reference_spec.setdefault("runner", {}).update({"reference_role": "dolfinx_refined"})
+    prediction_cells = list(dict(prediction_spec.get("dolfinx_forward", {})).get("cells", []))
+    reference_cells = list(dict(reference_spec.get("dolfinx_forward", {})).get("cells", []))
+    diagnostics = dict(prediction_spec.get("diagnostics", {}))
+    diagnostics["convergence_reference"] = {
+        "reference_type": "dolfinx_refined",
+        "prediction_cells": prediction_cells,
+        "reference_cells": reference_cells,
+        "overrides": reference_overrides,
+    }
+    prediction_spec["diagnostics"] = diagnostics
+    return prediction_spec, reference_spec
+
+
+def _deep_merge_dict(base: dict, overrides: dict) -> dict:
+    merged = deepcopy(dict(base))
+    for key, value in dict(overrides).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 def _default_forward_runner(case_spec: dict) -> np.ndarray:

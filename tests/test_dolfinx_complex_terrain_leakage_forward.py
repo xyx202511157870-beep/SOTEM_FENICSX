@@ -204,3 +204,25 @@ def test_gmsh_terrain_leakage_mesh_runs_primary_secondary_forward(tmp_path):
     assert np.all(np.isfinite(predicted))
     assert mesh_info["terrain_elevation_max"] > mesh_info["terrain_elevation_min"]
     assert built_materials["diagnostics"]["leakage_cell_count"] > 0
+
+
+def test_corrected_leakage_convergence_runner_writes_dolfinx_refined_artifacts(tmp_path):
+    from atem3d.corrected_model import (
+        CorrectedModelValidationConfig,
+        build_corrected_leakage_channel_case_specs,
+    )
+    from atem3d.corrected_model_runner import run_corrected_model_convergence_validation
+
+    config = CorrectedModelValidationConfig(n_observation_times=2)
+    spec = build_corrected_leakage_channel_case_specs(tmp_path, config=config)["noip"]
+    spec["dolfinx_forward"]["cells"] = [1, 1, 1]
+    spec["convergence_reference"]["dolfinx_forward"]["cells"] = [2, 1, 1]
+    spec["output_dir"] = str(tmp_path / "noip_convergence")
+
+    summary = run_corrected_model_convergence_validation(spec)
+
+    assert summary["reference_type"] == "dolfinx_refined"
+    assert summary["final_acceptance_passed"] is False
+    assert (tmp_path / "noip_convergence" / "predictions.csv").is_file()
+    assert (tmp_path / "noip_convergence" / "reference_empymod_or_1d.csv").is_file()
+    assert (tmp_path / "noip_convergence" / "diagnostics.json").is_file()

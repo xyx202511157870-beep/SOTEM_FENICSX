@@ -171,6 +171,14 @@ def build_corrected_leakage_channel_case_specs(
             "note": "The default corrected runner currently creates a box mesh; terrain metadata is recorded for the corrected-scale P8 diagnostic contract.",
         },
     }
+    convergence_reference = {
+        "dolfinx_forward": {
+            "cells": [4, 4, 2],
+            "rtol": 1.0e-9,
+            "atol": 1.0e-11,
+            "max_it": 800,
+        },
+    }
     leakage_points = [
         [-700.0, -500.0, -120.0],
         [-250.0, -320.0, -90.0],
@@ -187,6 +195,7 @@ def build_corrected_leakage_channel_case_specs(
             "sigma": 0.04,
         },
     }
+    specs["noip"]["convergence_reference"] = convergence_reference
     specs["ip"]["validation_scope"] = "corrected_model_terrain_leakage_diagnostic"
     specs["ip"]["empymod_kwargs"] = {"srcpts": 3}
     specs["ip"]["dolfinx_forward"] = {
@@ -199,6 +208,7 @@ def build_corrected_leakage_channel_case_specs(
             "tau_list": [0.1],
         },
     }
+    specs["ip"]["convergence_reference"] = convergence_reference
     return specs
 
 

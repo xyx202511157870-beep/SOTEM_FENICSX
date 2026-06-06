@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_corrected_model_spec(argv[1:])
     if argv and argv[0] == "corrected-model-run":
         return _main_corrected_model_run(argv[1:])
+    if argv and argv[0] == "corrected-model-convergence-run":
+        return _main_corrected_model_convergence_run(argv[1:])
     if argv and argv[0] == "corrected-leakage-model-spec":
         return _main_corrected_leakage_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-model-spec":
@@ -253,6 +255,35 @@ def _main_corrected_model_run(argv: list[str]) -> int:
         effect_path = _write_corrected_model_polarization_effect(acceptance_root, output_dirs)
         print(f"wrote {effect_path}")
     return 0 if all(bool(summary["final_acceptance_passed"]) for summary in summaries) else 1
+
+
+def _main_corrected_model_convergence_run(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run corrected-model coarse-vs-refined DOLFINx convergence diagnostics."
+    )
+    parser.add_argument("config", type=Path, help="JSON/YAML corrected-model case spec")
+    parser.add_argument("--case", choices=("noip", "ip", "both"), default="both")
+    parser.add_argument("--output-root", type=Path)
+    args = parser.parse_args(argv)
+
+    from .corrected_model_runner import run_corrected_model_convergence_validation
+
+    config = _load_yaml(args.config)
+    specs = _selected_corrected_model_specs(config, case=args.case)
+    for case_name, spec in specs:
+        case_spec = dict(spec)
+        if args.output_root is not None:
+            case_spec["output_dir"] = str(args.output_root / f"{case_name}_convergence")
+            runner = dict(case_spec.get("runner", {}))
+            runner["output_root"] = str(args.output_root)
+            runner["diagnostic"] = "dolfinx_refined_convergence"
+            case_spec["runner"] = runner
+        summary = run_corrected_model_convergence_validation(case_spec)
+        print(f"wrote {case_spec['output_dir']}")
+        print(
+            f"{case_name}: physical_pass_all_components={summary.get('physical_pass_all_components', False)}"
+        )
+    return 0
 
 
 def _main_validate_secondary(argv: list[str]) -> int:

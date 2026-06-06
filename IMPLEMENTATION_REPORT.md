@@ -2776,6 +2776,18 @@ source-term substitution inside the existing total-field equation.
   enables nonzero secondary/terrain/leakage convergence artifacts without
   falsely claiming task-book final acceptance; such runs now receive the
   explicit blocking reason `reference_type_not_final_acceptance`.
+- `run_corrected_model_convergence_validation` and the CLI command
+  `tdem-ip-forward corrected-model-convergence-run` now generate coarse-vs-
+  refined DOLFINx diagnostic validation artifacts using `reference_type=
+  dolfinx_refined`. The corrected leakage/terrain specs include a default
+  memory-safe refined reference override (`cells=[4, 4, 2]`, tighter solver
+  tolerances) so the nonzero-secondary path can be checked against a 3D
+  numerical reference instead of a physically incompatible 1D background.
+  A WSL/FEniCSx smoke ran the corrected leakage convergence runner on a
+  memory-safe `cells=[1,1,1]` prediction and `cells=[2,1,1]` refined reference
+  with two full-window observation times; it wrote the required validation
+  artifacts and passed. WSL was then shut down and `Ubuntu Stopped` was
+  confirmed.
 
 ## Next Steps
 
