@@ -198,6 +198,20 @@ def _default_forward_runner(case_spec: dict) -> np.ndarray:
     return _run_dolfinx_primary_secondary_forward(case_spec)
 
 
+def _import_dolfinx_backend():
+    try:
+        from dolfinx import fem, mesh
+        from mpi4py import MPI
+    except ImportError as exc:
+        raise ImportError(
+            "DOLFINx forward backend is unavailable: expected importable "
+            "dolfinx.fem, dolfinx.mesh, and mpi4py.MPI. Use a complete "
+            "FEniCSx/DOLFINx Python environment before running the default "
+            "corrected-model forward backend."
+        ) from exc
+    return fem, mesh, MPI
+
+
 def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: np.ndarray) -> dict:
     forward_material = _forward_material_from_case_spec(case_spec)
     sigma_background = float(case_spec.get("sigma_background", _background_sigma_from_case_spec(case_spec)))
@@ -233,8 +247,7 @@ def _primary_secondary_step_equation_metadata_for_case(case_spec: dict, times: n
 def _run_dolfinx_primary_secondary_forward(case_spec: dict) -> np.ndarray:
     from atem3d.primary import EmpymodPrimaryProvider
     from atem3d.solvers import PrimarySecondaryForwardOperator
-    from dolfinx import fem, mesh
-    from mpi4py import MPI
+    fem, mesh, MPI = _import_dolfinx_backend()
 
     sp = _load_sotem_pipeline_module()
     forward_cfg = dict(case_spec.get("dolfinx_forward", {}))

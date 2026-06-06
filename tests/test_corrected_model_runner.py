@@ -1,8 +1,10 @@
 import json
 import builtins
 import sys
+import types
 
 import numpy as np
+import pytest
 
 from atem3d.cli import main
 from atem3d.cli import _load_yaml
@@ -14,6 +16,7 @@ from atem3d.corrected_model import (
 )
 from atem3d.corrected_model_runner import run_corrected_model_validation
 from atem3d.corrected_model_runner import run_corrected_model_convergence_validation
+from atem3d.corrected_model_runner import _default_forward_runner
 from atem3d.corrected_model_runner import _default_reference_runner
 
 
@@ -176,6 +179,17 @@ def test_default_reference_runner_uses_debye_empymod_resistivity_for_ip(tmp_path
     np.testing.assert_allclose(seen_resistivities[0]["res"], [1.0 / 0.012] * 3)
 
 
+def test_default_forward_runner_reports_incomplete_dolfinx_backend(tmp_path, monkeypatch):
+    config = CorrectedModelValidationConfig(n_observation_times=2)
+    spec = build_corrected_model_case_specs(tmp_path, config=config)["noip"]
+    monkeypatch.setitem(sys.modules, "dolfinx", types.ModuleType("dolfinx"))
+    monkeypatch.delitem(sys.modules, "dolfinx.fem", raising=False)
+    monkeypatch.delitem(sys.modules, "dolfinx.mesh", raising=False)
+
+    with pytest.raises(ImportError, match="DOLFINx forward backend is unavailable"):
+        _default_forward_runner(spec)
+
+
 def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch):
     specs = build_corrected_model_case_specs(tmp_path / "from_spec")
     spec_path = tmp_path / "spec.json"
@@ -203,6 +217,25 @@ def test_corrected_model_run_cli_dispatches_selected_cases(tmp_path, monkeypatch
 
     assert exit_code == 0
     assert calls == [("ip", str(tmp_path / "override" / "ip_3comp"))]
+
+
+def test_corrected_model_run_cli_reports_backend_import_error(tmp_path, monkeypatch, capsys):
+    specs = build_corrected_model_case_specs(tmp_path / "from_spec")
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(specs), encoding="utf-8")
+
+    def fake_run(_case_spec):
+        raise ImportError("DOLFINx forward backend is unavailable: missing dolfinx.fem")
+
+    import atem3d.corrected_model_runner as runner
+
+    monkeypatch.setattr(runner, "run_corrected_model_validation", fake_run)
+
+    exit_code = main(["corrected-model-run", str(spec_path), "--case", "noip"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "DOLFINx forward backend is unavailable" in captured.err
 
 
 def test_corrected_model_convergence_run_cli_dispatches_selected_cases(tmp_path, monkeypatch):

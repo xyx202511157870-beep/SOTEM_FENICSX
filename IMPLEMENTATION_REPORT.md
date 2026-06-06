@@ -258,6 +258,35 @@ python -m pytest -q
 
 Results: `27 passed` and full pytest passed.
 
+## Corrected-Model Backend Availability Checkpoint (2026-06-06)
+
+A real `tdem-ip-forward corrected-model-run` smoke was attempted from a
+temporary directory after generating a three-time corrected-model spec. The
+current Windows Python environment has a `dolfinx` namespace package but does
+not expose `dolfinx.fem` or `dolfinx.mesh`, so the default DOLFINx forward
+backend cannot run in this environment.
+
+The default corrected-model forward runner now checks for `dolfinx.fem`,
+`dolfinx.mesh`, and `mpi4py.MPI` together and raises a clear backend
+availability error when the environment is incomplete. The
+`corrected-model-run` CLI catches this `ImportError`, prints the actionable
+message to stderr, and returns exit code `2` instead of emitting a Python
+traceback. This does not mark the validation as passed; it makes the missing
+runtime dependency explicit.
+
+Verification commands run for this checkpoint:
+
+```powershell
+python -m pytest -q tests/test_corrected_model_runner.py::test_default_forward_runner_reports_incomplete_dolfinx_backend
+python -m pytest -q tests/test_corrected_model_runner.py::test_corrected_model_run_cli_reports_backend_import_error tests/test_corrected_model_runner.py tests/test_cli_subcommands.py
+python -m atem3d.cli corrected-model-spec <temp>/outputs --output <temp>/spec.json --n-observation-times 3
+python -m atem3d.cli corrected-model-run <temp>/spec.json --case both --output-root <temp>/run
+python -m pytest -q
+```
+
+Results: the targeted pytest commands passed, the CLI smoke exited `2` with
+the explicit DOLFINx backend availability message, and full pytest passed.
+
 ## Implemented Modules
 
 - `src/atem3d/waveforms.py`

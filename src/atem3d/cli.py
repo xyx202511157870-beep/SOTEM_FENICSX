@@ -332,7 +332,11 @@ def _main_corrected_model_run(argv: list[str]) -> int:
             runner = dict(case_spec.get("runner", {}))
             runner["output_root"] = str(args.output_root)
             case_spec["runner"] = runner
-        summary = run_corrected_model_validation(case_spec)
+        try:
+            summary = run_corrected_model_validation(case_spec)
+        except ImportError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         summaries.append(summary)
         output_dirs[case_name] = Path(case_spec["output_dir"])
         print(f"wrote {case_spec['output_dir']}")
