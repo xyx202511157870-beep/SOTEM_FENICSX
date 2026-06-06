@@ -83,11 +83,13 @@ def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
     assert equation["case_type"] == "noip"
     assert equation["lhs_operator"] == "K + R + M(sigma)/dt"
     assert equation["rhs_history"] == "M(deltaJ_old - (sigma - sigma_b) Ep_new)/dt"
-    assert equation["dt"] == 2.0e-5
-    assert equation["turnoff_time_s"] == 1.0e-5
-    assert equation["first_observation_time_s"] == 1.0e-5
-    assert equation["first_internal_time_s"] == 2.0e-5
-    assert equation["dt_source"] == "turnoff_time_plus_first_observation_time"
+    assert equation["dt"] == pytest.approx(1.0e-6)
+    assert equation["turnoff_time_s"] == pytest.approx(1.0e-5)
+    assert equation["turnoff_steps"] == 10
+    assert equation["first_observation_time_s"] == pytest.approx(1.0e-5)
+    assert equation["first_output_internal_time_s"] == pytest.approx(2.0e-5)
+    assert equation["first_internal_step_dt_s"] == pytest.approx(1.0e-6)
+    assert equation["dt_source"] == "turnoff_grid_first_step"
 
 
 def test_run_corrected_model_validation_writes_ip_secondary_equation_metadata(tmp_path):
@@ -359,6 +361,7 @@ def test_corrected_model_spec_cli_allows_observation_time_count_override(tmp_pat
     assert payload["noip"]["observation_times"][0] == 1.0e-5
     assert payload["noip"]["observation_times"][-1] == 1.0
     assert payload["noip"]["ramp_off_time"] == 1.0e-5
+    assert payload["noip"]["turnoff_steps"] == 10
 
 
 def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_path, monkeypatch):

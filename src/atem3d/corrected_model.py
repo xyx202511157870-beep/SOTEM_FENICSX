@@ -24,6 +24,7 @@ class CorrectedModelValidationConfig:
     receiver: tuple[float, float, float] = CORRECTED_RECEIVER
     source_current: float = 10.0
     ramp_off_time: float = 1.0e-5
+    turnoff_steps: int = 10
     observation_time_min: float = 1.0e-5
     observation_time_max: float = 1.0
     n_observation_times: int = 80
@@ -62,6 +63,8 @@ class CorrectedModelValidationConfig:
             raise ValueError("source_end does not match corrected model")
         if tuple(float(value) for value in self.receiver) != CORRECTED_RECEIVER:
             raise ValueError("receiver does not match corrected model")
+        if int(self.turnoff_steps) < 1:
+            raise ValueError("turnoff_steps must be positive")
 
     def observation_times(self) -> np.ndarray:
         if self.n_observation_times < 2:
@@ -124,6 +127,7 @@ def build_corrected_model_case_specs(
         "receiver": list(cfg.receiver),
         "source_current": float(cfg.source_current),
         "ramp_off_time": float(cfg.ramp_off_time),
+        "turnoff_steps": int(cfg.turnoff_steps),
         "observation_times": [float(value) for value in cfg.observation_times()],
         "empymod_primary": cfg.empymod_primary_config(),
         "runner": runner,

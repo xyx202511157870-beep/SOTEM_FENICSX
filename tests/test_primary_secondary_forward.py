@@ -114,25 +114,32 @@ def test_primary_secondary_forward_samples_internal_times_after_turnoff():
     receivers = np.array([[0.0, -300.0, -0.1]])
     observation_times = np.array([1.0e-5, 2.0e-5])
     turnoff_time = 1.0e-5
-    internal_times = turnoff_time + observation_times
+    output_internal_times = turnoff_time + observation_times
+    internal_times = np.r_[0.5e-5, 1.0e-5, output_internal_times]
     provider = CachedPrimaryProvider(
         times=internal_times,
         points=points,
         receivers=receivers,
         Ep_on_V=np.array(
             [
+                [[0.5, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0]],
                 [[2.0, 0.0, 0.0]],
                 [[3.0, 0.0, 0.0]],
             ]
         ),
         receiver_E=np.array(
             [
+                [[5.0, 0.5, 0.0]],
+                [[10.0, 1.0, 0.0]],
                 [[20.0, 2.0, 0.0]],
                 [[30.0, 3.0, 0.0]],
             ]
         ),
         receiver_dBdt=np.array(
             [
+                [[0.0, 0.0, -0.5]],
+                [[0.0, 0.0, -1.0]],
                 [[0.0, 0.0, -2.0]],
                 [[0.0, 0.0, -3.0]],
             ]
@@ -159,10 +166,11 @@ def test_primary_secondary_forward_samples_internal_times_after_turnoff():
         secondary_state_stepper=state_stepper,
         secondary_receiver_projector=receiver_projector,
         turnoff_time=turnoff_time,
+        turnoff_steps=2,
     )
 
     predicted = operator.forward(observation_times)
 
     np.testing.assert_allclose(predicted, [[20.0, 2.0, -2.0], [30.0, 3.0, -3.0]])
-    np.testing.assert_allclose(seen["step_dt"], [2.0e-5, 1.0e-5])
-    np.testing.assert_allclose(seen["receiver_time"], internal_times)
+    np.testing.assert_allclose(seen["step_dt"], [0.5e-5, 0.5e-5, 1.0e-5, 1.0e-5])
+    np.testing.assert_allclose(seen["receiver_time"], output_internal_times)

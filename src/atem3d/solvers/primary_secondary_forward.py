@@ -59,6 +59,7 @@ class PrimarySecondaryForwardOperator:
     secondary_state_stepper: SecondaryStateStepper | None = None
     contrast_atol: float = 0.0
     turnoff_time: float = 0.0
+    turnoff_steps: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fem_points", as_points(self.fem_points, "fem_points"))
@@ -84,12 +85,21 @@ class PrimarySecondaryForwardOperator:
         if not np.isfinite(turnoff_time) or turnoff_time < 0.0:
             raise ValueError("turnoff_time must be finite and nonnegative")
         object.__setattr__(self, "turnoff_time", turnoff_time)
+        turnoff_steps = int(self.turnoff_steps)
+        if turnoff_steps < 1:
+            raise ValueError("turnoff_steps must be positive")
+        object.__setattr__(self, "turnoff_steps", turnoff_steps)
 
     def forward(self, times: Sequence[float]) -> np.ndarray:
         """Return flattened receiver data for the requested observation times."""
 
         observation_times = _as_strictly_increasing_times(times)
-        internal_times = observation_times + float(self.turnoff_time)
+        output_internal_times = observation_times + float(self.turnoff_time)
+        internal_times = _internal_time_grid(
+            observation_times,
+            turnoff_time=float(self.turnoff_time),
+            turnoff_steps=int(self.turnoff_steps),
+        )
         primary_fem = PrimaryFEMInterpolator(provider=self.primary, points=self.fem_points)
         if self.secondary_state_initializer is None:
             initialization = initialize_dc_secondary_from_primary(
@@ -110,6 +120,7 @@ class PrimarySecondaryForwardOperator:
         Ep_old = initialization.Ep0
         previous_time = 0.0
         rows: list[np.ndarray] = []
+        output_index = 0
 
         for internal_time in internal_times:
             dt = float(internal_time - previous_time)
@@ -147,10 +158,19 @@ class PrimarySecondaryForwardOperator:
                     secondary_solver=self.secondary_step_solver,
                     contrast_atol=self.contrast_atol,
                 )
-            rows.append(self._receiver_row(state, Ep_new, float(internal_time), dt))
+            if output_index < output_internal_times.size and np.isclose(
+                internal_time,
+                output_internal_times[output_index],
+                rtol=0.0,
+                atol=1.0e-15,
+            ):
+                rows.append(self._receiver_row(state, Ep_new, float(internal_time), dt))
+                output_index += 1
             Ep_old = Ep_new
             previous_time = float(internal_time)
 
+        if len(rows) != observation_times.size:
+            raise RuntimeError("internal time grid did not visit every observation output time")
         return np.vstack(rows)
 
     def _receiver_row(
@@ -222,3 +242,23 @@ def _as_strictly_increasing_times(times: Sequence[float]) -> np.ndarray:
     if np.any(np.diff(values) <= 0.0):
         raise ValueError("times must be strictly increasing")
     return values.copy()
+
+
+def _internal_time_grid(
+    observation_times: Sequence[float],
+    *,
+    turnoff_time: float,
+    turnoff_steps: int,
+) -> np.ndarray:
+    observation_times = _as_strictly_increasing_times(observation_times)
+    turnoff_time = float(turnoff_time)
+    if not np.isfinite(turnoff_time) or turnoff_time < 0.0:
+        raise ValueError("turnoff_time must be finite and nonnegative")
+    turnoff_steps = int(turnoff_steps)
+    if turnoff_steps < 1:
+        raise ValueError("turnoff_steps must be positive")
+    output_internal_times = observation_times + turnoff_time
+    if turnoff_time > 0.0:
+        turnoff_grid = np.linspace(0.0, turnoff_time, turnoff_steps + 1)[1:]
+        return np.unique(np.r_[turnoff_grid, output_internal_times])
+    return output_internal_times
