@@ -194,6 +194,8 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
     )
 
     assert exit_code == 0
+    acceptance_text = (output_root / "acceptance.yaml").read_text(encoding="utf-8")
+    assert not acceptance_text.lstrip().startswith("{")
     acceptance = _load_yaml(output_root / "acceptance.yaml")
     assert acceptance == {
         "acceptance": {

@@ -976,6 +976,8 @@ reasons when either case is missing or failed. When diagnostics paths are
 provided, `final_acceptance_summary.json` also includes
 `failure_diagnostics_by_case`, and the text report lists per-case diagnostic
 reason codes and check statuses.
+`corrected-model-run` writes `acceptance.yaml` as YAML text rather than JSON
+text with a YAML extension.
 
 ## Writing Corrected-Model Case Specs
 
@@ -2614,6 +2616,8 @@ source-term substitution inside the existing total-field equation.
   and seven structured follow-up checks: time step, mesh, boundary, source
   term, receiver sampling, magnetic recovery, and IP memory.
 - Validation artifact `run_config_resolved.yaml` files are now emitted as
+  YAML text and remain readable by `yaml.safe_load`.
+- Corrected-model orchestration `acceptance.yaml` files are now emitted as
   YAML text and remain readable by `yaml.safe_load`.
 - `tdem-ip-forward corrected-model-spec` writes canonical corrected-model
   metadata, including runner/material metadata, and accepts
