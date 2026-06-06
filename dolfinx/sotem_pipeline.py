@@ -2945,6 +2945,37 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     return rec
 
 
+def _make_secondary_receiver_projector_from_evaluate_receivers(
+    electric_getter,
+    dbdt_getter,
+    *,
+    msh,
+    config: PipelineConfig,
+):
+    """Build a primary-secondary receiver projector from existing DOLFINx sampling.
+
+    ``electric_getter`` and ``dbdt_getter`` are small DOLFINx-specific hooks
+    that return the secondary electric and magnetic-rate fields for the current
+    secondary state.  The returned callable matches
+    ``PrimarySecondaryForwardOperator.secondary_receiver_projector``.
+    """
+
+    def projector(state, Ep_new, time_value: float, dt: float, components):
+        import numpy as np
+
+        E_secondary = electric_getter(state, Ep_new, time_value, dt)
+        dbdt_secondary = dbdt_getter(state, Ep_new, time_value, dt)
+        rec = evaluate_receivers(E_secondary, dbdt_secondary, msh, config)
+        row = []
+        for component in components:
+            if component not in rec:
+                raise ValueError(f"secondary receiver record missing component {component!r}")
+            row.append(float(rec[component]))
+        return np.asarray([row], dtype=float)
+
+    return projector
+
+
 def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time_obs: float, main_record=None):
     import numpy as np
 

@@ -98,6 +98,11 @@ It does not claim that the full 1e-5 s to 1 s 5% accuracy target is achieved.
     - This mode exposes a direct Faraday-integrated `Hz` diagnostic path for
       comparison against Biot-Savart recovery; it is not yet a full-window
       acceptance result.
+  - Added `_make_secondary_receiver_projector_from_evaluate_receivers`, a
+    DOLFINx-side bridge that reuses existing `evaluate_receivers(E, dBdt, ...)`
+    sampling to produce the component table expected by the reusable
+    primary-secondary forward core. This is a receiver bridge only; full
+    DOLFINx primary-secondary operator assembly remains pending.
   - Validation summaries now distinguish strict component-wise acceptance from
     physical acceptance:
     - `pass_all_components` remains the strict per-component robust-error gate.
