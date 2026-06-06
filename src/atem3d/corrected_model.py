@@ -219,6 +219,57 @@ def build_corrected_leakage_channel_case_specs(
     return specs
 
 
+def build_corrected_terrain_smoke_case_spec(
+    output_root: str | Path,
+    config: CorrectedModelValidationConfig | None = None,
+) -> dict:
+    """Return a memory-safe Gmsh terrain/leakage diagnostic smoke spec."""
+
+    cfg = config or CorrectedModelValidationConfig(n_observation_times=2, turnoff_steps=1)
+    output = Path(output_root)
+    spec = build_corrected_leakage_channel_case_specs(output, config=cfg)["noip"]
+    spec["reference_type"] = "self_convergence"
+    spec["validation_scope"] = "corrected_model_terrain_leakage_diagnostic"
+    spec["receiver"] = [0.25, 0.25, -0.25]
+    spec["observation_times"] = [1.0e-5, 1.0]
+    spec["turnoff_steps"] = 1
+    spec["output_dir"] = str(output / "terrain_leakage_smoke")
+    runner = dict(spec.get("runner", {}))
+    runner["diagnostic"] = "gmsh_terrain_constant_primary_artifact_smoke"
+    runner["output_root"] = str(output)
+    spec["runner"] = runner
+    spec["diagnostics"] = {
+        "terrain_smoke": {
+            "purpose": "memory_safe_complex_terrain_leakage_transient_artifact_smoke",
+            "primary_provider_mode": "constant",
+            "reference_type": "self_convergence",
+        }
+    }
+    spec["dolfinx_forward"] = {
+        "receiver_evaluation_mode": "first_cell",
+        "outer_boundary_mode": "natural",
+        "ksp_type": "cg",
+        "rtol": 1.0e-7,
+        "atol": 1.0e-9,
+        "max_it": 300,
+        "primary_provider_mode": "constant",
+        "constant_primary_E": [1.0, 0.0, 0.0],
+        "constant_primary_dBdt": [0.0, 0.0, 0.0],
+        "terrain_mesh": {
+            "mode": "small_gmsh_terrain_leakage",
+            "mesh_size": 0.9,
+            "msh_name": "terrain_leakage.msh",
+        },
+        "leakage_channel": {
+            "points": [[0.05, 0.5, -0.45], [0.95, 0.5, -0.45]],
+            "radius": 0.35,
+            "min_marked_cells": 1,
+            "sigma": 0.04,
+        },
+    }
+    return spec
+
+
 def build_published_paper_model_target_spec(output_root: str | Path) -> dict:
     """Return the published SOTEM paper target metadata for later reproduction.
 

@@ -161,6 +161,40 @@ def run_corrected_model_convergence_validation(
     )
 
 
+def run_corrected_model_self_convergence_validation(
+    case_spec: dict,
+    *,
+    forward_runner: ResponseRunner | None = None,
+) -> dict:
+    """Run a diagnostic artifact set using the prediction as its reference."""
+
+    spec = deepcopy(dict(case_spec))
+    spec["reference_type"] = "self_convergence"
+    forward = forward_runner or _default_forward_runner
+    captured: dict[str, np.ndarray] = {}
+
+    def run_forward(prediction_case_spec: dict) -> np.ndarray:
+        values = _validate_response_table(
+            forward(prediction_case_spec),
+            np.asarray(prediction_case_spec["observation_times"], dtype=float),
+            [str(value) for value in prediction_case_spec["components"]],
+            "forward_runner",
+        )
+        captured["values"] = values
+        return values
+
+    def run_self_reference(prediction_case_spec: dict) -> np.ndarray:
+        if "values" not in captured:
+            raise RuntimeError("self-convergence reference requested before forward values")
+        return captured["values"].copy()
+
+    return run_corrected_model_validation(
+        spec,
+        forward_runner=run_forward,
+        reference_runner=run_self_reference,
+    )
+
+
 def _secondary_effect_diagnostic(
     predictions: np.ndarray,
     refined_reference: np.ndarray,

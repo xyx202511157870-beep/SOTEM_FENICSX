@@ -29,6 +29,7 @@ _TOP_LEVEL_COMMANDS = (
     ("convergence-sweep-report", "Summarize convergence diagnostic artifact directories."),
     ("leakage-marker-diagnostics", "Preflight leakage-channel cell marker coverage."),
     ("corrected-leakage-model-spec", "Write corrected leakage-channel diagnostic specs."),
+    ("corrected-terrain-smoke-run", "Run a memory-safe Gmsh terrain/leakage artifact smoke."),
     ("model-schematic", "Write a corrected-model source/receiver schematic."),
     ("polarization-effect", "Write IP-minus-noIP response and error artifacts."),
     ("published-paper-model-spec", "Write the published-paper reproduction target spec."),
@@ -69,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_leakage_marker_diagnostics(argv[1:])
     if argv and argv[0] == "corrected-leakage-model-spec":
         return _main_corrected_leakage_model_spec(argv[1:])
+    if argv and argv[0] == "corrected-terrain-smoke-run":
+        return _main_corrected_terrain_smoke_run(argv[1:])
     if argv and argv[0] == "published-paper-model-spec":
         return _main_published_paper_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-digitization-template":
@@ -348,6 +351,31 @@ def _main_corrected_leakage_model_spec(argv: list[str]) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(specs, indent=2, sort_keys=True), encoding="utf-8")
     print(f"wrote {args.output}")
+    return 0
+
+
+def _main_corrected_terrain_smoke_run(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Run a Gmsh terrain/leakage diagnostic artifact smoke.")
+    parser.add_argument("output_root", type=Path, help="Root directory for terrain smoke artifacts")
+    parser.add_argument("--spec-output", type=Path, help="Optional path to write the resolved smoke spec JSON")
+    args = parser.parse_args(argv)
+
+    from .corrected_model import build_corrected_terrain_smoke_case_spec
+    from .corrected_model_runner import run_corrected_model_self_convergence_validation
+
+    case_spec = build_corrected_terrain_smoke_case_spec(args.output_root)
+    if args.spec_output is not None:
+        args.spec_output.parent.mkdir(parents=True, exist_ok=True)
+        args.spec_output.write_text(json.dumps(case_spec, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"wrote {args.spec_output}")
+    try:
+        summary = run_corrected_model_self_convergence_validation(case_spec)
+    except ImportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"wrote {case_spec['output_dir']}")
+    print(f"reference_type: {summary['reference_type']}")
+    print(f"final_acceptance_passed: {summary['final_acceptance_passed']}")
     return 0
 
 

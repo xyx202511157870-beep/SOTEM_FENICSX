@@ -3720,6 +3720,23 @@ source-term substitution inside the existing total-field equation.
   and `python -m pytest -q`, both with exit code 0. This remains a diagnostic
   P8 artifact smoke and is deliberately blocked from final acceptance by
   `reference_type = self_convergence`.
+- Corrected terrain smoke CLI checkpoint (2026-06-06): added
+  `tdem-ip-forward corrected-terrain-smoke-run OUTPUT_ROOT`, which builds the
+  memory-safe Gmsh terrain/leakage constant-primary smoke spec, writes an
+  optional resolved spec JSON with `--spec-output`, runs the self-convergence
+  diagnostic validation, and writes the complete artifact set under
+  `OUTPUT_ROOT/terrain_leakage_smoke`. A WSL `conda activate fenicsx` run
+  wrote `dolfinx/runs/latest_terrain_smoke_cli/spec.json` and artifacts
+  including `predictions.csv`, `reference_empymod_or_1d.csv`, `errors.csv`,
+  `error_summary.json`, `comparison_3comp.png`, `error_curves_3comp.png`,
+  `diagnostics.json`, `run_config_resolved.yaml`, `model_schematic.png`, and
+  `terrain_leakage.msh`. The run reported `reference_type =
+  self_convergence`, `final_acceptance_passed = False`,
+  `primary_provider_mode = constant`, terrain mesh mode
+  `small_gmsh_terrain_leakage`, and `leakage_cell_count = 20`; WSL was shut
+  down afterward and `Ubuntu Stopped` was confirmed. Windows verification ran
+  `python -m pytest -q tests/test_corrected_model_runner.py tests/test_cli_subcommands.py tests/test_dolfinx_complex_terrain_leakage_forward.py`
+  and `python -m pytest -q`, both with exit code 0.
 
 ## Next Steps
 
