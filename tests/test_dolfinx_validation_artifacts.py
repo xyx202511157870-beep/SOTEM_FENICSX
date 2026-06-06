@@ -308,6 +308,15 @@ def test_validation_artifacts_include_source_local_projection_diagnostics(tmp_pa
                 "quadrature_points": 6,
                 "unique_hit_cells": 3,
                 "cell_contribution_top_fraction": 0.4,
+                "line_orientation": {
+                    "source_length_m": 1000.0,
+                    "quadrature_weight_sum_m": 1000.0,
+                    "orientation_cosine": 1.0,
+                    "relative_parallel_length_error": 0.0,
+                    "transverse_residual_m": 0.0,
+                    "s_parameter_monotonic": True,
+                    "reversed_orientation": False,
+                },
             },
         },
     )
@@ -316,6 +325,9 @@ def test_validation_artifacts_include_source_local_projection_diagnostics(tmp_pa
     assert diagnostics["source_local_projection"]["quadrature_points"] == 6
     assert diagnostics["source_local_projection"]["unique_hit_cells"] == 3
     assert diagnostics["source_local_projection"]["cell_contribution_top_fraction"] == pytest.approx(0.4)
+    assert diagnostics["source_line_orientation"]["source_length_m"] == pytest.approx(1000.0)
+    assert diagnostics["source_line_orientation"]["orientation_cosine"] == pytest.approx(1.0)
+    assert diagnostics["source_line_orientation"]["reversed_orientation"] is False
 
 
 def test_scalar_source_balance_vector_diagnostics_reports_residual_distribution():
@@ -462,6 +474,15 @@ def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
                 "quadrature_points": 101,
                 "missed_points": 0,
                 "unique_hit_cells": 20,
+                "line_orientation": {
+                    "source_length_m": 1000.0,
+                    "quadrature_weight_sum_m": 1000.0,
+                    "orientation_cosine": 1.0,
+                    "relative_parallel_length_error": 0.0,
+                    "transverse_residual_m": 0.0,
+                    "s_parameter_monotonic": True,
+                    "reversed_orientation": False,
+                },
             },
         },
         runtime={"mesh_seconds": 1.0, "setup_seconds": 2.0},
@@ -472,6 +493,11 @@ def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     assert diagnostics["source_projection"]["projection_mode"] == "raw"
     assert diagnostics["source_projection"]["scalar_balance"]["residual_active_dofs"] == 12
     assert diagnostics["source_local_projection"]["quadrature_points"] == 101
+    assert diagnostics["source_line_orientation"]["quadrature_weight_sum_m"] == pytest.approx(1000.0)
+    assert diagnostics["source_line_orientation"]["reversed_orientation"] is False
+    report_text = (tmp_path / "source_diagnostics_report.txt").read_text(encoding="utf-8")
+    assert "source line orientation:" in report_text
+    assert "reversed=False" in report_text
     assert (tmp_path / "source_diagnostics_report.txt").is_file()
     assert (tmp_path / "run_config_resolved.yaml").is_file()
 

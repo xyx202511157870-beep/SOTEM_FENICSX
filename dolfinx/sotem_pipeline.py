@@ -6194,6 +6194,16 @@ def _source_local_projection_diagnostics_from_info(source_info) -> dict[str, Any
     return json.loads(json.dumps(diagnostics, allow_nan=False, default=float))
 
 
+def _source_line_orientation_diagnostics_from_info(source_info) -> dict[str, Any] | None:
+    local = _source_local_projection_diagnostics_from_info(source_info)
+    if not isinstance(local, dict):
+        return None
+    orientation = local.get("line_orientation")
+    if not isinstance(orientation, dict):
+        return None
+    return json.loads(json.dumps(orientation, allow_nan=False, default=float))
+
+
 def _source_consistency_inputs_from_info(source_info) -> dict[str, Any] | None:
     if not isinstance(source_info, dict):
         return None
@@ -6291,6 +6301,9 @@ def write_validation_artifacts(
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
     if source_local_projection is not None:
         diagnostics["source_local_projection"] = source_local_projection
+    source_line_orientation = _source_line_orientation_diagnostics_from_info(source_info)
+    if source_line_orientation is not None:
+        diagnostics["source_line_orientation"] = source_line_orientation
     diagnostics["receiver_sampling"] = _receiver_diagnostic_summary(
         receiver_diagnostic_rows,
         threshold=float(config.error_tolerance),
@@ -6367,6 +6380,7 @@ def write_source_only_diagnostics(
     workdir.mkdir(parents=True, exist_ok=True)
     source_projection = _source_projection_diagnostics_from_info(source_info)
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
+    source_line_orientation = _source_line_orientation_diagnostics_from_info(source_info)
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
     initial_field_diagnostics = _source_initial_field_diagnostics_from_info(source_info)
     diagnostics: dict[str, Any] = {
@@ -6384,6 +6398,8 @@ def write_source_only_diagnostics(
         diagnostics["source_projection"] = source_projection
     if source_local_projection is not None:
         diagnostics["source_local_projection"] = source_local_projection
+    if source_line_orientation is not None:
+        diagnostics["source_line_orientation"] = source_line_orientation
     if initial_field_diagnostics is not None:
         diagnostics["initial_field"] = initial_field_diagnostics
     (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
@@ -6418,6 +6434,17 @@ def write_source_only_diagnostics(
             f"added={int(source_local_projection.get('added_points', 0))}; "
             f"missed={int(source_local_projection.get('missed_points', 0))}; "
             f"unique_cells={int(source_local_projection.get('unique_hit_cells', 0))}"
+        )
+    if source_line_orientation is not None:
+        lines.append(
+            "source line orientation: "
+            f"length={float(source_line_orientation.get('source_length_m', math.nan)):.6g} m; "
+            f"weight_sum={float(source_line_orientation.get('quadrature_weight_sum_m', math.nan)):.6g} m; "
+            f"cos={float(source_line_orientation.get('orientation_cosine', math.nan)):.6g}; "
+            f"parallel_error={float(source_line_orientation.get('relative_parallel_length_error', math.nan)):.6g}; "
+            f"transverse={float(source_line_orientation.get('transverse_residual_m', math.nan)):.6g} m; "
+            f"monotonic={bool(source_line_orientation.get('s_parameter_monotonic', False))}; "
+            f"reversed={bool(source_line_orientation.get('reversed_orientation', False))}"
         )
     if runtime:
         lines.append("")
@@ -6727,6 +6754,18 @@ def write_report(
                 f"{float(source_local_projection.get('quadrature_points_per_segment_mean', 0.0)):.6g}/"
                 f"{float(source_local_projection.get('quadrature_points_per_segment_max', 0.0)):.6g}"
             )
+    source_line_orientation = _source_line_orientation_diagnostics_from_info(source_info)
+    if source_line_orientation is not None:
+        lines.append(
+            "  source line orientation: "
+            f"length={float(source_line_orientation.get('source_length_m', math.nan)):.6g} m; "
+            f"weight_sum={float(source_line_orientation.get('quadrature_weight_sum_m', math.nan)):.6g} m; "
+            f"cos={float(source_line_orientation.get('orientation_cosine', math.nan)):.6g}; "
+            f"parallel_error={float(source_line_orientation.get('relative_parallel_length_error', math.nan)):.6g}; "
+            f"transverse={float(source_line_orientation.get('transverse_residual_m', math.nan)):.6g} m; "
+            f"monotonic={bool(source_line_orientation.get('s_parameter_monotonic', False))}; "
+            f"reversed={bool(source_line_orientation.get('reversed_orientation', False))}"
+        )
     lines.append(f"  source RHS sign: {config.source_rhs_sign:g}")
     lines.append(f"  source projection mode: {config.source_projection_mode}")
     lines.append(f"  source quadrature points: {config.source_quadrature_points if int(config.source_quadrature_points) > 0 else 'auto'}")

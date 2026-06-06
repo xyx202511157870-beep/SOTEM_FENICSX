@@ -2592,6 +2592,11 @@ source-term substitution inside the existing total-field equation.
   s-parameter range/monotonicity, and reversed-orientation status. This gives
   the corrected-model source-only diagnostics a direct check of the actual
   FEniCSx line-integration path before transient stepping.
+- Validation and source-only diagnostics now promote that audit to a top-level
+  `source_line_orientation` JSON field and include a text summary in both
+  source-only and full verification reports. This makes source direction,
+  integration length, monotonicity, and reversed-orientation status visible
+  without digging through nested local-projection diagnostics.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.
@@ -2708,6 +2713,11 @@ source-term substitution inside the existing total-field equation.
   `python -m pytest -q` with all tests passing (`2 skipped`). A WSL/FEniCSx
   smoke ran
   `PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m pytest -q tests/test_dolfinx_model_consistency.py::test_manual_line_integration_points_report_line_orientation_diagnostics tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_zero_contrast_forward_returns_primary_response`
+  with `2 passed`; WSL was then shut down and `Ubuntu Stopped` was confirmed.
+- Windows verification after promoting `source_line_orientation` ran
+  `python -m pytest -q` with all tests passing (`2 skipped`). A WSL/FEniCSx
+  smoke ran
+  `PYTHONPATH=src /home/paidaxin/miniconda3/envs/fenicsx/bin/python -m pytest -q tests/test_dolfinx_validation_artifacts.py::test_validation_artifacts_include_source_local_projection_diagnostics tests/test_dolfinx_primary_secondary_forward_smoke.py::test_dolfinx_primary_secondary_zero_contrast_forward_returns_primary_response`
   with `2 passed`; WSL was then shut down and `Ubuntu Stopped` was confirmed.
 - `compute_error` and the validation artifact writer now share the task-book
   floor policy. Older reports generated before this change should be
