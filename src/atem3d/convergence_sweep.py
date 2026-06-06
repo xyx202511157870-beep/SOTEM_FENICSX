@@ -26,10 +26,16 @@ def write_convergence_sweep_report(
         for index, path in enumerate(paths)
     ]
     best = min(runs, key=lambda item: float(item["max_physical_error"]))
+    usable_runs = [
+        run for run in runs if bool(run.get("nonzero_secondary_validation_usable", False))
+    ]
+    best_usable = min(usable_runs, key=lambda item: float(item["max_physical_error"])) if usable_runs else None
     summary = {
         "run_count": len(runs),
+        "usable_nonzero_secondary_run_count": len(usable_runs),
         "runs": runs,
         "best_by_max_physical_error": dict(best),
+        "best_usable_by_max_physical_error": dict(best_usable) if best_usable is not None else None,
     }
 
     output = Path(output_dir)
@@ -55,6 +61,9 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
     secondary = dict(diagnostics.get("secondary_effect_diagnostic", {}))
     prediction_secondary = dict(secondary.get("max_abs_prediction_minus_primary_by_component", {}))
     reference_secondary = dict(secondary.get("max_abs_reference_minus_primary_by_component", {}))
+    secondary_effect_recorded = bool(secondary)
+    secondary_effect_nonzero = bool(secondary.get("secondary_effect_nonzero", False))
+    nonzero_secondary_usable = bool(secondary_effect_recorded and secondary_effect_nonzero)
     runtime = dict(diagnostics.get("runtime_seconds", {}))
     physical_failed = [
         str(component)
@@ -114,7 +123,12 @@ def _summarize_run(run_dir: Path, label: str) -> dict:
         "reference_secondary_effect_nonzero": bool(
             secondary.get("reference_secondary_effect_nonzero", False)
         ),
-        "secondary_effect_nonzero": bool(secondary.get("secondary_effect_nonzero", False)),
+        "secondary_effect_nonzero": secondary_effect_nonzero,
+        "nonzero_secondary_validation_usable": nonzero_secondary_usable,
+        "secondary_effect_issue": _secondary_effect_issue(
+            recorded=secondary_effect_recorded,
+            nonzero=secondary_effect_nonzero,
+        ),
         "max_prediction_secondary_effect_Ex": float(prediction_secondary.get("Ex", 0.0)),
         "max_prediction_secondary_effect_Ey": float(prediction_secondary.get("Ey", 0.0)),
         "max_prediction_secondary_effect_dBzdt": float(prediction_secondary.get("dBzdt", 0.0)),
@@ -162,6 +176,14 @@ def _leakage_marker_issue(
     return ""
 
 
+def _secondary_effect_issue(*, recorded: bool, nonzero: bool) -> str:
+    if not recorded:
+        return "secondary_effect_not_recorded"
+    if not nonzero:
+        return "primary_only_or_zero_secondary_effect"
+    return ""
+
+
 def _write_sweep_csv(path: Path, runs: list[dict]) -> None:
     columns = [
         "label",
@@ -191,6 +213,8 @@ def _write_sweep_csv(path: Path, runs: list[dict]) -> None:
         "prediction_secondary_effect_nonzero",
         "reference_secondary_effect_nonzero",
         "secondary_effect_nonzero",
+        "nonzero_secondary_validation_usable",
+        "secondary_effect_issue",
         "max_prediction_secondary_effect_Ex",
         "max_prediction_secondary_effect_Ey",
         "max_prediction_secondary_effect_dBzdt",

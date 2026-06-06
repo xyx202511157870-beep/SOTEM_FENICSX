@@ -3659,6 +3659,18 @@ source-term substitution inside the existing total-field equation.
   `dolfinx/runs/latest_leakage_convergence_secondary_diag_2t` exceeded the
   300 s command limit and only wrote `spec.json`, so that long CLI artifact is
   not used as evidence for this checkpoint.
+- Nonzero-secondary convergence sweep selection checkpoint (2026-06-06): the
+  convergence sweep report now distinguishes the raw lowest-error run from the
+  best usable nonzero-secondary diagnostic run. Each run summary includes
+  `nonzero_secondary_validation_usable` and `secondary_effect_issue`, and the
+  JSON report includes `usable_nonzero_secondary_run_count` plus
+  `best_usable_by_max_physical_error`. This keeps a primary-only or
+  zero-secondary coarse-vs-refined run from being selected as the best physical
+  nonzero leakage validation merely because its error is artificially small.
+  Verification ran
+  `python -m pytest -q tests/test_convergence_sweep_report.py`,
+  `python -m pytest -q tests/test_corrected_model_runner.py tests/test_convergence_sweep_report.py tests/test_dolfinx_complex_terrain_leakage_forward.py`,
+  and `python -m pytest -q`, all with exit code 0.
 
 ## Next Steps
 

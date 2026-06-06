@@ -113,6 +113,45 @@ def test_convergence_sweep_report_cli_writes_summary(tmp_path):
     assert payload["best_by_max_physical_error"]["label"] == "domain_b"
 
 
+def test_convergence_sweep_report_selects_best_nonzero_secondary_run(tmp_path):
+    primary_only = _write_run(
+        tmp_path,
+        "primary_only",
+        max_error_ex=0.0,
+        max_error_dbdt=0.0,
+        failed_band="none",
+        prediction_cells=[2, 2, 1],
+        reference_cells=[4, 4, 2],
+        forward_runtime=10.0,
+        reference_runtime=11.0,
+        secondary_nonzero=False,
+    )
+    nonzero_secondary = _write_run(
+        tmp_path,
+        "nonzero_secondary",
+        max_error_ex=0.21,
+        max_error_dbdt=0.04,
+        failed_band="late_time",
+        prediction_cells=[2, 2, 1],
+        reference_cells=[4, 4, 2],
+        forward_runtime=27.0,
+        reference_runtime=170.0,
+        secondary_nonzero=True,
+    )
+
+    summary = write_convergence_sweep_report(
+        [primary_only, nonzero_secondary],
+        tmp_path / "sweep",
+        labels=["primary_only", "nonzero_secondary"],
+    )
+
+    assert summary["best_by_max_physical_error"]["label"] == "primary_only"
+    assert summary["usable_nonzero_secondary_run_count"] == 1
+    assert summary["best_usable_by_max_physical_error"]["label"] == "nonzero_secondary"
+    assert summary["runs"][0]["nonzero_secondary_validation_usable"] is False
+    assert summary["runs"][1]["nonzero_secondary_validation_usable"] is True
+
+
 def _write_run(
     root,
     name,
@@ -124,6 +163,7 @@ def _write_run(
     reference_cells,
     forward_runtime,
     reference_runtime,
+    secondary_nonzero=True,
 ):
     run_dir = root / name
     run_dir.mkdir()
@@ -180,9 +220,9 @@ def _write_run(
                 "secondary_effect_diagnostic": {
                     "reference_type": "dolfinx_refined",
                     "component_names": ["Ex", "Ey", "dBzdt"],
-                    "prediction_secondary_effect_nonzero": True,
-                    "reference_secondary_effect_nonzero": True,
-                    "secondary_effect_nonzero": True,
+                    "prediction_secondary_effect_nonzero": secondary_nonzero,
+                    "reference_secondary_effect_nonzero": secondary_nonzero,
+                    "secondary_effect_nonzero": secondary_nonzero,
                     "max_abs_prediction_minus_primary_by_component": {
                         "Ex": 0.2,
                         "Ey": 0.0,
