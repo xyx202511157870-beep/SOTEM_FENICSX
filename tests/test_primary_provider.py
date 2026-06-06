@@ -226,6 +226,16 @@ def test_empymod_primary_provider_get_Ep_dc_on_V_uses_dc_runner():
     assert seen["kwargs"]["method"] == "analytic_halfspace"
 
 
+def test_empymod_primary_provider_get_Ep_dc_on_V_uses_default_halfspace_runner():
+    config = _empymod_provider_config()
+    provider = EmpymodPrimaryProvider(config=config)
+    points = np.array([[0.0, 10.0, -0.5], [1.0, 11.0, -0.5]])
+
+    values = provider.get_Ep_dc_on_V(points)
+
+    np.testing.assert_allclose(values, analytic_halfspace_dc_runner(points, config=config))
+
+
 def test_analytic_halfspace_grounded_wire_dc_field_matches_endpoint_formula():
     points = np.array([[0.0, 1.0, 0.0]])
 

@@ -241,6 +241,10 @@ final acceptance.
     FEM-point `Ex/Ey/Ez` or `dB/dt` sampling when no injected
     `reference_runner` is supplied. Construction still avoids importing
     empymod.
+  - `EmpymodPrimaryProvider.get_Ep_dc_on_V` now defaults to the
+    uniform-halfspace analytic grounded-wire DC backend when no injected
+    `dc_runner` is supplied. Layered or complex-background DC primary fields
+    still need an explicit `dc_runner`.
   - Injected-runner receiver `E` and `dBdt` primary sampling via `EmpymodSurvey`.
   - Injected-runner FEM point primary `E_p(t)` sampling through `get_Ep_on_V`.
   - `PrimaryFEMInterpolator` for provider-to-FEM-point `E_p(t)` and `E_p,dc`
@@ -718,7 +722,9 @@ Current P4 status:
   primary-secondary solver path.
 - `EmpymodPrimaryProvider.get_Ep_dc_on_V` now accepts a dedicated injected
   `dc_runner(points, config=..., **dc_kwargs)` and validates that it returns an
-  `(n_points, 3)` DC primary field table.
+  `(n_points, 3)` DC primary field table. If no `dc_runner` is injected, it
+  falls back to `analytic_halfspace_dc_runner` for the uniform-halfspace
+  grounded-wire DC primary.
 - A local default-runner smoke using the corrected model, `srcpts=5`, receiver
   `(0, -300, -0.1)`, and `t_obs=1e-5 s` returned finite values:
   `E=[-2.27169895e-04, 3.58434271e-19, 0.0]` and
@@ -2091,10 +2097,11 @@ source-term substitution inside the existing total-field equation.
   still show the old ambiguous `actual radius/depth` wording until
   regenerated with `--postprocess-partial`.
 - P3 currently provides the material API and memory-update tests; DOLFINx total-field IP assembly still needs to be migrated to this API and verified against no-IP when `delta_sigma=0`.
-- P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a uniform-halfspace analytic grounded-wire DC backend, a provider-to-FEM-point interpolation adapter, a DOLFINx-style tabulated callable assembler, a shared DOLFINx Nedelec callable interpolation helper, and a DOLFINx operator helper that samples primary providers on exported physical Nedelec interpolation points. Corrected-model primary-provider validation remains pending.
-- The default `EmpymodPrimaryProvider` runner covers transient empymod primary
-  samples; DC primary sampling still requires an explicit `dc_runner`, so the
-  corrected-model primary-secondary runner is not complete yet.
+- P4 currently provides zero/cached primary providers, receiver-side empymod primary sampling, runner-backed FEM point `E_p(t)` sampling, injected DC primary point sampling, a default uniform-halfspace analytic grounded-wire DC fallback, a provider-to-FEM-point interpolation adapter, a DOLFINx-style tabulated callable assembler, a shared DOLFINx Nedelec callable interpolation helper, and a DOLFINx operator helper that samples primary providers on exported physical Nedelec interpolation points. Corrected-model primary-provider validation remains pending.
+- The default `EmpymodPrimaryProvider` runner now covers transient empymod
+  primary samples and uniform-halfspace analytic DC primary samples. A layered
+  or complex-background DC primary still requires an explicit `dc_runner`, so
+  the full corrected-model primary-secondary validation runner remains pending.
 - P5 currently provides a pure initialization core with an injected secondary field solver, a provider-driven entry point that consumes `E_p,dc` samples, and a DOLFINx scalar secondary-potential solver with WSL zero-contrast and nonzero-contrast unit-cube smoke tests. Integration into a full corrected-model DOLFINx primary-secondary run remains pending.
 - P6 currently provides pure no-IP/IP time-step kernels with injected secondary solvers, a DC-initialization-to-transient-state bridge, a pure primary-secondary forward orchestration core, a reusable secondary receiver projection adapter, a DOLFINx-backed secondary step solver with WSL zero-RHS and nonzero constant-RHS PETSc smoke tests, DOLFINx primary-secondary zero-contrast and uniform nonzero-contrast forward smokes, a variable-DG0 no-IP DOLFINx primary-secondary state-stepper smoke, a scalar Debye/Prony IP DOLFINx state-stepper smoke, a spatial-DG0 `delta_sigma` IP smoke using `debye["delta_functions"]`, physical Nedelec interpolation-point export for non-constant tabulated primary/RHS fields, and a DOLFINx operator helper that wires primary-provider FEM sampling into the primary-secondary operator. Corrected-model validation and full no-IP/IP 5% acceptance remain pending.
 - P7 currently verifies artifact generation from supplied arrays; it does not yet run a real empymod/1D backend to prove 5% physical agreement.

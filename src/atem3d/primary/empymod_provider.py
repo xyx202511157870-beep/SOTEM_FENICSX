@@ -26,10 +26,13 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
 
     def get_Ep_dc_on_V(self, V) -> np.ndarray:
         points = as_points(V, "points")
-        if self.dc_runner is None:
-            raise NotImplementedError("EmpymodPrimaryProvider DC sampling is not implemented yet")
+        runner = self.dc_runner
+        if runner is None:
+            from .dc import analytic_halfspace_dc_runner
+
+            runner = analytic_halfspace_dc_runner
         values = np.asarray(
-            self.dc_runner(points, config=self.config, **(self.dc_kwargs or {})),
+            runner(points, config=self.config, **(self.dc_kwargs or {})),
             dtype=float,
         )
         if values.shape != points.shape:
