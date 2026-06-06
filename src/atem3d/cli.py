@@ -34,6 +34,7 @@ _TOP_LEVEL_COMMANDS = (
     ("polarization-effect", "Write IP-minus-noIP response and error artifacts."),
     ("published-paper-model-spec", "Write the published-paper reproduction target spec."),
     ("published-paper-digitization-template", "Write paper-curve digitization templates."),
+    ("published-paper-figure-pages", "Write/render published-paper target figure page assets."),
     ("published-paper-curve-artifacts", "Compare predictions against digitized paper curves."),
     ("published-paper-prony-materials", "Write Prony materials fitted from paper Cole-Cole models."),
 )
@@ -76,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_published_paper_model_spec(argv[1:])
     if argv and argv[0] == "published-paper-digitization-template":
         return _main_published_paper_digitization_template(argv[1:])
+    if argv and argv[0] == "published-paper-figure-pages":
+        return _main_published_paper_figure_pages(argv[1:])
     if argv and argv[0] == "published-paper-curve-artifacts":
         return _main_published_paper_curve_artifacts(argv[1:])
     if argv and argv[0] == "published-paper-prony-materials":
@@ -265,6 +268,34 @@ def _main_published_paper_digitization_template(argv: list[str]) -> int:
     manifest = write_published_paper_digitization_template(spec, args.output_dir)
     print(f"wrote {args.output_dir / 'paper_curve_digitization_manifest.json'}")
     print(f"wrote {args.output_dir / manifest['template_csv']}")
+    return 0
+
+
+def _main_published_paper_figure_pages(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Write/render target PDF pages for paper curve digitization.")
+    parser.add_argument("config", type=Path, help="JSON/YAML published paper model target spec")
+    parser.add_argument("--output-dir", type=Path, default=Path("paper_figure_pages"))
+    parser.add_argument("--pdf", type=Path, help="Optional source PDF to render target pages with pdftoppm")
+    parser.add_argument("--dpi", type=int, default=180)
+    parser.add_argument("--renderer", default="pdftoppm")
+    args = parser.parse_args(argv)
+
+    from .paper_digitization import write_published_paper_figure_page_package
+
+    spec = _load_yaml(args.config)
+    manifest = write_published_paper_figure_page_package(
+        spec,
+        args.output_dir,
+        pdf_path=args.pdf,
+        dpi=args.dpi,
+        render=args.pdf is not None,
+        renderer=args.renderer,
+    )
+    print(f"wrote {args.output_dir / 'paper_figure_page_manifest.json'}")
+    if manifest["rendered"]:
+        print(f"rendered_pages: {len(manifest['pages'])}")
+    else:
+        print("rendered_pages: 0")
     return 0
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import csv
 import json
 import shutil
+import subprocess
 
 import numpy as np
 
@@ -140,6 +141,74 @@ def write_published_paper_digitization_template(paper_spec: dict, output_dir: st
     return manifest
 
 
+def write_published_paper_figure_page_package(
+    paper_spec: dict,
+    output_dir: str | Path,
+    *,
+    pdf_path: str | Path | None = None,
+    dpi: int = 180,
+    render: bool = False,
+    renderer: str = "pdftoppm",
+    runner=None,
+) -> dict:
+    """Write a manifest, and optionally rendered page PNGs, for target paper figures."""
+
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    targets = _targets_from_spec(paper_spec)
+    pages = _group_targets_by_page(targets)
+    pdf_text = "" if pdf_path is None else str(Path(pdf_path))
+    run = subprocess.run if runner is None else runner
+    rendered = bool(render)
+    if rendered and pdf_path is None:
+        raise ValueError("pdf_path is required when render=True")
+    manifest_pages = []
+    for page_number, page_targets in pages.items():
+        image_name = ""
+        if rendered:
+            image_name = f"paper_page_{int(page_number):03d}.png"
+            prefix = output / f"paper_page_{int(page_number):03d}"
+            command = [
+                str(renderer),
+                "-f",
+                str(int(page_number)),
+                "-l",
+                str(int(page_number)),
+                "-r",
+                str(int(dpi)),
+                "-png",
+                "-singlefile",
+                str(Path(pdf_path)),
+                str(prefix),
+            ]
+            run(command, check=True)
+            if not (output / image_name).exists():
+                raise FileNotFoundError(f"expected rendered page image was not created: {image_name}")
+        manifest_pages.append(
+            {
+                "pdf_page_number": int(page_number),
+                "image": image_name,
+                "targets": [dict(target) for target in page_targets],
+            }
+        )
+    manifest = {
+        "source_article_id": str(
+            dict(paper_spec.get("published_reference", {})).get("article_id", "")
+        ),
+        "source_title": str(dict(paper_spec.get("published_reference", {})).get("title", "")),
+        "pdf_path": pdf_text,
+        "rendered": rendered,
+        "renderer": str(renderer),
+        "dpi": int(dpi),
+        "pages": manifest_pages,
+    }
+    (output / "paper_figure_page_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return manifest
+
+
 def write_published_paper_curve_artifacts(
     *,
     predictions_csv: str | Path,
@@ -219,6 +288,14 @@ def _targets_from_spec(paper_spec: dict) -> list[dict]:
         for target in PAPER_CURVE_TARGETS
         if str(target["figure"]) in available_figures
     ]
+
+
+def _group_targets_by_page(targets: list[dict]) -> dict[int, list[dict]]:
+    pages: dict[int, list[dict]] = {}
+    for target in targets:
+        page_number = int(target["pdf_page_number"])
+        pages.setdefault(page_number, []).append(dict(target))
+    return dict(sorted(pages.items()))
 
 
 def _write_template_csv(path: Path, targets: list[dict]) -> None:

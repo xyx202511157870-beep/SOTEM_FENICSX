@@ -27,6 +27,7 @@ from atem3d.corrected_model_runner import _copy_dolfinx_forward_diagnostics_to_c
 from atem3d.corrected_model_runner import _primary_provider_for_case_spec
 from atem3d.corrected_model_runner import _terrain_mesh_runtime_config
 from atem3d.corrected_model_runner import dolfinx_backend_status
+from atem3d.paper_digitization import write_published_paper_figure_page_package
 
 
 def test_run_corrected_model_validation_writes_full_artifact_set(tmp_path):
@@ -797,6 +798,66 @@ def test_published_paper_digitization_template_cli_writes_manifest_and_csv(tmp_p
         line.startswith("Fig. 15,9,three_dimensional_polarized_body,Hz,a,response,paper_noip,,,nT,")
         for line in csv_lines
     )
+
+
+def test_published_paper_figure_pages_cli_writes_page_manifest(tmp_path):
+    spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
+    spec_path = tmp_path / "paper_model_target.json"
+    output_dir = tmp_path / "figure_pages"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "published-paper-figure-pages",
+            str(spec_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    manifest = json.loads((output_dir / "paper_figure_page_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["rendered"] is False
+    assert manifest["pdf_path"] == ""
+    assert [page["pdf_page_number"] for page in manifest["pages"]] == [3, 5, 7, 9]
+    page3 = manifest["pages"][0]
+    assert page3["image"] == ""
+    assert [target["figure"] for target in page3["targets"]] == ["Fig. 2", "Fig. 3"]
+    assert page3["targets"][0]["component"] == "Ex"
+
+
+def test_published_paper_figure_page_package_renders_unique_pages(tmp_path):
+    spec = build_published_paper_model_target_spec(tmp_path / "paper_run")
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    calls = []
+
+    def fake_runner(command, check):
+        calls.append((list(command), check))
+        Path(str(command[-1]) + ".png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    manifest = write_published_paper_figure_page_package(
+        spec,
+        tmp_path / "figure_pages",
+        pdf_path=pdf,
+        dpi=90,
+        render=True,
+        renderer="fake-pdftoppm",
+        runner=fake_runner,
+    )
+
+    assert manifest["rendered"] is True
+    assert manifest["dpi"] == 90
+    assert [page["pdf_page_number"] for page in manifest["pages"]] == [3, 5, 7, 9]
+    assert [page["image"] for page in manifest["pages"]] == [
+        "paper_page_003.png",
+        "paper_page_005.png",
+        "paper_page_007.png",
+        "paper_page_009.png",
+    ]
+    assert len(calls) == 4
+    assert calls[0][0][:7] == ["fake-pdftoppm", "-f", "3", "-l", "3", "-r", "90"]
+    assert calls[0][1] is True
 
 
 def test_published_paper_curve_artifacts_cli_writes_overlay_outputs(tmp_path):

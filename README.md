@@ -37,6 +37,14 @@ Run the memory-safe terrain/leakage diagnostic smoke:
 python -u -m atem3d.cli corrected-terrain-smoke-run dolfinx/runs/latest_terrain_smoke_cli --case both --spec-output dolfinx/runs/latest_terrain_smoke_cli/spec.json
 ```
 
+Prepare the published-paper digitization package:
+
+```bash
+python -m atem3d.cli published-paper-model-spec dolfinx/paper_reproduction --output dolfinx/paper_reproduction/spec.json
+python -m atem3d.cli published-paper-digitization-template dolfinx/paper_reproduction/spec.json --output-dir dolfinx/paper_reproduction/digitization
+python -m atem3d.cli published-paper-figure-pages dolfinx/paper_reproduction/spec.json --pdf "Song 等 - 2025 - Analysis of 3D induced polarization effects of SOTEM.pdf" --output-dir dolfinx/paper_reproduction/figure_pages
+```
+
 Always shut WSL down after a run:
 
 ```powershell
