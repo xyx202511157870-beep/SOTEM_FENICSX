@@ -5,6 +5,7 @@
 .tmp/
 .tmp2/
 tmp/
+.worktrees/
 outputs/
 output/
 generated/
