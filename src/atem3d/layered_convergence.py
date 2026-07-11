@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import statistics
@@ -235,6 +236,47 @@ def build_paper_baseline_convergence_levels(
 
 def _number(value: float) -> str:
     return format(float(value), ".12g")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_publication_preflight(
+    *,
+    mesh_path: Path,
+    diagnostics: dict,
+    memory_limit_gb: float = 24.0,
+) -> dict:
+    mesh_path = Path(mesh_path)
+    reasons: list[str] = []
+    if not mesh_path.is_file():
+        reasons.append("mesh missing")
+    if not diagnostics.get("source_coverage_passed", False):
+        reasons.append("source coverage failed")
+    if not diagnostics.get("receiver_found", False):
+        reasons.append("receiver location failed")
+    if not diagnostics.get("source_divergence_passed", False):
+        reasons.append("source divergence failed")
+    estimated_memory_gb = float(diagnostics.get("estimated_memory_gb", math.inf))
+    if (
+        not math.isfinite(estimated_memory_gb)
+        or estimated_memory_gb > float(memory_limit_gb)
+    ):
+        reasons.append(f"estimated memory exceeds {float(memory_limit_gb):g} GB")
+    if reasons:
+        raise ValueError("; ".join(reasons))
+    return {
+        "passed": True,
+        "mesh_path": str(mesh_path),
+        "mesh_sha256": sha256_file(mesh_path),
+        "estimated_memory_gb": estimated_memory_gb,
+        "memory_limit_gb": float(memory_limit_gb),
+    }
 
 
 def _replace_option(arguments: list[str], option: str, value: str) -> None:
@@ -668,9 +710,19 @@ def write_convergence_reports(output_dir: Path, summary: dict) -> None:
 
 
 def convergence_level_manifest(level: ConvergenceLevel) -> dict:
+    reuse_mesh = None
+    if level.reuse_mesh_path is not None:
+        reuse_mesh_path = Path(level.reuse_mesh_path)
+        reuse_mesh = {
+            "path": str(reuse_mesh_path),
+            "sha256": (
+                sha256_file(reuse_mesh_path) if reuse_mesh_path.is_file() else None
+            ),
+        }
     return {
         "axis": level.axis,
         "level_id": level.level_id,
+        "run_id": level.run_id,
         "x_extent": level.x_extent,
         "y_extent": level.y_extent,
         "earth_depth": level.earth_depth,
@@ -691,6 +743,7 @@ def convergence_level_manifest(level: ConvergenceLevel) -> dict:
             if level.reuse_mesh_path is not None
             else None
         ),
+        "reuse_mesh": reuse_mesh,
         "effective_output_count": 25,
         "coordinate_convention": (
             "z=0 ground; underground positive; air negative"

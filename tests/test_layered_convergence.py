@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -112,6 +113,105 @@ def test_stage_two_pipeline_arguments_lock_solver_and_observation_contract(tmp_p
     assert _option_value(arguments, "--atol") == "1e-12"
     assert _option_value(arguments, "--memory-limit-gb") == "24"
     assert _option_value(arguments, "--stop-after-outputs") == "25"
+
+
+def test_manifest_records_locked_mesh_path_and_sha256(tmp_path):
+    layered_root = tmp_path / "layered"
+    locked_mesh = (
+        layered_root
+        / "domain12000"
+        / "resistive_basement_rho1000_offset100"
+        / "verification_mesh.msh"
+    )
+    locked_mesh.parent.mkdir(parents=True)
+    locked_mesh.write_bytes(b"publication-mesh")
+    baseline = layered_convergence.build_paper_baseline_convergence_levels(
+        layered_root,
+        tmp_path / "stage2",
+        tmp_path / "stage1",
+    )["time"][1]
+
+    manifest = layered_convergence.convergence_level_manifest(baseline)
+
+    assert manifest["run_id"] == "baseline_12km_dt005_mesh8_6"
+    assert manifest["reuse_mesh"]["path"] == str(locked_mesh)
+    assert manifest["reuse_mesh"]["sha256"] == hashlib.sha256(
+        b"publication-mesh"
+    ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "message"),
+    [
+        (
+            {
+                "estimated_memory_gb": 10.0,
+                "receiver_found": True,
+                "source_divergence_passed": True,
+            },
+            "source coverage",
+        ),
+        (
+            {
+                "estimated_memory_gb": 10.0,
+                "source_coverage_passed": True,
+                "source_divergence_passed": True,
+            },
+            "receiver location",
+        ),
+        (
+            {
+                "estimated_memory_gb": 10.0,
+                "source_coverage_passed": True,
+                "receiver_found": True,
+            },
+            "source divergence",
+        ),
+        (
+            {
+                "estimated_memory_gb": 24.1,
+                "source_coverage_passed": True,
+                "receiver_found": True,
+                "source_divergence_passed": True,
+            },
+            "24 GB",
+        ),
+    ],
+)
+def test_preflight_rejects_invalid_publication_mesh(tmp_path, diagnostics, message):
+    mesh = tmp_path / "verification_mesh.msh"
+    mesh.write_bytes(b"mesh")
+
+    with pytest.raises(ValueError, match=message):
+        layered_convergence.validate_publication_preflight(
+            mesh_path=mesh,
+            diagnostics=diagnostics,
+            memory_limit_gb=24.0,
+        )
+
+
+def test_preflight_accepts_complete_publication_mesh_evidence(tmp_path):
+    mesh = tmp_path / "verification_mesh.msh"
+    mesh.write_bytes(b"mesh")
+
+    result = layered_convergence.validate_publication_preflight(
+        mesh_path=mesh,
+        diagnostics={
+            "estimated_memory_gb": 12.5,
+            "source_coverage_passed": True,
+            "receiver_found": True,
+            "source_divergence_passed": True,
+        },
+        memory_limit_gb=24.0,
+    )
+
+    assert result == {
+        "passed": True,
+        "mesh_path": str(mesh),
+        "mesh_sha256": hashlib.sha256(b"mesh").hexdigest(),
+        "estimated_memory_gb": 12.5,
+        "memory_limit_gb": 24.0,
+    }
 
 
 def test_convergence_levels_match_approved_three_level_design(tmp_path):
