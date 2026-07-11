@@ -14,6 +14,7 @@ from .publication_validation import (
     LayeredRunProfile,
     build_layered_cases,
     build_pipeline_arguments,
+    evaluate_errors_csv,
 )
 
 
@@ -552,3 +553,183 @@ def write_convergence_reports(output_dir: Path, summary: dict) -> None:
         output_dir / "convergence_differences.png",
         summary,
     )
+
+
+def convergence_level_manifest(level: ConvergenceLevel) -> dict:
+    return {
+        "axis": level.axis,
+        "level_id": level.level_id,
+        "x_extent": level.x_extent,
+        "y_extent": level.y_extent,
+        "earth_depth": level.earth_depth,
+        "air_height": level.air_height,
+        "far_field_mesh_size": level.far_field_mesh_size,
+        "source_mesh_size": level.source_mesh_size,
+        "receiver_mesh_size": level.receiver_mesh_size,
+        "max_internal_dt": level.max_internal_dt,
+        "max_internal_dt_fraction": level.max_internal_dt_fraction,
+        "workdir": str(level.workdir),
+        "existing_run_dir": (
+            str(level.existing_run_dir)
+            if level.existing_run_dir is not None
+            else None
+        ),
+        "reuse_mesh_path": (
+            str(level.reuse_mesh_path)
+            if level.reuse_mesh_path is not None
+            else None
+        ),
+        "effective_output_count": 25,
+        "coordinate_convention": (
+            "z=0 ground; underground positive; air negative"
+        ),
+    }
+
+
+def resolved_run_dir(level: ConvergenceLevel) -> Path:
+    return (
+        Path(level.existing_run_dir)
+        if level.existing_run_dir is not None
+        else Path(level.workdir)
+    )
+
+
+def _effective_prefix(response: ConvergenceResponse, count: int = 25) -> ConvergenceResponse:
+    if response.times.size < count:
+        raise ValueError(
+            f"response has {response.times.size} samples; {count} are required"
+        )
+    result = ConvergenceResponse(
+        times=response.times[:count].copy(),
+        dbzdt=response.dbzdt[:count].copy(),
+        reference=response.reference[:count].copy(),
+    )
+    _validate_response(result)
+    return result
+
+
+def evaluate_convergence_study(
+    levels: dict[str, tuple[ConvergenceLevel, ...]],
+    *,
+    selected_axes: tuple[str, ...] = ("time", "mesh", "domain"),
+) -> dict:
+    axis_summaries: list[dict] = []
+    for axis_name in selected_axes:
+        axis_levels = levels[axis_name]
+        run_dirs = {
+            level.level_id: resolved_run_dir(level) for level in axis_levels
+        }
+        missing = [
+            level_id
+            for level_id, run_dir in run_dirs.items()
+            if not (run_dir / "verification_data.npz").is_file()
+        ]
+        if missing:
+            axis_summaries.append(
+                {
+                    "axis": axis_name,
+                    "status": "incomplete",
+                    "passed": False,
+                    "blocking_reasons": [
+                        f"missing_level_{level_id}" for level_id in missing
+                    ],
+                    "levels": [
+                        {
+                            "level_id": level.level_id,
+                            "run_dir": str(run_dirs[level.level_id]),
+                            "status": (
+                                "missing"
+                                if level.level_id in missing
+                                else "complete"
+                            ),
+                        }
+                        for level in axis_levels
+                    ],
+                    "comparisons": [],
+                    "_responses": {},
+                }
+            )
+            continue
+
+        responses = {
+            level_id: _effective_prefix(load_response(run_dir))
+            for level_id, run_dir in run_dirs.items()
+        }
+        if axis_name in {"time", "mesh"}:
+            comparison_pairs = (
+                ("coarse_to_standard", "coarse", "standard"),
+                ("standard_to_fine", "standard", "fine"),
+            )
+        else:
+            comparison_pairs = (
+                ("small_to_standard", "small", "standard"),
+                ("standard_to_large", "standard", "large"),
+            )
+        comparisons: list[dict] = []
+        comparison_map: dict[str, dict] = {}
+        for comparison_id, coarse_id, fine_id in comparison_pairs:
+            metrics = compare_responses(
+                responses[coarse_id],
+                responses[fine_id],
+            )
+            comparison = {"comparison_id": comparison_id, **metrics}
+            comparisons.append(comparison)
+            comparison_map[comparison_id] = metrics
+
+        large_external_passed = None
+        external_reference_gate = None
+        if axis_name == "domain":
+            external_reference_gate = evaluate_errors_csv(
+                run_dirs["large"] / "errors.csv"
+            )
+            large_external_passed = bool(
+                external_reference_gate["publication_gate_passed"]
+            )
+        gate = evaluate_axis_metrics(
+            axis_name,
+            comparison_map,
+            large_external_passed=large_external_passed,
+        )
+        level_rows = []
+        for level in axis_levels:
+            run_dir = run_dirs[level.level_id]
+            level_rows.append(
+                {
+                    "level_id": level.level_id,
+                    "run_dir": str(run_dir),
+                    "status": "complete",
+                    **read_run_metadata(run_dir),
+                }
+            )
+        axis_summary = {
+            "axis": axis_name,
+            "status": "complete",
+            "passed": gate["passed"],
+            "blocking_reasons": gate["blocking_reasons"],
+            "levels": level_rows,
+            "comparisons": comparisons,
+            "_responses": responses,
+        }
+        if external_reference_gate is not None:
+            axis_summary["large_external_reference_gate"] = (
+                external_reference_gate
+            )
+        axis_summaries.append(axis_summary)
+
+    complete_count = sum(
+        axis["status"] == "complete" for axis in axis_summaries
+    )
+    passed_count = sum(bool(axis["passed"]) for axis in axis_summaries)
+    return {
+        "study_id": "layered_resistive_offset100",
+        "study_passed": (
+            complete_count == len(axis_summaries)
+            and passed_count == len(axis_summaries)
+        ),
+        "coordinate_convention": (
+            "z=0 ground; underground positive; air negative"
+        ),
+        "complete_axis_count": complete_count,
+        "passed_axis_count": passed_count,
+        "axes": axis_summaries,
+    }

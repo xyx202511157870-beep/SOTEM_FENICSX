@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import meshio
 import numpy as np
@@ -418,3 +420,94 @@ def test_report_figures_have_publication_resolution(tmp_path):
         image = mpimg.imread(tmp_path / name)
         assert image.shape[1] >= 1200
         assert image.shape[0] >= 800
+
+
+def _run_study_cli(*arguments: str, check: bool = True):
+    return subprocess.run(
+        [sys.executable, "dolfinx/run_layered_convergence_study.py", *arguments],
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_runner_dry_run_writes_generated_level_manifest_and_command(tmp_path):
+    output_root = tmp_path / "convergence"
+
+    result = _run_study_cli(
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(tmp_path / "layered"),
+        "--axis",
+        "time",
+        "--level",
+        "coarse",
+        "--mode",
+        "full",
+        "--dry-run",
+    )
+
+    assert "RUN_AXIS=time" in result.stdout
+    assert "RUN_LEVEL=coarse" in result.stdout
+    workdir = output_root / "time" / "coarse"
+    assert (workdir / "case_spec.json").is_file()
+    command = (workdir / "command.txt").read_text(encoding="utf-8")
+    assert "--checkpoint-forward" in command
+    assert "--stop-after-outputs 25" in command
+
+
+def test_runner_existing_level_writes_pointer_without_solver_command(tmp_path):
+    output_root = tmp_path / "convergence"
+    layered_root = tmp_path / "layered"
+
+    result = _run_study_cli(
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(layered_root),
+        "--axis",
+        "time",
+        "--level",
+        "standard",
+        "--mode",
+        "full",
+        "--dry-run",
+    )
+
+    assert "REUSE_LEVEL=standard" in result.stdout
+    workdir = output_root / "time" / "standard"
+    pointer = json.loads((workdir / "existing_run.json").read_text(encoding="utf-8"))
+    assert Path(pointer["existing_run_dir"]) == (
+        layered_root
+        / "domain6000"
+        / "resistive_basement_rho1000_offset100"
+    )
+    assert not (workdir / "command.txt").exists()
+
+
+def test_runner_evaluate_reports_incomplete_axes_with_nonzero_exit(tmp_path):
+    output_root = tmp_path / "convergence"
+
+    result = _run_study_cli(
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(tmp_path / "layered"),
+        "--mode",
+        "evaluate",
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "CONVERGENCE_COMPLETE=0" in result.stdout
+    assert "CONVERGENCE_PASSED=0" in result.stdout
+    summary = json.loads(
+        (output_root / "convergence_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["study_passed"] is False
+    assert [axis["status"] for axis in summary["axes"]] == [
+        "incomplete",
+        "incomplete",
+        "incomplete",
+    ]
