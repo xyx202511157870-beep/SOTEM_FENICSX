@@ -2989,6 +2989,21 @@ def _receiver_sampling_points(config: PipelineConfig):
     return center + offsets
 
 
+def _receiver_location_preflight(msh, config: PipelineConfig) -> dict[str, Any]:
+    sample_points = list(_receiver_sampling_points(config))
+    missing_sample_indices = [
+        index
+        for index, point in enumerate(sample_points)
+        if len(_find_cells_for_point(msh, point)) == 0
+    ]
+    return {
+        "found": not missing_sample_indices,
+        "sample_count": len(sample_points),
+        "found_sample_count": len(sample_points) - len(missing_sample_indices),
+        "missing_sample_indices": missing_sample_indices,
+    }
+
+
 def _parse_receiver_diagnostic_types(config: PipelineConfig) -> tuple[str, ...]:
     raw = config.receiver_diagnostic_types
     if isinstance(raw, str):
@@ -6466,6 +6481,7 @@ def write_source_only_diagnostics(
     source_info,
     *,
     runtime: dict[str, Any] | None = None,
+    receiver_location: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write source-only diagnostics without running the transient forward solve."""
 
@@ -6496,6 +6512,8 @@ def write_source_only_diagnostics(
         diagnostics["source_line_orientation"] = source_line_orientation
     if initial_field_diagnostics is not None:
         diagnostics["initial_field"] = initial_field_diagnostics
+    if receiver_location is not None:
+        diagnostics["receiver_location"] = dict(receiver_location)
     (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
 
@@ -6539,6 +6557,13 @@ def write_source_only_diagnostics(
             f"transverse={float(source_line_orientation.get('transverse_residual_m', math.nan)):.6g} m; "
             f"monotonic={bool(source_line_orientation.get('s_parameter_monotonic', False))}; "
             f"reversed={bool(source_line_orientation.get('reversed_orientation', False))}"
+        )
+    if receiver_location is not None:
+        lines.append(
+            "receiver location: "
+            f"found={bool(receiver_location.get('found', False))}; "
+            f"samples={int(receiver_location.get('sample_count', 0))}; "
+            f"found_samples={int(receiver_location.get('found_sample_count', 0))}"
         )
     if runtime:
         lines.append("")
@@ -8457,7 +8482,13 @@ def main(argv: list[str] | None = None) -> int:
     if config.source_only:
         if msh.comm.rank == 0:
             runtime["total_seconds"] = time.perf_counter() - run_t0
-            write_source_only_diagnostics(config, env, source, runtime=runtime)
+            write_source_only_diagnostics(
+                config,
+                env,
+                source,
+                runtime=runtime,
+                receiver_location=_receiver_location_preflight(msh, config),
+            )
         return 0
     times = generate_time_array(config)
     t0 = time.perf_counter()

@@ -500,6 +500,10 @@ def test_read_run_metadata_uses_real_mesh_npz_and_timing_artifacts(tmp_path):
     )
     np.savez(
         run_dir / "verification_data.npz",
+        times=np.array([1.0e-5], dtype=float),
+    )
+    np.savez(
+        run_dir / "forward_partial.npz",
         internal_solver_steps=np.array([0, 1, 2], dtype=int),
     )
     events = [
@@ -619,6 +623,136 @@ def _run_study_cli(*arguments: str, check: bool = True):
     )
 
 
+def test_stage_two_dry_run_emits_exactly_five_canonical_commands(tmp_path):
+    output_root = tmp_path / "stage2"
+
+    result = _run_study_cli(
+        "--study",
+        "paper-baseline",
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(tmp_path / "layered"),
+        "--prior-convergence-root",
+        str(tmp_path / "stage1"),
+        "--mode",
+        "full",
+        "--dry-run",
+    )
+
+    commands = list((output_root / "runs").glob("*/command.txt"))
+    lines = result.stdout.splitlines()
+    assert len(commands) == 5
+    assert sum(line.startswith("RUN_ID=") for line in lines) == 5
+    assert sum(line.startswith("REUSE_RUN_ID=") for line in lines) == 2
+    pointers = list((output_root / "axis_levels").glob("*/*/level_pointer.json"))
+    assert len(pointers) == 9
+
+
+def test_stage_two_shared_baseline_is_processed_once(tmp_path):
+    output_root = tmp_path / "stage2"
+
+    result = _run_study_cli(
+        "--study",
+        "paper-baseline",
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(tmp_path / "layered"),
+        "--prior-convergence-root",
+        str(tmp_path / "stage1"),
+        "--axis",
+        "time",
+        "--axis",
+        "mesh",
+        "--axis",
+        "domain",
+        "--mode",
+        "full",
+        "--dry-run",
+    )
+
+    assert result.stdout.count("RUN_ID=baseline_12km_dt005_mesh8_6") == 1
+    assert result.stdout.count("SHARED_RUN=baseline_12km_dt005_mesh8_6") == 2
+
+
+def test_stage_two_mesh_mode_writes_strict_preflight_from_source_diagnostics(tmp_path):
+    output_root = tmp_path / "stage2"
+    layered_root = tmp_path / "layered"
+    locked_mesh = (
+        layered_root
+        / "domain12000"
+        / "resistive_basement_rho1000_offset100"
+        / "verification_mesh.msh"
+    )
+    locked_mesh.parent.mkdir(parents=True)
+    meshio.write(
+        locked_mesh,
+        meshio.Mesh(
+            points=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            ),
+            cells=[("tetra", np.array([[0, 1, 2, 3]], dtype=int))],
+        ),
+        file_format="gmsh22",
+    )
+    workdir = output_root / "runs" / "baseline_12km_dt005_mesh8_6"
+    workdir.mkdir(parents=True)
+    (workdir / "verification_mesh.msh").write_bytes(locked_mesh.read_bytes())
+    (workdir / "source_diagnostics.json").write_text(
+        json.dumps(
+            {
+                "source_local_projection": {
+                    "quadrature_points": 101,
+                    "missed_points": 0,
+                    "unique_hit_cells": 20,
+                },
+                "source_projection": {
+                    "after_residual": 2.0e-10,
+                    "endpoint_norm": 1.0,
+                },
+                "receiver_location": {"found": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _run_study_cli(
+        "--study",
+        "paper-baseline",
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(layered_root),
+        "--prior-convergence-root",
+        str(tmp_path / "stage1"),
+        "--axis",
+        "time",
+        "--level",
+        "standard",
+        "--mode",
+        "mesh",
+        "--dry-run",
+    )
+
+    command = (workdir / "command.txt").read_text(encoding="utf-8")
+    assert "--source-only" in command
+    assert "--mesh-only" not in command
+    preflight = json.loads((workdir / "preflight.json").read_text(encoding="utf-8"))
+    assert preflight["passed"] is True
+    assert preflight["source_coverage_passed"] is True
+    assert preflight["receiver_found"] is True
+    assert preflight["source_divergence_passed"] is True
+    assert preflight["mesh_sha256"] == hashlib.sha256(
+        locked_mesh.read_bytes()
+    ).hexdigest()
+
+
 def test_runner_dry_run_writes_generated_level_manifest_and_command(tmp_path):
     output_root = tmp_path / "convergence"
 
@@ -644,6 +778,61 @@ def test_runner_dry_run_writes_generated_level_manifest_and_command(tmp_path):
     assert "--checkpoint-forward" in command
     assert "--checkpoint-interval-steps 10" in command
     assert "--stop-after-outputs 25" in command
+
+
+def test_runner_resume_requests_only_outputs_missing_from_checkpoint(tmp_path):
+    output_root = tmp_path / "convergence"
+    common = (
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(tmp_path / "layered"),
+        "--axis",
+        "time",
+        "--level",
+        "coarse",
+        "--mode",
+        "full",
+        "--dry-run",
+    )
+    _run_study_cli(*common)
+    workdir = output_root / "time" / "coarse"
+    np.savez(workdir / "forward_checkpoint.npz", rows=np.zeros((10, 4)))
+
+    _run_study_cli(*common)
+
+    command = (workdir / "command.txt").read_text(encoding="utf-8")
+    assert "--resume-forward" in command
+    assert "--stop-after-outputs 15" in command
+    assert "--stop-after-outputs 25" not in command
+
+
+def test_runner_postprocesses_checkpoint_that_already_has_target_outputs(tmp_path):
+    output_root = tmp_path / "convergence"
+    common = (
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(tmp_path / "layered"),
+        "--axis",
+        "time",
+        "--level",
+        "coarse",
+        "--mode",
+        "full",
+        "--dry-run",
+    )
+    _run_study_cli(*common)
+    workdir = output_root / "time" / "coarse"
+    np.savez(workdir / "forward_checkpoint.npz", rows=np.zeros((25, 4)))
+    np.savez(workdir / "forward_partial.npz", times=np.arange(25), fem=np.zeros((25, 4)))
+
+    _run_study_cli(*common)
+
+    command = (workdir / "command.txt").read_text(encoding="utf-8")
+    assert "--postprocess-partial" in command
+    assert "--resume-forward" not in command
+    assert "--stop-after-outputs" not in command
 
 
 def test_runner_existing_level_writes_pointer_without_solver_command(tmp_path):

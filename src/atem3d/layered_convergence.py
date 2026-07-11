@@ -478,10 +478,13 @@ def read_run_metadata(run_dir: Path) -> dict:
     edges.sort(axis=1)
     nedelec_dofs = int(np.unique(edges, axis=0).shape[0])
 
-    with np.load(run_dir / "verification_data.npz", allow_pickle=False) as payload:
+    solver_data_path = run_dir / "forward_partial.npz"
+    if not solver_data_path.is_file():
+        solver_data_path = run_dir / "verification_data.npz"
+    with np.load(solver_data_path, allow_pickle=False) as payload:
         if "internal_solver_steps" not in payload.files:
             raise ValueError(
-                f"{run_dir / 'verification_data.npz'} is missing internal_solver_steps"
+                f"{solver_data_path} is missing internal_solver_steps"
             )
         internal_step_count = int(
             np.asarray(payload["internal_solver_steps"]).size
