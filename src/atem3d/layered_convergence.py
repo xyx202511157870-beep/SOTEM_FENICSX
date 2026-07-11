@@ -411,6 +411,9 @@ def _comparison_rows(summary: dict) -> list[dict]:
 
 
 def _write_convergence_curves(path: Path, summary: dict) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
     axes_payload = list(summary.get("axes", []))
@@ -447,6 +450,9 @@ def _write_convergence_curves(path: Path, summary: dict) -> None:
 
 
 def _write_convergence_differences(path: Path, summary: dict) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
     axes_payload = list(summary.get("axes", []))

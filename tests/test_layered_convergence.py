@@ -454,6 +454,7 @@ def test_runner_dry_run_writes_generated_level_manifest_and_command(tmp_path):
     assert (workdir / "case_spec.json").is_file()
     command = (workdir / "command.txt").read_text(encoding="utf-8")
     assert "--checkpoint-forward" in command
+    assert "--checkpoint-interval-steps 10" in command
     assert "--stop-after-outputs 25" in command
 
 

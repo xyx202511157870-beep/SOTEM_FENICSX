@@ -170,7 +170,9 @@ def main(argv: list[str] | None = None) -> int:
                 ):
                     print(f"SKIP_COMPLETE={axis_name}/{level.level_id}")
                     continue
-                pipeline_arguments.append("--checkpoint-forward")
+                pipeline_arguments.extend(
+                    ("--checkpoint-forward", "--checkpoint-interval-steps", "10")
+                )
                 if checkpoint_matches:
                     pipeline_arguments.append("--resume-forward")
 
