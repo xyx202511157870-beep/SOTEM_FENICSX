@@ -10,6 +10,7 @@ import meshio
 import numpy as np
 import pytest
 
+import atem3d.layered_convergence as layered_convergence
 from atem3d.layered_convergence import (
     ConvergenceResponse,
     build_convergence_levels,
@@ -24,6 +25,93 @@ from atem3d.layered_convergence import (
 
 def _option_value(arguments: list[str], option: str) -> str:
     return arguments[arguments.index(option) + 1]
+
+
+def test_paper_baseline_levels_match_approved_stage_two_design(tmp_path):
+    levels = layered_convergence.build_paper_baseline_convergence_levels(
+        tmp_path / "layered",
+        tmp_path / "stage2",
+        tmp_path / "stage1",
+    )
+
+    assert [
+        (level.level_id, level.max_internal_dt, level.max_internal_dt_fraction)
+        for level in levels["time"]
+    ] == [
+        ("coarse", 2.5e-5, 0.01),
+        ("standard", 1.25e-5, 0.005),
+        ("fine", 6.25e-6, 0.0025),
+    ]
+    assert [
+        (level.level_id, level.x_extent, level.earth_depth, level.air_height)
+        for level in levels["domain"]
+    ] == [
+        ("small", 6000.0, 6000.0, 600.0),
+        ("standard", 12000.0, 12000.0, 1200.0),
+        ("large", 24000.0, 24000.0, 2400.0),
+    ]
+    assert [
+        (level.source_mesh_size, level.receiver_mesh_size)
+        for level in levels["mesh"]
+    ] == [(12.0, 9.0), (8.0, 6.0), (6.0, 4.5)]
+    assert {
+        level.run_id
+        for axis_levels in levels.values()
+        for level in axis_levels
+        if level.existing_run_dir is None
+    } == {
+        "baseline_12km_dt005_mesh8_6",
+        "time_fine_12km_dt0025_mesh8_6",
+        "domain_large_24km_dt005_mesh8_6",
+        "mesh_coarse_12km_dt005_mesh12_9",
+        "mesh_fine_12km_dt005_mesh6_4p5",
+    }
+
+
+def test_stage_two_axes_change_only_the_intended_parameters(tmp_path):
+    levels = layered_convergence.build_paper_baseline_convergence_levels(
+        tmp_path / "layered",
+        tmp_path / "stage2",
+        tmp_path / "stage1",
+    )
+
+    def physical(level):
+        return (
+            level.x_extent,
+            level.y_extent,
+            level.earth_depth,
+            level.air_height,
+            level.far_field_mesh_size,
+            level.source_mesh_size,
+            level.receiver_mesh_size,
+            level.max_internal_dt,
+            level.max_internal_dt_fraction,
+        )
+
+    time = [physical(level) for level in levels["time"]]
+    mesh = [physical(level) for level in levels["mesh"]]
+    domain = [physical(level) for level in levels["domain"]]
+    assert all(row[:7] == time[1][:7] for row in time)
+    assert all(row[:5] + row[7:] == mesh[1][:5] + mesh[1][7:] for row in mesh)
+    assert all(row[4:] == domain[1][4:] for row in domain)
+
+
+def test_stage_two_pipeline_arguments_lock_solver_and_observation_contract(tmp_path):
+    baseline = layered_convergence.build_paper_baseline_convergence_levels(
+        tmp_path / "layered",
+        tmp_path / "stage2",
+        tmp_path / "stage1",
+    )["time"][1]
+
+    arguments = build_pipeline_command_arguments(baseline)
+
+    assert _option_value(arguments, "--t-min") == "1e-05"
+    assert _option_value(arguments, "--max-internal-dt") == "1.25e-05"
+    assert _option_value(arguments, "--max-internal-dt-fraction") == "0.005"
+    assert _option_value(arguments, "--rtol") == "1e-07"
+    assert _option_value(arguments, "--atol") == "1e-12"
+    assert _option_value(arguments, "--memory-limit-gb") == "24"
+    assert _option_value(arguments, "--stop-after-outputs") == "25"
 
 
 def test_convergence_levels_match_approved_three_level_design(tmp_path):

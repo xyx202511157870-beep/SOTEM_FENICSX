@@ -22,6 +22,7 @@ from .publication_validation import (
 class ConvergenceLevel:
     axis: str
     level_id: str
+    run_id: str
     x_extent: float
     y_extent: float
     earth_depth: float
@@ -57,6 +58,7 @@ def build_convergence_levels(
         values = {
             "axis": axis,
             "level_id": level_id,
+            "run_id": f"{axis}_{level_id}",
             "x_extent": 6000.0,
             "y_extent": 6000.0,
             "earth_depth": 6000.0,
@@ -122,6 +124,110 @@ def build_convergence_levels(
                 earth_depth=12000.0,
                 air_height=1200.0,
                 existing_run_dir=large,
+            ),
+        ),
+    }
+
+
+def build_paper_baseline_convergence_levels(
+    layered_root: Path,
+    output_root: Path,
+    prior_convergence_root: Path,
+) -> dict[str, tuple[ConvergenceLevel, ...]]:
+    layered_root = Path(layered_root)
+    output_root = Path(output_root)
+    prior_convergence_root = Path(prior_convergence_root)
+    case_id = "resistive_basement_rho1000_offset100"
+    time_coarse = layered_root / "domain12000" / case_id
+    domain_small = prior_convergence_root / "time" / "fine"
+    locked_mesh = time_coarse / "verification_mesh.msh"
+    runs_root = output_root / "runs"
+
+    def level(
+        axis: str,
+        level_id: str,
+        run_id: str,
+        **overrides,
+    ) -> ConvergenceLevel:
+        values = {
+            "axis": axis,
+            "level_id": level_id,
+            "run_id": run_id,
+            "x_extent": 12000.0,
+            "y_extent": 12000.0,
+            "earth_depth": 12000.0,
+            "air_height": 1200.0,
+            "far_field_mesh_size": 750.0,
+            "source_mesh_size": 8.0,
+            "receiver_mesh_size": 6.0,
+            "max_internal_dt": 1.25e-5,
+            "max_internal_dt_fraction": 0.005,
+            "workdir": runs_root / run_id,
+        }
+        values.update(overrides)
+        return ConvergenceLevel(**values)
+
+    baseline = {
+        "run_id": "baseline_12km_dt005_mesh8_6",
+        "reuse_mesh_path": locked_mesh,
+    }
+    return {
+        "time": (
+            level(
+                "time",
+                "coarse",
+                "existing_12km_dt01",
+                existing_run_dir=time_coarse,
+                max_internal_dt=2.5e-5,
+                max_internal_dt_fraction=0.01,
+            ),
+            level("time", "standard", **baseline),
+            level(
+                "time",
+                "fine",
+                "time_fine_12km_dt0025_mesh8_6",
+                max_internal_dt=6.25e-6,
+                max_internal_dt_fraction=0.0025,
+                reuse_mesh_path=locked_mesh,
+            ),
+        ),
+        "mesh": (
+            level(
+                "mesh",
+                "coarse",
+                "mesh_coarse_12km_dt005_mesh12_9",
+                source_mesh_size=12.0,
+                receiver_mesh_size=9.0,
+            ),
+            level("mesh", "standard", **baseline),
+            level(
+                "mesh",
+                "fine",
+                "mesh_fine_12km_dt005_mesh6_4p5",
+                source_mesh_size=6.0,
+                receiver_mesh_size=4.5,
+            ),
+        ),
+        "domain": (
+            level(
+                "domain",
+                "small",
+                "existing_6km_dt005",
+                existing_run_dir=domain_small,
+                x_extent=6000.0,
+                y_extent=6000.0,
+                earth_depth=6000.0,
+                air_height=600.0,
+            ),
+            level("domain", "standard", **baseline),
+            level(
+                "domain",
+                "large",
+                "domain_large_24km_dt005_mesh8_6",
+                x_extent=24000.0,
+                y_extent=24000.0,
+                earth_depth=24000.0,
+                air_height=2400.0,
             ),
         ),
     }
