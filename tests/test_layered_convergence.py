@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from atem3d.layered_convergence import (
+    ConvergenceResponse,
     build_convergence_levels,
     build_pipeline_command_arguments,
+    compare_responses,
+    load_response,
 )
 
 
@@ -104,3 +110,96 @@ def test_generated_level_workdir_matches_axis_and_level(tmp_path):
 
     assert level.workdir == output_root / "time" / "fine"
     assert Path(_option_value(build_pipeline_command_arguments(level), "--workdir")) == level.workdir
+
+
+def _response(values) -> ConvergenceResponse:
+    return ConvergenceResponse(
+        times=np.array([1.0e-5, 1.0e-4, 1.0e-3]),
+        dbzdt=np.asarray(values, dtype=float),
+        reference=np.array([1.0, 0.1, 0.01]),
+    )
+
+
+def test_compare_responses_reports_median_rms_and_max_percent():
+    result = compare_responses(
+        _response([1.1, 0.11, 0.011]),
+        _response([1.0, 0.1, 0.01]),
+    )
+
+    assert result["sample_count"] == 3
+    assert result["excluded_below_floor_count"] == 0
+    assert result["median_percent"] == pytest.approx(10.0)
+    assert result["rms_percent"] == pytest.approx(10.0)
+    assert result["max_percent"] == pytest.approx(10.0)
+    assert result["relative"] == pytest.approx([0.1, 0.1, 0.1])
+
+
+def test_compare_responses_rejects_mismatched_observation_grids():
+    fine = _response([1.0, 0.1, 0.01])
+    coarse = ConvergenceResponse(
+        times=fine.times * 1.01,
+        dbzdt=fine.dbzdt,
+        reference=fine.reference,
+    )
+
+    with pytest.raises(ValueError, match="observation grids"):
+        compare_responses(coarse, fine)
+
+
+def test_compare_responses_excludes_below_reference_floor():
+    fine = ConvergenceResponse(
+        times=np.array([1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2]),
+        dbzdt=np.array([1.0, 0.1, 0.01, 1.0e-7]),
+        reference=np.array([1.0, 0.1, 0.01, 1.0e-7]),
+    )
+    coarse = ConvergenceResponse(
+        times=fine.times,
+        dbzdt=np.array([1.01, 0.102, 0.0101, 1.0]),
+        reference=fine.reference,
+    )
+
+    result = compare_responses(coarse, fine)
+
+    assert result["sample_count"] == 3
+    assert result["excluded_below_floor_count"] == 1
+    assert result["amplitude_floor"] == pytest.approx(1.0e-6)
+    assert result["max_percent"] == pytest.approx(2.0)
+
+
+def test_compare_responses_rejects_near_duplicate_observation_times():
+    times = np.array([1.0e-5, 1.0e-4, 0.009999999999, 0.01])
+    response = ConvergenceResponse(
+        times=times,
+        dbzdt=np.ones(times.size),
+        reference=np.ones(times.size),
+    )
+
+    with pytest.raises(ValueError, match="near-duplicate"):
+        compare_responses(response, response)
+
+
+def test_load_response_selects_dbdzdt_component(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    np.savez(
+        run_dir / "verification_data.npz",
+        times=np.array([1.0e-5, 1.0e-4, 1.0e-3]),
+        fem=np.array([[10.0, -1.0], [20.0, -0.1], [30.0, -0.01]]),
+        empymod=np.array([[11.0, -1.1], [21.0, -0.11], [31.0, -0.011]]),
+        components=np.array(["Ex", "dBzdt"]),
+    )
+
+    result = load_response(run_dir)
+
+    assert result.times == pytest.approx([1.0e-5, 1.0e-4, 1.0e-3])
+    assert result.dbzdt == pytest.approx([-1.0, -0.1, -0.01])
+    assert result.reference == pytest.approx([-1.1, -0.11, -0.011])
+
+
+def test_load_response_rejects_missing_required_arrays(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    np.savez(run_dir / "verification_data.npz", times=np.array([1.0, 2.0, 3.0]))
+
+    with pytest.raises(ValueError, match="missing keys"):
+        load_response(run_dir)
