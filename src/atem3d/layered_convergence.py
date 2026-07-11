@@ -489,6 +489,44 @@ def read_run_metadata(run_dir: Path) -> dict:
         internal_step_count = int(
             np.asarray(payload["internal_solver_steps"]).size
         )
+        ksp_keys = {
+            "solver_iterations",
+            "solver_reasons",
+            "solver_residuals",
+        }
+        present_ksp_keys = ksp_keys.intersection(payload.files)
+        if present_ksp_keys and present_ksp_keys != ksp_keys:
+            missing = sorted(ksp_keys.difference(present_ksp_keys))
+            raise ValueError(f"KSP evidence is missing arrays: {missing}")
+        if present_ksp_keys:
+            iterations = np.asarray(payload["solver_iterations"], dtype=int).reshape(-1)
+            reasons = np.asarray(payload["solver_reasons"], dtype=int).reshape(-1)
+            residuals = np.asarray(payload["solver_residuals"], dtype=float).reshape(-1)
+            if not (iterations.size == reasons.size == residuals.size):
+                raise ValueError("KSP evidence arrays must have equal lengths")
+            if iterations.size == 0:
+                raise ValueError("KSP evidence contains no output solves")
+            if np.any(iterations < 0):
+                raise ValueError("KSP evidence contains negative iterations")
+            if np.any(reasons <= 0):
+                raise ValueError("KSP convergence reasons must all be positive")
+            if not np.all(np.isfinite(residuals)):
+                raise ValueError("KSP evidence must contain finite residuals")
+            ksp_metadata = {
+                "ksp_output_solve_count": int(iterations.size),
+                "ksp_iterations_median": float(np.median(iterations)),
+                "ksp_iterations_max": int(np.max(iterations)),
+                "ksp_residual_max": float(np.max(residuals)),
+                "ksp_all_converged": True,
+            }
+        else:
+            ksp_metadata = {
+                "ksp_output_solve_count": 0,
+                "ksp_iterations_median": None,
+                "ksp_iterations_max": None,
+                "ksp_residual_max": None,
+                "ksp_all_converged": None,
+            }
 
     forward_runtime_seconds = 0.0
     timing_path = run_dir / "timing_events.jsonl"
@@ -515,6 +553,7 @@ def read_run_metadata(run_dir: Path) -> dict:
         "cells_blocks": cell_block_count,
         "nedelec_dofs": nedelec_dofs,
         "internal_step_count": internal_step_count,
+        **ksp_metadata,
         "forward_runtime_seconds": forward_runtime_seconds,
         "estimated_memory_gb": (
             cell_block_count * 2.85e-5 + node_count * 1.5e-6

@@ -529,6 +529,81 @@ def test_read_run_metadata_uses_real_mesh_npz_and_timing_artifacts(tmp_path):
     )
 
 
+def _write_metadata_mesh_and_timing(run_dir: Path) -> None:
+    run_dir.mkdir()
+    meshio.write(
+        run_dir / "verification_mesh.msh",
+        meshio.Mesh(
+            points=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            ),
+            cells=[("tetra", np.array([[0, 1, 2, 3]], dtype=int))],
+        ),
+        file_format="gmsh22",
+        binary=False,
+    )
+    (run_dir / "timing_events.jsonl").write_text(
+        '{"event":"forward_done","seconds":120.75}\n',
+        encoding="utf-8",
+    )
+
+
+def test_read_run_metadata_reports_output_ksp_statistics(tmp_path):
+    run_dir = tmp_path / "run"
+    _write_metadata_mesh_and_timing(run_dir)
+    np.savez(
+        run_dir / "forward_partial.npz",
+        internal_solver_steps=np.arange(9),
+        solver_iterations=np.array([12, 15, 9]),
+        solver_reasons=np.array([2, 2, 2]),
+        solver_residuals=np.array([1.0e-9, 2.0e-9, 8.0e-10]),
+    )
+
+    result = read_run_metadata(run_dir)
+
+    assert result["ksp_output_solve_count"] == 3
+    assert result["ksp_iterations_median"] == 12.0
+    assert result["ksp_iterations_max"] == 15
+    assert result["ksp_residual_max"] == pytest.approx(2.0e-9)
+    assert result["ksp_all_converged"] is True
+    assert result["forward_runtime_seconds"] == pytest.approx(120.75)
+
+
+@pytest.mark.parametrize(
+    ("iterations", "reasons", "residuals", "message"),
+    [
+        ([12, 15], [2], [1.0e-9, 2.0e-9], "equal lengths"),
+        ([12], [0], [1.0e-9], "convergence reasons"),
+        ([-1], [2], [1.0e-9], "negative iterations"),
+        ([12], [2], [np.nan], "finite residuals"),
+    ],
+)
+def test_read_run_metadata_rejects_invalid_ksp_evidence(
+    tmp_path,
+    iterations,
+    reasons,
+    residuals,
+    message,
+):
+    run_dir = tmp_path / "run"
+    _write_metadata_mesh_and_timing(run_dir)
+    np.savez(
+        run_dir / "forward_partial.npz",
+        internal_solver_steps=np.arange(3),
+        solver_iterations=np.asarray(iterations),
+        solver_reasons=np.asarray(reasons),
+        solver_residuals=np.asarray(residuals),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        read_run_metadata(run_dir)
+
+
 def _synthetic_report_summary() -> dict:
     times = np.array([1.0e-5, 1.0e-4, 1.0e-3])
     reference = np.array([-1.0, -0.1, -0.01])
