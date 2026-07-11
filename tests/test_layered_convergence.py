@@ -768,6 +768,38 @@ def test_stage_two_report_writes_baseline_acceptance_record(tmp_path):
     ]
 
 
+def test_independent_audit_recomputes_stage_two_reports_from_disk(tmp_path):
+    levels = _make_complete_stage_two_fixture(tmp_path, passing=True)
+    summary = layered_convergence.evaluate_convergence_study(
+        levels,
+        study_id="layered_resistive_offset100_stage2",
+    )
+    report_dir = tmp_path / "report"
+    write_convergence_reports(report_dir, summary)
+    audit_path = report_dir / "independent_audit.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "dolfinx/audit_layered_convergence.py",
+            "--summary",
+            str(report_dir / "convergence_summary.json"),
+            "--output",
+            str(audit_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INDEPENDENT_RECOMPUTE_OK" in result.stdout
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["verified"] is True
+    assert audit["comparison_count"] == 6
+    assert audit["external_gate_count"] == 2
+
+
 def _synthetic_report_summary() -> dict:
     times = np.array([1.0e-5, 1.0e-4, 1.0e-3])
     reference = np.array([-1.0, -0.1, -0.01])
