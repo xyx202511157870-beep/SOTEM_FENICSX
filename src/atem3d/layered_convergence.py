@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import statistics
 from dataclasses import dataclass
@@ -253,4 +254,116 @@ def compare_responses(
         "max_percent": 100.0 * float(np.max(relative)),
         "times": fine.times[gate_mask].copy(),
         "relative": relative,
+    }
+
+
+def evaluate_axis_metrics(
+    axis: str,
+    comparisons: dict,
+    *,
+    large_external_passed: bool | None = None,
+) -> dict:
+    reasons: list[str] = []
+    ordering_tolerance_percent = 0.1
+    if axis in {"time", "mesh"}:
+        coarse_to_standard = comparisons["coarse_to_standard"]
+        standard_to_fine = comparisons["standard_to_fine"]
+        if float(standard_to_fine["median_percent"]) > 1.0:
+            reasons.append(f"{axis}_median_above_1pct")
+        if float(standard_to_fine["rms_percent"]) > 2.0:
+            reasons.append(f"{axis}_rms_above_2pct")
+        if float(standard_to_fine["max_percent"]) > 5.0:
+            reasons.append(f"{axis}_max_above_5pct")
+        if (
+            float(coarse_to_standard["rms_percent"])
+            + ordering_tolerance_percent
+            < float(standard_to_fine["rms_percent"])
+        ):
+            reasons.append(f"{axis}_rms_not_decreasing")
+    elif axis == "domain":
+        small_to_standard = comparisons["small_to_standard"]
+        standard_to_large = comparisons["standard_to_large"]
+        if (
+            float(small_to_standard["rms_percent"])
+            + ordering_tolerance_percent
+            < float(standard_to_large["rms_percent"])
+        ):
+            reasons.append("domain_rms_not_decreasing")
+        if large_external_passed is not True:
+            reasons.append("domain_large_external_gate_failed")
+    else:
+        raise ValueError(f"unknown convergence axis: {axis}")
+    return {
+        "axis": axis,
+        "passed": not reasons,
+        "blocking_reasons": reasons,
+    }
+
+
+def read_run_metadata(run_dir: Path) -> dict:
+    import meshio
+
+    run_dir = Path(run_dir)
+    mesh = meshio.read(run_dir / "verification_mesh.msh")
+    tetrahedra = [block.data for block in mesh.cells if block.type == "tetra"]
+    tetrahedron_count = sum(int(cells.shape[0]) for cells in tetrahedra)
+    cell_block_count = sum(
+        int(block.data.shape[0])
+        for block in mesh.cells
+        if block.type in {"tetra", "triangle", "line"}
+    )
+    if tetrahedron_count <= 0:
+        raise ValueError(f"{run_dir} mesh contains no tetrahedra")
+    tetra = np.vstack(tetrahedra).astype(np.int64, copy=False)
+    edges = np.vstack(
+        [
+            tetra[:, [0, 1]],
+            tetra[:, [0, 2]],
+            tetra[:, [0, 3]],
+            tetra[:, [1, 2]],
+            tetra[:, [1, 3]],
+            tetra[:, [2, 3]],
+        ]
+    )
+    edges.sort(axis=1)
+    nedelec_dofs = int(np.unique(edges, axis=0).shape[0])
+
+    with np.load(run_dir / "verification_data.npz", allow_pickle=False) as payload:
+        if "internal_solver_steps" not in payload.files:
+            raise ValueError(
+                f"{run_dir / 'verification_data.npz'} is missing internal_solver_steps"
+            )
+        internal_step_count = int(
+            np.asarray(payload["internal_solver_steps"]).size
+        )
+
+    forward_runtime_seconds = 0.0
+    timing_path = run_dir / "timing_events.jsonl"
+    with timing_path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"invalid JSON in {timing_path} line {line_number}"
+                ) from exc
+            seconds = event.get("seconds")
+            if event.get("event") == "forward_done" and seconds is not None:
+                seconds = float(seconds)
+                if math.isfinite(seconds) and seconds >= 0.0:
+                    forward_runtime_seconds += seconds
+
+    node_count = int(mesh.points.shape[0])
+    return {
+        "nodes": node_count,
+        "tetrahedra": tetrahedron_count,
+        "cells_blocks": cell_block_count,
+        "nedelec_dofs": nedelec_dofs,
+        "internal_step_count": internal_step_count,
+        "forward_runtime_seconds": forward_runtime_seconds,
+        "estimated_memory_gb": (
+            cell_block_count * 2.85e-5 + node_count * 1.5e-6
+        ),
     }

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import meshio
 import numpy as np
 import pytest
 
@@ -10,7 +12,9 @@ from atem3d.layered_convergence import (
     build_convergence_levels,
     build_pipeline_command_arguments,
     compare_responses,
+    evaluate_axis_metrics,
     load_response,
+    read_run_metadata,
 )
 
 
@@ -203,3 +207,127 @@ def test_load_response_rejects_missing_required_arrays(tmp_path):
 
     with pytest.raises(ValueError, match="missing keys"):
         load_response(run_dir)
+
+
+def test_time_axis_passes_when_refined_difference_is_small_and_ordered():
+    result = evaluate_axis_metrics(
+        "time",
+        {
+            "coarse_to_standard": {"rms_percent": 3.0},
+            "standard_to_fine": {
+                "median_percent": 0.5,
+                "rms_percent": 1.0,
+                "max_percent": 2.0,
+            },
+        },
+    )
+
+    assert result == {"axis": "time", "passed": True, "blocking_reasons": []}
+
+
+def test_mesh_axis_rejects_non_decreasing_rms():
+    result = evaluate_axis_metrics(
+        "mesh",
+        {
+            "coarse_to_standard": {"rms_percent": 0.5},
+            "standard_to_fine": {
+                "median_percent": 0.5,
+                "rms_percent": 1.0,
+                "max_percent": 2.0,
+            },
+        },
+    )
+
+    assert result["passed"] is False
+    assert result["blocking_reasons"] == ["mesh_rms_not_decreasing"]
+
+
+def test_time_axis_reports_every_refined_threshold_failure():
+    result = evaluate_axis_metrics(
+        "time",
+        {
+            "coarse_to_standard": {"rms_percent": 8.0},
+            "standard_to_fine": {
+                "median_percent": 1.1,
+                "rms_percent": 2.1,
+                "max_percent": 5.1,
+            },
+        },
+    )
+
+    assert result["blocking_reasons"] == [
+        "time_median_above_1pct",
+        "time_rms_above_2pct",
+        "time_max_above_5pct",
+    ]
+
+
+def test_domain_axis_requires_decreasing_change_and_large_external_pass():
+    passed = evaluate_axis_metrics(
+        "domain",
+        {
+            "small_to_standard": {"rms_percent": 12.0},
+            "standard_to_large": {"rms_percent": 8.0},
+        },
+        large_external_passed=True,
+    )
+    failed = evaluate_axis_metrics(
+        "domain",
+        {
+            "small_to_standard": {"rms_percent": 7.0},
+            "standard_to_large": {"rms_percent": 8.0},
+        },
+        large_external_passed=False,
+    )
+
+    assert passed["passed"] is True
+    assert failed["blocking_reasons"] == [
+        "domain_rms_not_decreasing",
+        "domain_large_external_gate_failed",
+    ]
+
+
+def test_read_run_metadata_uses_real_mesh_npz_and_timing_artifacts(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    meshio.write(
+        run_dir / "verification_mesh.msh",
+        meshio.Mesh(
+            points=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            ),
+            cells=[("tetra", np.array([[0, 1, 2, 3]], dtype=int))],
+        ),
+        file_format="gmsh22",
+        binary=False,
+    )
+    np.savez(
+        run_dir / "verification_data.npz",
+        internal_solver_steps=np.array([0, 1, 2], dtype=int),
+    )
+    events = [
+        {"event": "forward_done", "seconds": 5.0},
+        {"event": "setup_done", "seconds": 99.0},
+        {"event": "forward_done", "seconds": 7.5},
+    ]
+    (run_dir / "timing_events.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    result = read_run_metadata(run_dir)
+
+    assert result["nodes"] == 4
+    assert result["tetrahedra"] == 1
+    assert result["cells_blocks"] == 1
+    assert result["nedelec_dofs"] == 6
+    assert result["internal_step_count"] == 3
+    assert result["forward_runtime_seconds"] == pytest.approx(12.5)
+    assert result["estimated_memory_gb"] == pytest.approx(
+        1 * 2.85e-5 + 4 * 1.5e-6
+    )
