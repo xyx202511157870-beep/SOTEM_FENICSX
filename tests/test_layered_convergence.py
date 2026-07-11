@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from atem3d.layered_convergence import (
     evaluate_axis_metrics,
     load_response,
     read_run_metadata,
+    write_convergence_reports,
 )
 
 
@@ -331,3 +333,88 @@ def test_read_run_metadata_uses_real_mesh_npz_and_timing_artifacts(tmp_path):
     assert result["estimated_memory_gb"] == pytest.approx(
         1 * 2.85e-5 + 4 * 1.5e-6
     )
+
+
+def _synthetic_report_summary() -> dict:
+    times = np.array([1.0e-5, 1.0e-4, 1.0e-3])
+    reference = np.array([-1.0, -0.1, -0.01])
+    standard = ConvergenceResponse(times, reference * 1.01, reference)
+    fine = ConvergenceResponse(times, reference, reference)
+    comparison = compare_responses(standard, fine)
+    return {
+        "study_id": "layered_resistive_offset100",
+        "study_passed": True,
+        "coordinate_convention": "z=0 ground; underground positive; air negative",
+        "axes": [
+            {
+                "axis": "time",
+                "passed": True,
+                "blocking_reasons": [],
+                "levels": [
+                    {"level_id": "standard", "nedelec_dofs": 100},
+                    {"level_id": "fine", "nedelec_dofs": 100},
+                ],
+                "comparisons": [
+                    {
+                        "comparison_id": "standard_to_fine",
+                        **comparison,
+                    }
+                ],
+                "_responses": {"standard": standard, "fine": fine},
+            }
+        ],
+    }
+
+
+def test_report_writer_emits_all_publication_artifacts(tmp_path):
+    write_convergence_reports(tmp_path, _synthetic_report_summary())
+
+    expected = {
+        "convergence_summary.json",
+        "convergence_summary.csv",
+        "convergence_report.md",
+        "convergence_curves.png",
+        "convergence_differences.png",
+    }
+    assert expected == {path.name for path in tmp_path.iterdir()}
+    payload = json.loads((tmp_path / "convergence_summary.json").read_text())
+    assert payload["study_passed"] is True
+    assert "_responses" not in payload["axes"][0]
+    with (tmp_path / "convergence_summary.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["axis"] == "time"
+    assert rows[0]["comparison_id"] == "standard_to_fine"
+    assert float(rows[0]["rms_percent"]) == pytest.approx(1.0)
+    report = (tmp_path / "convergence_report.md").read_text(encoding="utf-8")
+    assert "RMS <= 2%" in report
+    assert "maximum <= 5%" in report
+
+
+def test_report_writer_text_outputs_are_deterministic(tmp_path):
+    summary = _synthetic_report_summary()
+    write_convergence_reports(tmp_path, summary)
+    first = {
+        name: (tmp_path / name).read_bytes()
+        for name in (
+            "convergence_summary.json",
+            "convergence_summary.csv",
+            "convergence_report.md",
+        )
+    }
+
+    write_convergence_reports(tmp_path, summary)
+
+    assert first == {name: (tmp_path / name).read_bytes() for name in first}
+
+
+def test_report_figures_have_publication_resolution(tmp_path):
+    import matplotlib.image as mpimg
+
+    write_convergence_reports(tmp_path, _synthetic_report_summary())
+
+    for name in ("convergence_curves.png", "convergence_differences.png"):
+        image = mpimg.imread(tmp_path / name)
+        assert image.shape[1] >= 1200
+        assert image.shape[0] >= 800

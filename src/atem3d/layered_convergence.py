@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import math
 import statistics
@@ -367,3 +368,187 @@ def read_run_metadata(run_dir: Path) -> dict:
             cell_block_count * 2.85e-5 + node_count * 1.5e-6
         ),
     }
+
+
+def _json_safe_summary(value):
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe_summary(item)
+            for key, item in value.items()
+            if not str(key).startswith("_") and key not in {"times", "relative"}
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_summary(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _comparison_rows(summary: dict) -> list[dict]:
+    rows: list[dict] = []
+    for axis in summary.get("axes", []):
+        for comparison in axis.get("comparisons", []):
+            rows.append(
+                {
+                    "axis": str(axis["axis"]),
+                    "comparison_id": str(comparison["comparison_id"]),
+                    "sample_count": int(comparison["sample_count"]),
+                    "excluded_below_floor_count": int(
+                        comparison["excluded_below_floor_count"]
+                    ),
+                    "amplitude_floor": float(comparison["amplitude_floor"]),
+                    "median_percent": float(comparison["median_percent"]),
+                    "rms_percent": float(comparison["rms_percent"]),
+                    "max_percent": float(comparison["max_percent"]),
+                    "axis_passed": bool(axis["passed"]),
+                    "blocking_reasons": ";".join(axis.get("blocking_reasons", [])),
+                }
+            )
+    return rows
+
+
+def _write_convergence_curves(path: Path, summary: dict) -> None:
+    import matplotlib.pyplot as plt
+
+    axes_payload = list(summary.get("axes", []))
+    row_count = max(1, len(axes_payload))
+    figure, axes = plt.subplots(
+        row_count,
+        1,
+        figsize=(12.0, max(8.0, 4.0 * row_count)),
+        squeeze=False,
+    )
+    if not axes_payload:
+        axes[0, 0].text(0.5, 0.5, "No completed convergence axes", ha="center")
+        axes[0, 0].set_axis_off()
+    for row, axis_payload in enumerate(axes_payload):
+        axis = axes[row, 0]
+        responses = axis_payload.get("_responses", {})
+        for level_id, response in responses.items():
+            axis.loglog(
+                response.times,
+                np.abs(response.dbzdt),
+                marker="o",
+                markersize=3,
+                linewidth=1.4,
+                label=str(level_id),
+            )
+        axis.set_title(f"{axis_payload['axis'].title()} convergence")
+        axis.set_xlabel("Time after ramp (s)")
+        axis.set_ylabel("abs(dBz/dt) (T/s)")
+        axis.grid(True, which="both", alpha=0.25)
+        axis.legend()
+    figure.tight_layout()
+    figure.savefig(path, dpi=150, metadata={"Software": "atem3d"})
+    plt.close(figure)
+
+
+def _write_convergence_differences(path: Path, summary: dict) -> None:
+    import matplotlib.pyplot as plt
+
+    axes_payload = list(summary.get("axes", []))
+    row_count = max(1, len(axes_payload))
+    figure, axes = plt.subplots(
+        row_count,
+        1,
+        figsize=(12.0, max(8.0, 4.0 * row_count)),
+        squeeze=False,
+    )
+    if not axes_payload:
+        axes[0, 0].text(0.5, 0.5, "No completed convergence axes", ha="center")
+        axes[0, 0].set_axis_off()
+    for row, axis_payload in enumerate(axes_payload):
+        axis = axes[row, 0]
+        for comparison in axis_payload.get("comparisons", []):
+            axis.semilogx(
+                comparison["times"],
+                100.0 * np.asarray(comparison["relative"], dtype=float),
+                marker="o",
+                markersize=3,
+                linewidth=1.4,
+                label=str(comparison["comparison_id"]),
+            )
+        for threshold, style in ((1.0, ":"), (2.0, "--"), (5.0, "-.")):
+            axis.axhline(
+                threshold,
+                color="0.35",
+                linestyle=style,
+                linewidth=1.0,
+                label=f"{threshold:g}%" if row == 0 else None,
+            )
+        axis.set_title(f"{axis_payload['axis'].title()} pairwise difference")
+        axis.set_xlabel("Time after ramp (s)")
+        axis.set_ylabel("Relative difference (%)")
+        axis.grid(True, which="both", alpha=0.25)
+        axis.legend()
+    figure.tight_layout()
+    figure.savefig(path, dpi=150, metadata={"Software": "atem3d"})
+    plt.close(figure)
+
+
+def write_convergence_reports(output_dir: Path, summary: dict) -> None:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    public_summary = _json_safe_summary(summary)
+    (output_dir / "convergence_summary.json").write_text(
+        json.dumps(public_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rows = _comparison_rows(summary)
+    fields = [
+        "axis",
+        "comparison_id",
+        "sample_count",
+        "excluded_below_floor_count",
+        "amplitude_floor",
+        "median_percent",
+        "rms_percent",
+        "max_percent",
+        "axis_passed",
+        "blocking_reasons",
+    ]
+    with (output_dir / "convergence_summary.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    markdown = [
+        "# Layered FEniCSx Convergence Report",
+        "",
+        f"- Study: {summary.get('study_id', '')}",
+        f"- Study passed: {bool(summary.get('study_passed', False))}",
+        f"- Coordinates: {summary.get('coordinate_convention', '')}",
+        "- Time/mesh gates: median <= 1%, RMS <= 2%, maximum <= 5%.",
+        "- Domain gate: decreasing RMS response change and a passing large-domain empymod gate.",
+        "- Effective samples satisfy abs(reference) >= 1e-6 * peak(abs(reference)).",
+        "",
+        "| Axis | Comparison | N | Median (%) | RMS (%) | Maximum (%) | Axis pass |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for row in rows:
+        markdown.append(
+            "| {axis} | {comparison_id} | {sample_count} | "
+            "{median_percent:.6g} | {rms_percent:.6g} | {max_percent:.6g} | "
+            "{axis_passed} |".format(**row)
+        )
+    markdown.extend(("", "## Blocking Reasons", ""))
+    for axis in summary.get("axes", []):
+        reasons = axis.get("blocking_reasons", [])
+        markdown.append(
+            f"- {axis['axis']}: {', '.join(reasons) if reasons else 'none'}"
+        )
+    (output_dir / "convergence_report.md").write_text(
+        "\n".join(markdown) + "\n",
+        encoding="utf-8",
+    )
+
+    _write_convergence_curves(output_dir / "convergence_curves.png", summary)
+    _write_convergence_differences(
+        output_dir / "convergence_differences.png",
+        summary,
+    )
