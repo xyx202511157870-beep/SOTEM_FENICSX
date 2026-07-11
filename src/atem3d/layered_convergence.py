@@ -548,6 +548,7 @@ def read_run_metadata(run_dir: Path) -> dict:
 
     node_count = int(mesh.points.shape[0])
     return {
+        "mesh_sha256": sha256_file(run_dir / "verification_mesh.msh"),
         "nodes": node_count,
         "tetrahedra": tetrahedron_count,
         "cells_blocks": cell_block_count,
@@ -693,6 +694,27 @@ def write_convergence_reports(output_dir: Path, summary: dict) -> None:
         json.dumps(public_summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    if "candidate_baseline" in summary:
+        acceptance = {
+            "study_id": summary.get("study_id"),
+            "coordinate_convention": summary.get("coordinate_convention"),
+            "accepted_for_paper_figures": bool(summary.get("study_passed", False)),
+            "candidate_baseline": summary["candidate_baseline"],
+            "axis_gates": [
+                {
+                    "axis": axis["axis"],
+                    "status": axis["status"],
+                    "passed": bool(axis["passed"]),
+                    "blocking_reasons": list(axis.get("blocking_reasons", [])),
+                }
+                for axis in summary.get("axes", [])
+            ],
+        }
+        (output_dir / "baseline_acceptance.json").write_text(
+            json.dumps(_json_safe_summary(acceptance), indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
 
     rows = _comparison_rows(summary)
     fields = [
@@ -819,6 +841,7 @@ def evaluate_convergence_study(
     levels: dict[str, tuple[ConvergenceLevel, ...]],
     *,
     selected_axes: tuple[str, ...] = ("time", "mesh", "domain"),
+    study_id: str = "layered_resistive_offset100",
 ) -> dict:
     axis_summaries: list[dict] = []
     for axis_name in selected_axes:
@@ -927,12 +950,19 @@ def evaluate_convergence_study(
         axis["status"] == "complete" for axis in axis_summaries
     )
     passed_count = sum(bool(axis["passed"]) for axis in axis_summaries)
-    return {
-        "study_id": "layered_resistive_offset100",
-        "study_passed": (
+    study_passed = (
             complete_count == len(axis_summaries)
             and passed_count == len(axis_summaries)
-        ),
+    )
+    if study_id == "layered_resistive_offset100_stage2":
+        study_passed = study_passed and set(selected_axes) == {
+            "time",
+            "mesh",
+            "domain",
+        }
+    result = {
+        "study_id": study_id,
+        "study_passed": study_passed,
         "coordinate_convention": (
             "z=0 ground; underground positive; air negative"
         ),
@@ -940,3 +970,25 @@ def evaluate_convergence_study(
         "passed_axis_count": passed_count,
         "axes": axis_summaries,
     }
+    if study_id == "layered_resistive_offset100_stage2":
+        baseline = levels["time"][1]
+        baseline_dir = resolved_run_dir(baseline)
+        baseline_complete = (
+            (baseline_dir / "verification_data.npz").is_file()
+            and (baseline_dir / "errors.csv").is_file()
+        )
+        candidate_baseline = {
+            "run_id": baseline.run_id,
+            "run_dir": str(baseline_dir),
+            "status": "complete" if baseline_complete else "incomplete",
+            "accepted_for_paper_figures": bool(study_passed),
+            "external_reference_gate": (
+                evaluate_errors_csv(baseline_dir / "errors.csv")
+                if baseline_complete
+                else None
+            ),
+        }
+        if baseline_complete:
+            candidate_baseline.update(read_run_metadata(baseline_dir))
+        result["candidate_baseline"] = candidate_baseline
+    return result

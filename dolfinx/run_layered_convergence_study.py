@@ -275,6 +275,11 @@ def main(argv: list[str] | None = None) -> int:
         summary = evaluate_convergence_study(
             levels,
             selected_axes=selected_axes,
+            study_id=(
+                "layered_resistive_offset100_stage2"
+                if args.study == "paper-baseline"
+                else "layered_resistive_offset100"
+            ),
         )
         write_convergence_reports(args.output_root, summary)
         print(f"CONVERGENCE_COMPLETE={summary['complete_axis_count']}")

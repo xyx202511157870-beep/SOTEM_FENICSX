@@ -604,6 +604,170 @@ def test_read_run_metadata_rejects_invalid_ksp_evidence(
         read_run_metadata(run_dir)
 
 
+def _write_complete_convergence_run(
+    run_dir: Path,
+    *,
+    response_scale: float,
+    external_error: float,
+) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    meshio.write(
+        run_dir / "verification_mesh.msh",
+        meshio.Mesh(
+            points=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            ),
+            cells=[("tetra", np.array([[0, 1, 2, 3]], dtype=int))],
+        ),
+        file_format="gmsh22",
+        binary=False,
+    )
+    times = np.geomspace(1.0e-5, 2.5118864315e-3, 25)
+    reference = -np.geomspace(1.0, 1.0e-4, 25)
+    fem = np.zeros((25, 4), dtype=float)
+    empymod = np.zeros((25, 4), dtype=float)
+    fem[:, 3] = reference * response_scale
+    empymod[:, 3] = reference
+    np.savez(
+        run_dir / "verification_data.npz",
+        times=times,
+        fem=fem,
+        empymod=empymod,
+        components=np.array(["Ex", "Ey", "Hz", "dBzdt"]),
+    )
+    np.savez(
+        run_dir / "forward_partial.npz",
+        internal_solver_steps=np.arange(100),
+        solver_iterations=np.full(25, 12, dtype=int),
+        solver_reasons=np.full(25, 2, dtype=int),
+        solver_residuals=np.full(25, 1.0e-9),
+    )
+    (run_dir / "timing_events.jsonl").write_text(
+        '{"event":"forward_done","seconds":60.0}\n',
+        encoding="utf-8",
+    )
+    with (run_dir / "errors.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "component",
+                "time_obs",
+                "ref",
+                "ordinary_relative_error",
+            ],
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        for time, value in zip(times, reference):
+            writer.writerow(
+                {
+                    "component": "dBzdt",
+                    "time_obs": time,
+                    "ref": value,
+                    "ordinary_relative_error": external_error,
+                }
+            )
+
+
+def _make_complete_stage_two_fixture(tmp_path, *, passing: bool):
+    levels = layered_convergence.build_paper_baseline_convergence_levels(
+        tmp_path / "layered",
+        tmp_path / "stage2",
+        tmp_path / "stage1",
+    )
+    scales = {
+        "existing_12km_dt01": 1.02,
+        "baseline_12km_dt005_mesh8_6": 1.005,
+        "time_fine_12km_dt0025_mesh8_6": 1.0 if passing else 0.9,
+        "mesh_coarse_12km_dt005_mesh12_9": 1.02,
+        "mesh_fine_12km_dt005_mesh6_4p5": 1.0,
+        "existing_6km_dt005": 1.04,
+        "domain_large_24km_dt005_mesh8_6": 1.0,
+    }
+    written: set[str] = set()
+    for axis_levels in levels.values():
+        for level in axis_levels:
+            if level.run_id in written:
+                continue
+            written.add(level.run_id)
+            _write_complete_convergence_run(
+                layered_convergence.resolved_run_dir(level),
+                response_scale=scales[level.run_id],
+                external_error=(
+                    0.008
+                    if level.run_id == "domain_large_24km_dt005_mesh8_6"
+                    else 0.005
+                ),
+            )
+    return levels
+
+
+def test_stage_two_summary_reports_baseline_and_large_empymod_gates(tmp_path):
+    levels = _make_complete_stage_two_fixture(tmp_path, passing=True)
+
+    summary = layered_convergence.evaluate_convergence_study(
+        levels,
+        study_id="layered_resistive_offset100_stage2",
+    )
+
+    assert summary["study_passed"] is True
+    assert summary["candidate_baseline"]["run_id"] == (
+        "baseline_12km_dt005_mesh8_6"
+    )
+    assert summary["candidate_baseline"]["accepted_for_paper_figures"] is True
+    assert summary["candidate_baseline"]["external_reference_gate"][
+        "publication_gate_passed"
+    ] is True
+    domain = next(axis for axis in summary["axes"] if axis["axis"] == "domain")
+    assert domain["large_external_reference_gate"][
+        "publication_gate_passed"
+    ] is True
+
+
+def test_baseline_is_rejected_when_any_stage_two_axis_fails(tmp_path):
+    levels = _make_complete_stage_two_fixture(tmp_path, passing=False)
+
+    summary = layered_convergence.evaluate_convergence_study(
+        levels,
+        study_id="layered_resistive_offset100_stage2",
+    )
+
+    assert summary["candidate_baseline"]["accepted_for_paper_figures"] is False
+    assert summary["study_passed"] is False
+    time_axis = next(axis for axis in summary["axes"] if axis["axis"] == "time")
+    assert time_axis["passed"] is False
+
+
+def test_stage_two_report_writes_baseline_acceptance_record(tmp_path):
+    levels = _make_complete_stage_two_fixture(tmp_path, passing=True)
+    summary = layered_convergence.evaluate_convergence_study(
+        levels,
+        study_id="layered_resistive_offset100_stage2",
+    )
+    report_dir = tmp_path / "report"
+
+    write_convergence_reports(report_dir, summary)
+
+    acceptance = json.loads(
+        (report_dir / "baseline_acceptance.json").read_text(encoding="utf-8")
+    )
+    assert acceptance["accepted_for_paper_figures"] is True
+    assert acceptance["candidate_baseline"]["mesh_sha256"]
+    assert acceptance["candidate_baseline"]["ksp_output_solve_count"] == 25
+    assert acceptance["candidate_baseline"]["internal_step_count"] == 100
+    assert acceptance["candidate_baseline"]["forward_runtime_seconds"] == 60.0
+    assert [gate["axis"] for gate in acceptance["axis_gates"]] == [
+        "time",
+        "mesh",
+        "domain",
+    ]
+
+
 def _synthetic_report_summary() -> dict:
     times = np.array([1.0e-5, 1.0e-4, 1.0e-3])
     reference = np.array([-1.0, -0.1, -0.01])
