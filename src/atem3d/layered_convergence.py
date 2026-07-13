@@ -76,6 +76,33 @@ class PublicationMemoryContract:
         }
 
 
+def evaluate_publication_live_resources(
+    *,
+    estimated_memory_gb: float,
+    available_memory_gb: float,
+    comsol_processes: list[str] | tuple[str, ...],
+) -> dict:
+    estimate = float(estimated_memory_gb)
+    available = float(available_memory_gb)
+    processes = sorted({str(value) for value in comsol_processes})
+    reasons: list[str] = []
+    if not math.isfinite(estimate) or estimate <= 0.0:
+        reasons.append("invalid_estimated_memory")
+    if not math.isfinite(available) or available < 0.0:
+        reasons.append("invalid_available_memory")
+    elif math.isfinite(estimate) and available < estimate:
+        reasons.append("insufficient_available_memory")
+    if processes:
+        reasons.append("comsol_process_running")
+    return {
+        "passed": not reasons,
+        "estimated_memory_gb": estimate,
+        "available_memory_gb": available,
+        "comsol_processes": processes,
+        "blocking_reasons": reasons,
+    }
+
+
 def build_convergence_levels(
     layered_root: Path,
     output_root: Path,

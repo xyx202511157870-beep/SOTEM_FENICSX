@@ -9,6 +9,7 @@ import os
 import shlex
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,7 @@ from atem3d.layered_convergence import (  # noqa: E402
     build_paper_baseline_convergence_levels,
     build_pipeline_command_arguments,
     convergence_level_manifest,
+    evaluate_publication_live_resources,
     evaluate_convergence_study,
     sha256_file,
     validate_publication_preflight,
@@ -202,6 +204,57 @@ def _require_publication_preflight(
         if locked_sha256 != preflight.get("locked_mesh_sha256"):
             raise ValueError("locked_mesh_hash_mismatch")
     return preflight
+
+
+def _available_physical_memory_gb() -> float:
+    if os.name == "nt":
+        import ctypes
+
+        class MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            raise OSError("GlobalMemoryStatusEx failed")
+        return float(status.ullAvailPhys) / (1024.0**3)
+    pages = os.sysconf("SC_AVPHYS_PAGES")
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    return float(pages * page_size) / (1024.0**3)
+
+
+def _comsol_process_names() -> list[str]:
+    if os.name == "nt":
+        import csv
+        import io
+
+        result = subprocess.run(
+            ["tasklist", "/fo", "csv", "/nh"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="mbcs",
+        )
+        names = [row[0] for row in csv.reader(io.StringIO(result.stdout)) if row]
+    else:
+        result = subprocess.run(
+            ["ps", "-eo", "comm="],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        names = result.stdout.splitlines()
+    return sorted({name.strip() for name in names if "comsol" in name.lower()})
 
 
 def _wsl_path(path: Path) -> str:
@@ -399,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
                     else None
                 ),
             )
+            preflight = None
+            postprocess_partial = False
             if args.mode == "mesh":
                 pipeline_arguments.append("--source-only")
                 if args.force_mesh:
@@ -407,14 +462,16 @@ def main(argv: list[str] | None = None) -> int:
                 if args.study == "paper-baseline" and not args.dry_run:
                     if memory_contract is None:
                         raise AssertionError("paper-baseline memory contract missing")
-                    _require_publication_preflight(level, memory_contract)
+                    preflight = _require_publication_preflight(
+                        level,
+                        memory_contract,
+                    )
                 if (
                     (level.workdir / "verification_data.npz").is_file()
                     and not args.rerun
                 ):
                     print(f"SKIP_COMPLETE={axis_name}/{level.level_id}")
                     continue
-                postprocess_partial = False
                 if checkpoint_matches:
                     target_outputs = _option_integer(
                         pipeline_arguments,
@@ -462,6 +519,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"RUN_LEVEL={level.level_id}")
             print(f"RUN_ID={level.run_id}")
             print(f"RUN_COMMAND={shlex.join(command)}")
+            starts_forward_solve = (
+                args.study == "paper-baseline"
+                and args.mode == "full"
+                and not postprocess_partial
+            )
+            if not args.dry_run and starts_forward_solve:
+                if preflight is None:
+                    raise AssertionError("paper-baseline solve requires preflight")
+                live_check = evaluate_publication_live_resources(
+                    estimated_memory_gb=float(preflight["estimated_memory_gb"]),
+                    available_memory_gb=_available_physical_memory_gb(),
+                    comsol_processes=_comsol_process_names(),
+                )
+                live_check["checked_at_utc"] = datetime.now(timezone.utc).isoformat()
+                _write_json(
+                    level.workdir / "live_resource_check.json",
+                    live_check,
+                )
+                if not live_check["passed"]:
+                    raise ValueError(
+                        "publication live resource gate failed: "
+                        + ", ".join(live_check["blocking_reasons"])
+                    )
             if not args.dry_run:
                 subprocess.run(command, cwd=ROOT, check=True)
             if args.mode == "mesh" and (

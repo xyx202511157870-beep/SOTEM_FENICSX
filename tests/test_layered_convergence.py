@@ -67,6 +67,48 @@ def test_publication_memory_contract_rejects_invalid_values(total, reserve):
         layered_convergence.PublicationMemoryContract(total, reserve)
 
 
+def test_live_resource_gate_passes_exact_available_memory():
+    result = layered_convergence.evaluate_publication_live_resources(
+        estimated_memory_gb=13.25,
+        available_memory_gb=13.25,
+        comsol_processes=[],
+    )
+
+    assert result["passed"] is True
+    assert result["blocking_reasons"] == []
+
+
+@pytest.mark.parametrize(
+    ("available", "processes", "reason"),
+    [
+        (13.24, [], "insufficient_available_memory"),
+        (20.0, ["comsolmphserver.exe"], "comsol_process_running"),
+        (float("nan"), [], "invalid_available_memory"),
+    ],
+)
+def test_live_resource_gate_rejects_unsafe_launch(available, processes, reason):
+    result = layered_convergence.evaluate_publication_live_resources(
+        estimated_memory_gb=13.25,
+        available_memory_gb=available,
+        comsol_processes=processes,
+    )
+
+    assert result["passed"] is False
+    assert reason in result["blocking_reasons"]
+
+
+def test_runner_collects_a_valid_live_resource_snapshot():
+    runner = _load_convergence_runner_module()
+
+    available = runner._available_physical_memory_gb()
+    process_names = runner._comsol_process_names()
+
+    assert np.isfinite(available)
+    assert available > 0.0
+    assert process_names == sorted(set(process_names))
+    assert all("comsol" in name.lower() for name in process_names)
+
+
 def test_paper_baseline_levels_match_approved_stage_two_design(tmp_path):
     levels = layered_convergence.build_paper_baseline_convergence_levels(
         tmp_path / "layered",
