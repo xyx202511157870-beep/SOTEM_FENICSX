@@ -315,7 +315,11 @@ def _replace_option(arguments: list[str], option: str, value: str) -> None:
     arguments[index + 1] = value
 
 
-def build_pipeline_command_arguments(level: ConvergenceLevel) -> list[str]:
+def build_pipeline_command_arguments(
+    level: ConvergenceLevel,
+    *,
+    memory_limit_gb: float | None = None,
+) -> list[str]:
     case = build_layered_cases(
         offsets=(100.0,),
         basement_resistivities=(1000.0,),
@@ -345,6 +349,11 @@ def build_pipeline_command_arguments(level: ConvergenceLevel) -> list[str]:
         "--max-internal-dt-fraction",
         _number(level.max_internal_dt_fraction),
     )
+    if memory_limit_gb is not None:
+        value = float(memory_limit_gb)
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError("memory limit must be finite and positive")
+        _replace_option(arguments, "--memory-limit-gb", _number(value))
     arguments.extend(("--stop-after-outputs", "25"))
     if level.reuse_mesh_path is not None:
         arguments.extend(("--reuse-mesh", str(level.reuse_mesh_path)))

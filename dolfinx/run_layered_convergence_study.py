@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -19,6 +20,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from atem3d.layered_convergence import (  # noqa: E402
+    PublicationMemoryContract,
     build_convergence_levels,
     build_paper_baseline_convergence_levels,
     build_pipeline_command_arguments,
@@ -126,12 +128,20 @@ def _publication_preflight_diagnostics(run_dir: Path) -> dict:
     }
 
 
-def _write_publication_preflight(level) -> dict:
+def _write_publication_preflight(
+    level,
+    memory_contract: PublicationMemoryContract | None = None,
+) -> dict:
     diagnostics = _publication_preflight_diagnostics(level.workdir)
+    memory_limit_gb = (
+        memory_contract.solver_memory_limit_gb
+        if memory_contract is not None
+        else 24.0
+    )
     evidence = validate_publication_preflight(
         mesh_path=level.workdir / "verification_mesh.msh",
         diagnostics=diagnostics,
-        memory_limit_gb=24.0,
+        memory_limit_gb=memory_limit_gb,
     )
     if level.reuse_mesh_path is not None:
         locked_mesh_path = Path(level.reuse_mesh_path)
@@ -149,16 +159,41 @@ def _write_publication_preflight(level) -> dict:
         "run_id": level.run_id,
         **diagnostics,
         **evidence,
+        **(memory_contract.as_dict() if memory_contract is not None else {}),
     }
     _write_json(level.workdir / "preflight.json", payload)
     return payload
 
 
-def _require_publication_preflight(level) -> dict:
+def _require_publication_preflight(
+    level,
+    memory_contract: PublicationMemoryContract,
+) -> dict:
     preflight_path = level.workdir / "preflight.json"
     preflight = _read_json(preflight_path)
     if not isinstance(preflight, dict) or not preflight.get("passed", False):
         raise ValueError(f"passing publication preflight is required: {preflight_path}")
+    for key, expected_value in memory_contract.as_dict().items():
+        try:
+            actual_value = float(preflight[key])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "publication preflight memory contract changed"
+            ) from exc
+        if not math.isclose(
+            actual_value,
+            expected_value,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError("publication preflight memory contract changed")
+    if not math.isclose(
+        float(preflight.get("memory_limit_gb", math.nan)),
+        memory_contract.solver_memory_limit_gb,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+    ):
+        raise ValueError("publication preflight memory contract changed")
     mesh_path = level.workdir / "verification_mesh.msh"
     if sha256_file(mesh_path) != preflight.get("mesh_sha256"):
         raise ValueError(f"publication preflight mesh hash changed: {mesh_path}")
@@ -256,11 +291,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force-mesh", action="store_true")
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--total-memory-gb", type=float, default=20.0)
+    parser.add_argument("--memory-reserve-gb", type=float, default=6.0)
     parser.add_argument(
         "--fenicsx-python",
         default="/home/paidaxin/miniconda3/envs/fenicsx/bin/python",
     )
     args = parser.parse_args(argv)
+    memory_contract = (
+        PublicationMemoryContract(
+            args.total_memory_gb,
+            args.memory_reserve_gb,
+        )
+        if args.study == "paper-baseline"
+        else None
+    )
 
     if args.study == "paper-baseline":
         levels = build_paper_baseline_convergence_levels(
@@ -346,14 +391,23 @@ def main(argv: list[str] | None = None) -> int:
                 and (level.workdir / "forward_checkpoint.npz").is_file()
             )
             _write_json(manifest_path, manifest)
-            pipeline_arguments = build_pipeline_command_arguments(level)
+            pipeline_arguments = build_pipeline_command_arguments(
+                level,
+                memory_limit_gb=(
+                    memory_contract.solver_memory_limit_gb
+                    if memory_contract is not None
+                    else None
+                ),
+            )
             if args.mode == "mesh":
                 pipeline_arguments.append("--source-only")
                 if args.force_mesh:
                     pipeline_arguments.append("--force-mesh")
             else:
                 if args.study == "paper-baseline" and not args.dry_run:
-                    _require_publication_preflight(level)
+                    if memory_contract is None:
+                        raise AssertionError("paper-baseline memory contract missing")
+                    _require_publication_preflight(level, memory_contract)
                 if (
                     (level.workdir / "verification_data.npz").is_file()
                     and not args.rerun
@@ -417,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
                     and (level.workdir / "source_diagnostics.json").is_file()
                 )
             ):
-                _write_publication_preflight(level)
+                _write_publication_preflight(level, memory_contract)
     return 0
 
 

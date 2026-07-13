@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -26,6 +27,15 @@ from atem3d.layered_convergence import (
 
 def _option_value(arguments: list[str], option: str) -> str:
     return arguments[arguments.index(option) + 1]
+
+
+def _load_convergence_runner_module():
+    path = Path("dolfinx/run_layered_convergence_study.py").resolve()
+    spec = importlib.util.spec_from_file_location("convergence_runner_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_publication_memory_contract_defaults_to_20_6_14():
@@ -133,14 +143,18 @@ def test_stage_two_pipeline_arguments_lock_solver_and_observation_contract(tmp_p
         tmp_path / "stage1",
     )["time"][1]
 
-    arguments = build_pipeline_command_arguments(baseline)
+    contract = layered_convergence.PublicationMemoryContract()
+    arguments = build_pipeline_command_arguments(
+        baseline,
+        memory_limit_gb=contract.solver_memory_limit_gb,
+    )
 
     assert _option_value(arguments, "--t-min") == "1e-05"
     assert _option_value(arguments, "--max-internal-dt") == "1.25e-05"
     assert _option_value(arguments, "--max-internal-dt-fraction") == "0.005"
     assert _option_value(arguments, "--rtol") == "1e-07"
     assert _option_value(arguments, "--atol") == "1e-12"
-    assert _option_value(arguments, "--memory-limit-gb") == "24"
+    assert _option_value(arguments, "--memory-limit-gb") == "14"
     assert _option_value(arguments, "--stop-after-outputs") == "25"
 
 
@@ -198,12 +212,12 @@ def test_manifest_records_locked_mesh_path_and_sha256(tmp_path):
         ),
         (
             {
-                "estimated_memory_gb": 24.1,
+                "estimated_memory_gb": 14.1,
                 "source_coverage_passed": True,
                 "receiver_found": True,
                 "source_divergence_passed": True,
             },
-            "24 GB",
+            "14 GB",
         ),
     ],
 )
@@ -215,7 +229,7 @@ def test_preflight_rejects_invalid_publication_mesh(tmp_path, diagnostics, messa
         layered_convergence.validate_publication_preflight(
             mesh_path=mesh,
             diagnostics=diagnostics,
-            memory_limit_gb=24.0,
+            memory_limit_gb=14.0,
         )
 
 
@@ -226,21 +240,53 @@ def test_preflight_accepts_complete_publication_mesh_evidence(tmp_path):
     result = layered_convergence.validate_publication_preflight(
         mesh_path=mesh,
         diagnostics={
-            "estimated_memory_gb": 12.5,
+            "estimated_memory_gb": 14.0,
             "source_coverage_passed": True,
             "receiver_found": True,
             "source_divergence_passed": True,
         },
-        memory_limit_gb=24.0,
+        memory_limit_gb=14.0,
     )
 
     assert result == {
         "passed": True,
         "mesh_path": str(mesh),
         "mesh_sha256": hashlib.sha256(b"mesh").hexdigest(),
-        "estimated_memory_gb": 12.5,
-        "memory_limit_gb": 24.0,
+        "estimated_memory_gb": 14.0,
+        "memory_limit_gb": 14.0,
     }
+
+
+def test_runner_rejects_preflight_from_a_different_memory_contract(tmp_path):
+    runner = _load_convergence_runner_module()
+    level = layered_convergence.build_paper_baseline_convergence_levels(
+        tmp_path / "layered",
+        tmp_path / "stage2",
+        tmp_path / "stage1",
+    )["mesh"][0]
+    level.workdir.mkdir(parents=True)
+    mesh = level.workdir / "verification_mesh.msh"
+    mesh.write_bytes(b"mesh")
+    (level.workdir / "preflight.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "mesh_sha256": hashlib.sha256(b"mesh").hexdigest(),
+                "estimated_memory_gb": 10.0,
+                "memory_limit_gb": 18.0,
+                "total_memory_gb": 24.0,
+                "reserve_memory_gb": 6.0,
+                "solver_memory_limit_gb": 18.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="memory contract changed"):
+        runner._require_publication_preflight(
+            level,
+            layered_convergence.PublicationMemoryContract(),
+        )
 
 
 def test_convergence_levels_match_approved_three_level_design(tmp_path):
@@ -949,6 +995,40 @@ def test_stage_two_dry_run_emits_exactly_five_canonical_commands(tmp_path):
     assert len(pointers) == 9
 
 
+def test_stage_two_custom_memory_contract_reaches_command(tmp_path):
+    output_root = tmp_path / "stage2"
+
+    _run_study_cli(
+        "--study",
+        "paper-baseline",
+        "--output-root",
+        str(output_root),
+        "--layered-root",
+        str(tmp_path / "layered"),
+        "--prior-convergence-root",
+        str(tmp_path / "stage1"),
+        "--axis",
+        "mesh",
+        "--level",
+        "coarse",
+        "--mode",
+        "full",
+        "--total-memory-gb",
+        "19",
+        "--memory-reserve-gb",
+        "5",
+        "--dry-run",
+    )
+
+    command = (
+        output_root
+        / "runs"
+        / "mesh_coarse_12km_dt005_mesh12_9"
+        / "command.txt"
+    ).read_text(encoding="utf-8")
+    assert "--memory-limit-gb 14" in command
+
+
 def test_stage_two_shared_baseline_is_processed_once(tmp_path):
     output_root = tmp_path / "stage2"
 
@@ -1048,6 +1128,10 @@ def test_stage_two_mesh_mode_writes_strict_preflight_from_source_diagnostics(tmp
     assert preflight["source_coverage_passed"] is True
     assert preflight["receiver_found"] is True
     assert preflight["source_divergence_passed"] is True
+    assert preflight["total_memory_gb"] == 20.0
+    assert preflight["reserve_memory_gb"] == 6.0
+    assert preflight["solver_memory_limit_gb"] == 14.0
+    assert preflight["memory_limit_gb"] == 14.0
     assert preflight["mesh_sha256"] == hashlib.sha256(
         locked_mesh.read_bytes()
     ).hexdigest()
