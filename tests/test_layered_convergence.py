@@ -28,6 +28,35 @@ def _option_value(arguments: list[str], option: str) -> str:
     return arguments[arguments.index(option) + 1]
 
 
+def test_publication_memory_contract_defaults_to_20_6_14():
+    contract = layered_convergence.PublicationMemoryContract()
+
+    assert contract.total_memory_gb == 20.0
+    assert contract.reserve_memory_gb == 6.0
+    assert contract.solver_memory_limit_gb == 14.0
+    assert contract.as_dict() == {
+        "total_memory_gb": 20.0,
+        "reserve_memory_gb": 6.0,
+        "solver_memory_limit_gb": 14.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("total", "reserve"),
+    [
+        (float("nan"), 6.0),
+        (20.0, float("inf")),
+        (0.0, 0.0),
+        (20.0, -1.0),
+        (20.0, 20.0),
+        (20.0, 21.0),
+    ],
+)
+def test_publication_memory_contract_rejects_invalid_values(total, reserve):
+    with pytest.raises(ValueError, match="memory contract"):
+        layered_convergence.PublicationMemoryContract(total, reserve)
+
+
 def test_paper_baseline_levels_match_approved_stage_two_design(tmp_path):
     levels = layered_convergence.build_paper_baseline_convergence_levels(
         tmp_path / "layered",
@@ -49,7 +78,7 @@ def test_paper_baseline_levels_match_approved_stage_two_design(tmp_path):
     ] == [
         ("small", 6000.0, 6000.0, 600.0),
         ("standard", 12000.0, 12000.0, 1200.0),
-        ("large", 24000.0, 24000.0, 2400.0),
+        ("large", 18000.0, 18000.0, 1800.0),
     ]
     assert [
         (level.source_mesh_size, level.receiver_mesh_size)
@@ -63,7 +92,7 @@ def test_paper_baseline_levels_match_approved_stage_two_design(tmp_path):
     } == {
         "baseline_12km_dt005_mesh8_6",
         "time_fine_12km_dt0025_mesh8_6",
-        "domain_large_24km_dt005_mesh8_6",
+        "domain_large_18km_dt005_mesh8_6",
         "mesh_coarse_12km_dt005_mesh12_9",
         "mesh_fine_12km_dt005_mesh6_4p5",
     }
@@ -687,7 +716,7 @@ def _make_complete_stage_two_fixture(tmp_path, *, passing: bool):
         "mesh_coarse_12km_dt005_mesh12_9": 1.02,
         "mesh_fine_12km_dt005_mesh6_4p5": 1.0,
         "existing_6km_dt005": 1.04,
-        "domain_large_24km_dt005_mesh8_6": 1.0,
+        "domain_large_18km_dt005_mesh8_6": 1.0,
     }
     written: set[str] = set()
     for axis_levels in levels.values():
@@ -700,7 +729,7 @@ def _make_complete_stage_two_fixture(tmp_path, *, passing: bool):
                 response_scale=scales[level.run_id],
                 external_error=(
                     0.008
-                    if level.run_id == "domain_large_24km_dt005_mesh8_6"
+                    if level.run_id == "domain_large_18km_dt005_mesh8_6"
                     else 0.005
                 ),
             )

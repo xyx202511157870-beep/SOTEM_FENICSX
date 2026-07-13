@@ -45,6 +45,37 @@ class ConvergenceResponse:
     reference: np.ndarray
 
 
+@dataclass(frozen=True)
+class PublicationMemoryContract:
+    total_memory_gb: float = 20.0
+    reserve_memory_gb: float = 6.0
+
+    def __post_init__(self) -> None:
+        total = float(self.total_memory_gb)
+        reserve = float(self.reserve_memory_gb)
+        if (
+            not math.isfinite(total)
+            or total <= 0.0
+            or not math.isfinite(reserve)
+            or reserve < 0.0
+            or reserve >= total
+        ):
+            raise ValueError(
+                "memory contract requires finite total > reserve >= 0"
+            )
+
+    @property
+    def solver_memory_limit_gb(self) -> float:
+        return float(self.total_memory_gb) - float(self.reserve_memory_gb)
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            "total_memory_gb": float(self.total_memory_gb),
+            "reserve_memory_gb": float(self.reserve_memory_gb),
+            "solver_memory_limit_gb": self.solver_memory_limit_gb,
+        }
+
+
 def build_convergence_levels(
     layered_root: Path,
     output_root: Path,
@@ -224,11 +255,11 @@ def build_paper_baseline_convergence_levels(
             level(
                 "domain",
                 "large",
-                "domain_large_24km_dt005_mesh8_6",
-                x_extent=24000.0,
-                y_extent=24000.0,
-                earth_depth=24000.0,
-                air_height=2400.0,
+                "domain_large_18km_dt005_mesh8_6",
+                x_extent=18000.0,
+                y_extent=18000.0,
+                earth_depth=18000.0,
+                air_height=1800.0,
             ),
         ),
     }
