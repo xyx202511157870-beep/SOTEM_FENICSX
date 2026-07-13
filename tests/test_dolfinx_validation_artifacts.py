@@ -21,12 +21,35 @@ def _load_pipeline_module():
     return module
 
 
+def test_pipeline_adds_project_src_to_sys_path_when_loaded_directly():
+    root = Path(__file__).resolve().parents[1]
+    src = root / "src"
+    module_path = root / "dolfinx" / "sotem_pipeline.py"
+    original = list(sys.path)
+    try:
+        sys.path[:] = [
+            item
+            for item in sys.path
+            if Path(item or ".").resolve() not in {root.resolve(), src.resolve()}
+        ]
+        spec = importlib.util.spec_from_file_location("sotem_pipeline_sys_path_test", module_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec is not None
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        assert str(src) in sys.path
+    finally:
+        sys.path[:] = original
+
+
 def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path)
     times = np.array([1.0e-5, 1.0e-4])
-    ref = np.array([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0]])
-    pred = np.array([[1.01, 1.0e-16, 2.02], [2.02, 2.0e-16, 1.01]])
+    ref = np.array([[1.0, 1.0e-14, 2.0], [2.0, 2.0e-14, 1.0]])
+    pred = np.array([[1.01, 1.01e-14, 2.02], [2.02, 2.02e-14, 1.01]])
     components = ["Ex", "Ey", "dBzdt"]
 
     summary = sp.write_validation_artifacts(
@@ -183,11 +206,255 @@ def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     assert float(diagnostic_rows[1]["selected_center_z_mean"]) == pytest.approx(-0.05)
 
 
+def test_write_validation_artifacts_uses_configured_time_window_for_acceptance(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, t_min=1.0e-5, t_max=1.0e-4)
+    times = np.array([1.0e-5, 1.0e-4])
+    ref = np.array([[1.0, 0.0, 2.0], [0.5, 0.0, 1.0]])
+    pred = ref.copy()
+
+    summary = sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        validation_scope="corrected_model_full",
+    )
+
+    assert summary["acceptance_status"]["required_time_max"] == pytest.approx(1.0e-4)
+    assert "time_window_not_covered" not in summary["acceptance_status"]["blocking_reasons"]
+
+
+def test_local_lsq_side_modes_filter_interface_candidates_by_z_side():
+    sp = _load_pipeline_module()
+    values = np.array(
+        [
+            [10.0, 0.0, 100.0],
+            [11.0, 0.0, 101.0],
+            [20.0, 0.0, 200.0],
+            [21.0, 0.0, 201.0],
+        ],
+        dtype=float,
+    )
+    centers = np.array(
+        [
+            [-1.0, 0.0, -2.0],
+            [1.0, 0.0, -1.0],
+            [-1.0, 0.0, 1.0],
+            [1.0, 0.0, 2.0],
+        ],
+        dtype=float,
+    )
+    point = np.array([0.0, 0.0, 0.0], dtype=float)
+
+    earth, earth_meta = sp._collapse_receiver_cell_candidates_with_metadata(
+        values,
+        "local_lsq_earth",
+        centers=centers,
+        point=point,
+    )
+    air, air_meta = sp._collapse_receiver_cell_candidates_with_metadata(
+        values,
+        "local_lsq_air",
+        centers=centers,
+        point=point,
+    )
+
+    expected_earth, _ = sp._local_lsq_receiver_value(values[:2], centers[:2], point)
+    expected_air, _ = sp._local_lsq_receiver_value(values[2:], centers[2:], point)
+    assert earth == pytest.approx(expected_earth)
+    assert air == pytest.approx(expected_air)
+    assert earth_meta["local_lsq_sample_count"] == 2
+    assert air_meta["local_lsq_sample_count"] == 2
+    assert earth_meta["candidate_count"] == 2
+    assert air_meta["candidate_count"] == 2
+    assert earth_meta["candidate_center_z_max"] < 0.0
+    assert air_meta["candidate_center_z_min"] > 0.0
+
+
+def test_local_lsq_interface_averages_two_sided_interface_extrapolations():
+    sp = _load_pipeline_module()
+    values = np.array(
+        [
+            [10.0, 0.0, 100.0],
+            [11.0, 0.0, 101.0],
+            [20.0, 0.0, 200.0],
+            [21.0, 0.0, 201.0],
+        ],
+        dtype=float,
+    )
+    centers = np.array(
+        [
+            [-1.0, 0.0, -2.0],
+            [1.0, 0.0, -1.0],
+            [-1.0, 0.0, 1.0],
+            [1.0, 0.0, 2.0],
+        ],
+        dtype=float,
+    )
+    point = np.array([0.0, 0.0, 0.0], dtype=float)
+
+    interface, metadata = sp._collapse_receiver_cell_candidates_with_metadata(
+        values,
+        "local_lsq_interface",
+        centers=centers,
+        point=point,
+    )
+
+    earth, _ = sp._local_lsq_receiver_value(values[:2], centers[:2], point)
+    air, _ = sp._local_lsq_receiver_value(values[2:], centers[2:], point)
+    np.testing.assert_allclose(interface, 0.5 * (earth + air), rtol=1.0e-12, atol=1.0e-12)
+    assert metadata["local_lsq_earth_sample_count"] == 2
+    assert metadata["local_lsq_air_sample_count"] == 2
+    assert metadata["local_lsq_sample_count"] == 4
+    assert metadata["candidate_count"] == 4
+
+
+def test_write_validation_artifacts_persists_solver_diagnostics(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5])
+    ref = np.array([[1.0, 0.0, 2.0]])
+    pred = ref.copy()
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        solver_diagnostics={
+            "primary_secondary_diagnostics": {
+                "dc_secondary_receiver": {"Ex": 0.25},
+                "secondary_receiver_rows": [{"time_value": 1.0e-5, "Ex": 0.1}],
+            }
+        },
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["primary_secondary_diagnostics"]["dc_secondary_receiver"]["Ex"] == pytest.approx(0.25)
+    assert diagnostics["primary_secondary_diagnostics"]["secondary_receiver_rows"][0]["Ex"] == pytest.approx(0.1)
+
+
+def test_save_npz_can_persist_secondary_decomposition(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    components = ["Ex", "Ey", "dBzdt"]
+    times = np.asarray([1.0e-5, 2.0e-5])
+    fem = np.asarray([[11.0, 0.0, 4.0], [8.0, 0.0, 2.0]])
+    ref = np.asarray([[10.0, 0.0, 5.0], [7.0, 0.0, 3.0]])
+    noip = np.asarray([[9.0, 0.0, 4.5], [6.5, 0.0, 2.5]])
+    errors = sp.compute_error(fem, ref, components)
+
+    sp._save_npz(
+        config,
+        {
+            "times": times,
+            "data": fem,
+            "components": components,
+            "secondary_decomposition": {
+                "noip_ref": noip,
+                "empymod_noip_ref": noip,
+                "solver_primary_ref": noip + 1.0,
+                "secondary_fem": fem - noip,
+                "secondary_ref": ref - noip,
+                "secondary_fem_vs_empymod_noip": fem - noip,
+                "secondary_ref_vs_empymod_noip": ref - noip,
+            },
+        },
+        {"data": ref},
+        errors,
+    )
+
+    payload = np.load(config.output_npz())
+    np.testing.assert_allclose(payload["noip_ref"], noip)
+    np.testing.assert_allclose(payload["empymod_noip_ref"], noip)
+    np.testing.assert_allclose(payload["solver_primary_ref"], noip + 1.0)
+    np.testing.assert_allclose(payload["secondary_fem"], fem - noip)
+    np.testing.assert_allclose(payload["secondary_ref"], ref - noip)
+    np.testing.assert_allclose(payload["secondary_fem_vs_empymod_noip"], fem - noip)
+    np.testing.assert_allclose(payload["secondary_ref_vs_empymod_noip"], ref - noip)
+
+
+def test_attach_secondary_decomposition_preserves_empymod_noip_and_solver_primary_rows():
+    sp = _load_pipeline_module()
+    fem = np.asarray([[11.0, 0.0, 4.0], [8.0, 0.0, 2.0]])
+    ref = np.asarray([[10.0, 0.0, 5.0], [7.0, 0.0, 3.0]])
+    recomputed_noip = np.asarray([[1.0, 0.0, 100.0], [1.0, 0.0, 100.0]])
+    solver_primary = np.asarray([[9.0, 0.0, 4.5], [6.5, 0.0, 2.5]])
+    fem_result = {
+        "data": fem,
+        "components": ["Ex", "Ey", "dBzdt"],
+        "primary_secondary_diagnostics": {
+            "receiver_decomposition_rows": [
+                {
+                    "components": ["Ex", "Ey", "dBzdt"],
+                    "primary_row": solver_primary[0].tolist(),
+                },
+                {
+                    "components": ["Ex", "Ey", "dBzdt"],
+                    "primary_row": solver_primary[1].tolist(),
+                },
+            ]
+        },
+    }
+
+    sp._attach_secondary_decomposition(
+        fem_result,
+        {"data": ref},
+        {"data": recomputed_noip},
+    )
+
+    decomposition = fem_result["secondary_decomposition"]
+    np.testing.assert_allclose(decomposition["noip_ref"], recomputed_noip)
+    np.testing.assert_allclose(decomposition["empymod_noip_ref"], recomputed_noip)
+    np.testing.assert_allclose(decomposition["solver_primary_ref"], solver_primary)
+    np.testing.assert_allclose(decomposition["secondary_fem"], fem - solver_primary)
+    np.testing.assert_allclose(decomposition["secondary_ref"], ref - solver_primary)
+    np.testing.assert_allclose(decomposition["secondary_fem_vs_empymod_noip"], fem - recomputed_noip)
+    np.testing.assert_allclose(decomposition["secondary_ref_vs_empymod_noip"], ref - recomputed_noip)
+
+
+def test_write_validation_artifacts_sanitizes_non_json_solver_diagnostics(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5])
+    ref = np.array([[1.0, 0.0, 2.0]])
+    pred = ref.copy()
+    marker = object()
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        solver_diagnostics={"primary_secondary_diagnostics": {"non_json": marker}},
+    )
+
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["primary_secondary_diagnostics"]["non_json"] == "<object>"
+
+
 def test_dolfinx_validation_artifacts_requires_internal_grid_evidence_for_final_acceptance(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path)
-    times = np.array([1.0e-5, 1.0e-3, 1.0])
-    ref = np.array([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0], [0.5, 0.0, 0.25]])
+    times = np.array([1.0e-6, 1.0e-5, 1.0e-3, 1.0])
+    ref = np.array(
+        [
+            [0.5, 0.0, 3.0],
+            [1.0, 0.0, 2.0],
+            [2.0, 0.0, 1.0],
+            [0.5, 0.0, 0.25],
+        ]
+    )
     pred = ref * np.array([[1.01, 1.0, 0.99]])
 
     summary = sp.write_validation_artifacts(
@@ -208,6 +475,210 @@ def test_dolfinx_validation_artifacts_requires_internal_grid_evidence_for_final_
     assert "internal_time_grid_not_verified" in report["acceptance_status"]["blocking_reasons"]
     assert diagnostics["acceptance_status"]["final_acceptance_passed"] is False
     assert summary["final_acceptance_passed"] is False
+
+
+def test_validation_artifacts_use_solver_diagnostics_for_final_acceptance(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-6, 1.0e-5, 1.0e-3, 1.0])
+    ref = np.array(
+        [
+            [0.5, 0.0, 3.0],
+            [1.0, 0.0, 2.0],
+            [2.0, 0.0, 1.0],
+            [0.5, 0.0, 0.25],
+        ]
+    )
+    pred = ref.copy()
+
+    summary = sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+        validation_scope="corrected_model_full",
+        solver_diagnostics={
+            "primary_secondary_internal_time_grid": {
+                "contains_turnoff_start": True,
+                "contains_turnoff_end": True,
+                "contains_all_observation_outputs": True,
+                "last_output_internal_time_s": 1.0,
+            }
+        },
+    )
+
+    report = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+    assert summary["final_acceptance_passed"] is True
+    assert report["acceptance_status"]["internal_time_grid_verified"] is True
+    assert report["acceptance_status"]["final_acceptance_passed"] is True
+    assert diagnostics["acceptance_status"]["final_acceptance_passed"] is True
+
+
+def test_ip_final_acceptance_rejects_identical_prediction_reference_without_solver_evidence(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    ref = np.array([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0], [0.5, 0.0, 0.25]])
+    pred = ref.copy()
+
+    summary = sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="ip",
+        reference_type="empymod",
+        validation_scope="corrected_model_full",
+        solver_diagnostics={
+            "primary_secondary_internal_time_grid": {
+                "contains_turnoff_start": True,
+                "contains_turnoff_end": True,
+                "contains_all_observation_outputs": True,
+                "last_output_internal_time_s": 1.0,
+            }
+        },
+    )
+
+    report = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((tmp_path / "diagnostics.json").read_text(encoding="utf-8"))
+
+    assert summary["final_acceptance_passed"] is False
+    assert report["acceptance_status"]["final_acceptance_passed"] is False
+    assert "missing_primary_secondary_solver_evidence" in report["acceptance_status"]["blocking_reasons"]
+    assert diagnostics["acceptance_status"]["final_acceptance_passed"] is False
+
+
+def test_ip_final_acceptance_rejects_cole_cole_primary_zero_secondary_shortcut(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5, 1.0e-3, 1.0])
+    ref = np.array([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0], [0.5, 0.0, 0.25]])
+    pred = ref.copy()
+
+    summary = sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="ip",
+        reference_type="empymod",
+        validation_scope="corrected_model_full",
+        solver_diagnostics={
+            "primary_secondary_diagnostics": {
+                "contrast_is_zero": True,
+                "primary_reference_mode": "cole-cole",
+                "primary_secondary_internal_time_grid": {
+                    "contains_turnoff_start": True,
+                    "contains_turnoff_end": True,
+                    "contains_all_observation_outputs": True,
+                    "last_output_internal_time_s": 1.0,
+                },
+            }
+        },
+    )
+
+    report = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+
+    assert summary["final_acceptance_passed"] is False
+    assert report["acceptance_status"]["final_acceptance_passed"] is False
+    assert "missing_primary_secondary_solver_evidence" in report["acceptance_status"]["blocking_reasons"]
+
+
+def test_validation_summary_documents_strict_pointwise_error_not_peak_normalized(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5, 1.0e-4])
+    ref = np.array([[100.0], [1.0]])
+    pred = np.array([[100.0], [2.0]])
+
+    summary = sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex"],
+        config,
+        case_type="noip",
+        reference_type="empymod",
+    )
+
+    report = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    rows = list(csv.DictReader((tmp_path / "errors.csv").open("r", encoding="utf-8", newline="")))
+
+    assert rows[1]["ordinary_relative_error"] == "1.0"
+    assert float(rows[1]["peak_normalized_error"]) == pytest.approx(0.01)
+    assert rows[1]["pass_5pct"] == "False"
+    assert summary["pass_all_components"] is False
+    assert report["pass_all_components"] is False
+    assert report["acceptance_error_metric"] == "ordinary_relative_error"
+    assert report["error_definition"] == "pointwise_relative_error = abs(pred - ref) / abs(ref)"
+
+
+def test_validation_artifacts_write_secondary_receiver_diagnostics_csv(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    times = np.array([1.0e-5, 1.0e-4, 1.0])
+    ref = np.array([[1.0, 0.0, 2.0], [0.5, 0.0, 1.0], [0.25, 0.0, 0.5]])
+    pred = ref.copy()
+
+    sp.write_validation_artifacts(
+        times,
+        pred,
+        ref,
+        ["Ex", "Ey", "dBzdt"],
+        config,
+        case_type="ip",
+        reference_type="empymod",
+        solver_diagnostics={
+            "primary_secondary_diagnostics": {
+                "primary_secondary_internal_time_grid": {
+                    "contains_turnoff_start": True,
+                    "contains_turnoff_end": True,
+                    "contains_all_observation_outputs": True,
+                    "last_output_internal_time_s": 1.0,
+                },
+                "primary_secondary_step_equation": {"solver_mode": "primary_secondary"},
+                "secondary_receiver_rows": [
+                    {
+                        "time_value": 1.0e-5,
+                        "dt": 2.0e-6,
+                        "Ex": 1.0,
+                        "Ey": 0.0,
+                        "Hz": np.nan,
+                        "dBzdt": 4.0,
+                        "dBzdt_curl": 4.0,
+                        "dBzdt_candidate_count": 3,
+                        "dBzdt_candidate_min": 2.0,
+                        "dBzdt_candidate_median": 4.0,
+                        "dBzdt_candidate_mean": 5.0,
+                        "dBzdt_candidate_max": 9.0,
+                        "dBzdt_candidate_std": 2.5,
+                    }
+                ],
+            }
+        },
+    )
+
+    rows = list(
+        csv.DictReader(
+            (tmp_path / "secondary_receiver_diagnostics.csv").open(
+                "r",
+                encoding="utf-8",
+                newline="",
+            )
+        )
+    )
+
+    assert rows[0]["time_value"] == "1.0000000000000001e-05"
+    assert rows[0]["dBzdt"] == "4.0000000000000000e+00"
+    assert rows[0]["dBzdt_candidate_count"] == "3"
+    assert rows[0]["dBzdt_candidate_min"] == "2.0000000000000000e+00"
+    assert rows[0]["dBzdt_candidate_max"] == "9.0000000000000000e+00"
 
 
 def test_validation_artifacts_report_physical_pass_for_weak_horizontal_component(tmp_path):
@@ -750,6 +1221,169 @@ def test_receiver_candidate_collapse_reports_geometric_metadata():
     assert metadata["selected_center_z"] == pytest.approx(-0.05)
 
 
+def test_receiver_candidate_collapse_local_lsq_recovers_linear_field():
+    sp = _load_pipeline_module()
+    point = np.asarray([0.25, -0.5, -0.1])
+    centers = np.asarray(
+        [
+            [-1.0, -1.0, -0.4],
+            [1.0, -1.0, -0.2],
+            [-1.0, 1.0, -0.3],
+            [1.0, 1.0, -0.5],
+            [0.0, 0.0, -1.0],
+        ],
+        dtype=float,
+    )
+
+    def field(xyz):
+        x, y, z = xyz
+        return np.asarray(
+            [
+                2.0 + 0.5 * x - 0.25 * y + 0.1 * z,
+                -1.0 + 0.2 * x + 0.4 * y - 0.3 * z,
+                0.5 - 0.1 * x + 0.05 * y + 0.2 * z,
+            ],
+            dtype=float,
+        )
+
+    values = np.vstack([field(center) for center in centers])
+
+    collapsed, metadata = sp._collapse_receiver_cell_candidates_with_metadata(
+        values,
+        "local_lsq",
+        centers=centers,
+        point=point,
+    )
+
+    np.testing.assert_allclose(collapsed, field(point), rtol=1.0e-12, atol=1.0e-12)
+    assert metadata["selected_index"] is None
+    assert metadata["candidate_count"] == centers.shape[0]
+    assert metadata["local_lsq_sample_count"] == centers.shape[0]
+    assert metadata["local_lsq_rank"] == 4
+    assert metadata["local_lsq_residual_norm"] < 1.0e-12
+
+
+def test_receiver_candidate_collapse_local_lsq_requires_point_and_centers():
+    sp = _load_pipeline_module()
+    values = np.asarray([[1.0, 2.0, 3.0]])
+
+    with pytest.raises(ValueError, match="requires candidate cell centers"):
+        sp._collapse_receiver_cell_candidates_with_metadata(values, "local_lsq", point=[0.0, 0.0, 0.0])
+
+    with pytest.raises(ValueError, match="requires the receiver point"):
+        sp._collapse_receiver_cell_candidates_with_metadata(
+            values,
+            "local_lsq",
+            centers=np.asarray([[0.0, 0.0, 0.0]]),
+        )
+
+
+def test_local_lsq_receiver_sample_cells_prefers_same_side_nearest_cells():
+    sp = _load_pipeline_module()
+    centers = np.asarray(
+        [
+            [0.0, 0.0, -0.2],
+            [1.0, 0.0, -0.3],
+            [0.0, 1.0, -0.4],
+            [1.0, 1.0, -0.5],
+            [0.0, 0.0, 0.2],
+            [10.0, 0.0, -0.2],
+        ],
+        dtype=float,
+    )
+
+    cells = sp._local_lsq_receiver_sample_cells(
+        centers,
+        point=[0.0, 0.0, -0.1],
+        radius=2.0,
+        max_samples=4,
+        min_samples=4,
+    )
+
+    np.testing.assert_array_equal(cells, np.asarray([0, 1, 2, 3], dtype=np.int32))
+
+
+def test_local_lsq_receiver_radius_uses_configured_mesh_size_factor():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver_mesh_size=20.0,
+        receiver_average_radius=2.0,
+        receiver_local_lsq_radius_factor=1.25,
+    )
+
+    assert sp._local_lsq_receiver_radius(config) == 25.0
+
+
+def test_local_lsq_receiver_radius_auto_uses_broader_dbdt_support_on_refined_meshes():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver_mesh_size=10.0,
+        receiver_average_radius=2.0,
+        receiver_local_lsq_radius_factor=2.0,
+    )
+
+    assert sp._local_lsq_receiver_radius(config, quantity="field") == 20.0
+    assert sp._local_lsq_receiver_radius(config, quantity="dbdt") == 35.0
+
+
+def test_local_lsq_receiver_max_samples_auto_uses_broad_dbdt_support_on_refined_meshes():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver_local_lsq_max_samples=0,
+        magnetic_dbdt_evaluation_mode="local_lsq",
+    )
+
+    assert sp._local_lsq_receiver_max_samples(config, quantity="dbdt") == 1024
+    assert sp._local_lsq_receiver_max_samples(config, quantity="electric") == 32
+
+
+def test_local_lsq_receiver_max_samples_explicit_value_overrides_auto():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        receiver_local_lsq_max_samples=96,
+        magnetic_dbdt_evaluation_mode="local_lsq",
+    )
+
+    assert sp._local_lsq_receiver_max_samples(config, quantity="dbdt") == 96
+    assert sp._local_lsq_receiver_max_samples(config, quantity="electric") == 96
+
+
+def test_h_surface_dbdt_same_mode_resolves_to_interface_lsq():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        formulation="h",
+        receiver=(0.0, -50.0, 0.0),
+        receiver_evaluation_mode="mean",
+        magnetic_dbdt_evaluation_mode="same",
+    )
+
+    assert sp._resolved_magnetic_dbdt_evaluation_mode(config, "mean") == "local_lsq_interface"
+
+
+def test_h_subsurface_dbdt_same_mode_keeps_receiver_mode():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        formulation="h",
+        receiver=(0.0, -50.0, -0.1),
+        receiver_evaluation_mode="mean",
+        magnetic_dbdt_evaluation_mode="same",
+    )
+
+    assert sp._resolved_magnetic_dbdt_evaluation_mode(config, "mean") == "mean"
+
+
+def test_explicit_magnetic_dbdt_mode_overrides_h_surface_default():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        formulation="h",
+        receiver=(0.0, -50.0, 0.0),
+        receiver_evaluation_mode="mean",
+        magnetic_dbdt_evaluation_mode="nearest_center",
+    )
+
+    assert sp._resolved_magnetic_dbdt_evaluation_mode(config, "mean") == "nearest_center"
+
+
 def test_receiver_sample_aggregation_reports_candidate_geometry_stats():
     sp = _load_pipeline_module()
     sample_values = [
@@ -778,3 +1412,50 @@ def test_receiver_sample_aggregation_reports_candidate_geometry_stats():
     assert stats["candidate_center_z_min"] == pytest.approx(-1.0)
     assert stats["candidate_center_z_max"] == pytest.approx(-0.25)
     assert stats["selected_center_z_mean"] == pytest.approx((-1.0 - 0.25) / 2.0)
+
+
+def test_local_lsq_interface_aggregation_reports_side_sample_counts():
+    sp = _load_pipeline_module()
+    sample_values = [
+        np.asarray(
+            [
+                [0.0, 0.0, 11.0],
+                [0.0, 0.0, 11.0],
+                [0.0, 0.0, 11.0],
+                [0.0, 0.0, 11.0],
+                [0.0, 0.0, 21.0],
+                [0.0, 0.0, 21.0],
+                [0.0, 0.0, 21.0],
+                [0.0, 0.0, 21.0],
+            ]
+        )
+    ]
+    sample_centers = [
+        np.asarray(
+            [
+                [-1.0, 0.0, -1.0],
+                [1.0, 0.0, -1.0],
+                [0.0, -1.0, -1.0],
+                [0.0, 1.0, -1.0],
+                [-1.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, -1.0, 1.0],
+                [0.0, 1.0, 1.0],
+            ]
+        )
+    ]
+    sample_points = [np.asarray([0.0, 0.0, 0.0])]
+
+    _aggregated, stats = sp._aggregate_receiver_sample_values_with_metadata(
+        sample_values,
+        "local_lsq_interface",
+        sample_centers=sample_centers,
+        sample_points=sample_points,
+    )
+
+    assert stats["local_lsq_earth_sample_count_mean"] == pytest.approx(4.0)
+    assert stats["local_lsq_air_sample_count_mean"] == pytest.approx(4.0)
+    # The side values are the LSQ extrapolations at the receiver point, not
+    # averages on the same-side sample planes.
+    assert stats["local_lsq_earth_value_z_mean"] == pytest.approx(5.5)
+    assert stats["local_lsq_air_value_z_mean"] == pytest.approx(10.5)

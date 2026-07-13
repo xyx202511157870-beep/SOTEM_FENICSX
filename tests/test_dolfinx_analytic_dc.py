@@ -287,10 +287,10 @@ def test_plot_verification_supports_hz_component(tmp_path):
     assert config.output_png().exists()
 
 
-def test_compute_error_default_floor_matches_validation_artifact_policy():
+def test_compute_error_uses_pointwise_relative_error_not_floor_denominator():
     sp = _load_pipeline_module()
-    fem = np.asarray([[10.0], [1.1e-5]])
-    ref = np.asarray([[10.0], [1.0e-5]])
+    fem = np.asarray([[10.0], [1.1e-12]])
+    ref = np.asarray([[10.0], [1.0e-12]])
 
     errors = sp.compute_error(fem, ref, ["Ex"])
 
@@ -306,7 +306,8 @@ def test_compute_error_uses_component_minimum_floor_for_near_zero_electric_field
     errors = sp.compute_error(fem, ref, ["Ey"])
 
     assert errors["Ey"]["floor"] == pytest.approx(1.0e-14)
-    np.testing.assert_allclose(errors["Ey"]["relative"], [1.0e8, 2.0e8])
+    assert errors["Ey"]["relative"][0] == np.inf
+    assert errors["Ey"]["relative"][1] == pytest.approx(2.0e15)
 
 
 def test_receiver_sampling_points_point_receiver_uses_center_only():
@@ -389,3 +390,24 @@ def test_debye_backward_euler_coefficients_are_dimensionless():
     assert alpha == pytest.approx(4.0 / 5.0)
     assert beta == pytest.approx(1.0 / 5.0)
     assert alpha + beta == pytest.approx(1.0)
+
+
+def test_debye_exponential_coefficients_use_exact_constant_field_update():
+    sp = _load_pipeline_module()
+    term = sp.DebyeTerm(delta_sigma=2.0, tau=4.0)
+
+    alpha, beta = sp._debye_time_coefficients(term, dt=1.0, scheme="exponential")
+
+    assert alpha == pytest.approx(np.exp(-0.25))
+    assert beta == pytest.approx(1.0 - np.exp(-0.25))
+    assert alpha + beta == pytest.approx(1.0)
+
+
+def test_debye_time_coefficients_default_to_backward_euler():
+    sp = _load_pipeline_module()
+    term = sp.DebyeTerm(delta_sigma=2.0, tau=4.0)
+
+    alpha, beta = sp._debye_time_coefficients(term, dt=1.0, scheme="backward_euler")
+
+    assert alpha == pytest.approx(4.0 / 5.0)
+    assert beta == pytest.approx(1.0 / 5.0)

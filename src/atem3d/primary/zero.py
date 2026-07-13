@@ -22,6 +22,10 @@ class ZeroPrimaryProvider(PrimaryFieldProvider):
         points = as_points(receivers, "receivers")
         return np.zeros((points.shape[0], 3), dtype=float)
 
+    def get_receiver_H(self, t: float, receivers) -> np.ndarray:
+        points = as_points(receivers, "receivers")
+        return np.zeros((points.shape[0], 3), dtype=float)
+
     def get_receiver_dBdt(self, t: float, receivers) -> np.ndarray:
         points = as_points(receivers, "receivers")
         return np.zeros((points.shape[0], 3), dtype=float)

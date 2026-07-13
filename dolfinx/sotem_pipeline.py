@@ -11,18 +11,26 @@ from __future__ import annotations
 
 import argparse
 import bisect
+from contextlib import contextmanager, nullcontext
 import csv
 from dataclasses import dataclass, field, replace
+import functools
 import importlib
 import json
 import math
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
 from typing import Any
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_SRC = PROJECT_ROOT / "src"
+if PROJECT_SRC.is_dir() and str(PROJECT_SRC) not in sys.path:
+    sys.path.insert(0, str(PROJECT_SRC))
 
 CORE_MODULES = ("dolfinx", "ufl", "basix", "mpi4py", "petsc4py")
 PIP_MODULES = {
@@ -55,6 +63,7 @@ class PipelineConfig:
     workdir: Path = field(default_factory=lambda: Path.cwd())
     msh_name: str = "verification_mesh.msh"
     force_mesh: bool = False
+    mesh_source_path: Path | None = None
 
     x_extent: float = 25_000.0
     y_extent: float = 25_000.0
@@ -77,9 +86,13 @@ class PipelineConfig:
     receiver_mesh_size: float = 10.0
     receiver_anchor_mesh_size: float = 0.0
     receiver_refinement_radius: float = 60.0
+    receiver_local_lsq_radius_factor: float = 2.0
+    receiver_local_lsq_max_samples: int = 0
+    far_field_mesh_size: float = 3000.0
     outer_boundary_mode: str = "pec"  # pec, natural, robin
     outer_boundary_robin_scale: float = 1.0
     diffusion_refinement_factor: float = 0.0
+    diffusion_refinement_top: float | None = None
     diffusion_refinement_mesh_size: float = 80.0
     sponge_strength: float = 0.0
     sponge_thickness: float = 0.0
@@ -101,6 +114,10 @@ class PipelineConfig:
     t_min: float = 1.0e-6
     t_max: float = 1.0
     time_growth: float = 1.05
+    max_internal_dt: float = 0.0
+    max_internal_dt_fraction: float = 0.0
+    max_internal_dt_fraction_until: float = 0.0
+    explicit_observation_times: tuple[float, ...] = ()
     time_method: str = "theta"  # theta, bdf2
     time_theta: float = 1.0
     time_origin: str = "after_ramp"  # after_ramp, ramp_start
@@ -111,12 +128,29 @@ class PipelineConfig:
     source_mode: str = "auto"  # auto, line, manual_line, regularized
     source_projection_mode: str = "charge_conserving"  # charge_conserving, raw
     source_rhs_sign: float = -1.0
-    source_term_mode: str = "impressed_current"  # impressed_current, primary_dc
+    h_source_mode: str = "regularized_volume"  # regularized_volume, manual_line
+    source_term_mode: str = "impressed_current"  # impressed_current, primary_dc, primary_secondary
+    primary_secondary_max_primary_samples: int = 4096
+    primary_secondary_sampling_strategy: str = "weighted_farthest"  # weighted_farthest, priority_hull, uniform
+    primary_secondary_background_mode: str = "layered"  # layered, top_halfspace, layered_ip, layered_primary_top_current
+    primary_secondary_dc_mode: str = "analytic_halfspace"  # analytic_halfspace, empymod_quasistatic
+    primary_secondary_dc_conductivity_mode: str = "sigma_initial"  # sigma_initial, sigma_infinity
+    primary_secondary_transient_background_mode: str = "same"  # same, scalar_top, ip_increment
+    primary_secondary_dc_rhs_sign: float = 1.0
+    primary_secondary_rhs_mass_mode: str = "unit"  # unit, sigma, effective
+    primary_secondary_rhs_scale: float = 1.0
+    primary_secondary_rhs_projection: str = "none"  # none, conductivity
+    primary_secondary_current_correction: str = "none"  # none, conductivity
+    primary_secondary_current_correction_relaxation: float = 1.0
+    primary_secondary_current_correction_relaxation_late: float | None = None
+    primary_secondary_current_correction_relaxation_transition_time: float = 0.1
+    primary_secondary_current_correction_relaxation_transition_width: float = 1.0
     formulation: str = "e"  # e, h
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
     magnetic_receiver_mode: str = "curl"  # curl, biot_current, biot_ohmic, faraday_integrated
-    magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
-    receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
+    magnetic_dbdt_mode: str = "curl"  # curl, biot_rate, ampere_rate
+    receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest, local_lsq
+    magnetic_dbdt_evaluation_mode: str = "same"  # same, first_cell, mean, median, nearest_center, shallowest, local_lsq
     divergence_cleaning: str = "none"  # none, conductivity
     divergence_cleaning_strength: float = 1.0
     divergence_cleaning_t_obs_min: float = 0.0
@@ -134,6 +168,7 @@ class PipelineConfig:
     cole_f_min: float = 1.0e-2
     cole_f_max: float = 1.0e5
     cole_n_freq: int = 96
+    debye_time_scheme: str = "backward_euler"  # backward_euler, exponential
     empymod_srcpts: int = 5
     empymod_ht: str = "dlf"
     empymod_ft: str = "dlf"
@@ -148,6 +183,7 @@ class PipelineConfig:
     error_min_time: float = 0.0
     weak_component_reference_fraction: float = 0.1
     checkpoint_forward: bool = False
+    checkpoint_interval_steps: int = 0
     resume_forward: bool = False
     stop_after_outputs: int = 0
     source_only: bool = False
@@ -293,7 +329,7 @@ def _diffusion_refinement_box(config: PipelineConfig) -> dict[str, float]:
 
     base_radius = 1000.0
     base_depth = 500.0
-    base_top = 200.0
+    base_top = 200.0 if config.diffusion_refinement_top is None else float(config.diffusion_refinement_top)
     factor = float(config.diffusion_refinement_factor)
     if factor > 0.0:
         length = _max_earth_diffusion_length(config)
@@ -440,6 +476,8 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         ("source_refinement_radius", config.source_refinement_radius),
         ("receiver_mesh_size", config.receiver_mesh_size),
         ("receiver_refinement_radius", config.receiver_refinement_radius),
+        ("receiver_local_lsq_radius_factor", config.receiver_local_lsq_radius_factor),
+        ("far_field_mesh_size", config.far_field_mesh_size),
         ("diffusion_refinement_mesh_size", config.diffusion_refinement_mesh_size),
         ("sponge_power", config.sponge_power),
         ("geometry_tolerance", config.geometry_tolerance),
@@ -476,9 +514,118 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         raise ValueError(f"source_current must be finite and nonzero; got {float(config.source_current):.12g}")
     if float(config.source_rhs_sign) not in {-1.0, 1.0}:
         raise ValueError(f"source_rhs_sign must be -1 or 1; got {float(config.source_rhs_sign):.12g}")
+    h_source_mode = str(config.h_source_mode).strip().lower()
+    if h_source_mode not in {"regularized_volume", "manual_line"}:
+        raise ValueError("h_source_mode must be 'regularized_volume' or 'manual_line'")
     source_quadrature_points = int(config.source_quadrature_points)
     if source_quadrature_points < 0:
         raise ValueError(f"source_quadrature_points must be nonnegative; got {source_quadrature_points}")
+    receiver_local_lsq_max_samples = int(config.receiver_local_lsq_max_samples)
+    if receiver_local_lsq_max_samples < 0:
+        raise ValueError(
+            "receiver_local_lsq_max_samples must be nonnegative; "
+            f"got {receiver_local_lsq_max_samples}"
+        )
+    primary_secondary_max_primary_samples = int(config.primary_secondary_max_primary_samples)
+    if primary_secondary_max_primary_samples < 0:
+        raise ValueError(
+            "primary_secondary_max_primary_samples must be nonnegative; "
+            f"got {primary_secondary_max_primary_samples}"
+        )
+    primary_secondary_sampling_strategy = str(config.primary_secondary_sampling_strategy).strip().lower()
+    if primary_secondary_sampling_strategy not in {"weighted_farthest", "priority_hull", "uniform"}:
+        raise ValueError(
+            "primary_secondary_sampling_strategy must be 'weighted_farthest', 'priority_hull', or 'uniform'"
+        )
+    primary_secondary_background_mode = str(config.primary_secondary_background_mode).strip().lower()
+    if primary_secondary_background_mode not in {
+        "layered",
+        "top_halfspace",
+        "layered_ip",
+        "layered_primary_top_current",
+    }:
+        raise ValueError(
+            "primary_secondary_background_mode must be 'layered', 'top_halfspace', "
+            "'layered_ip', or 'layered_primary_top_current'"
+        )
+    primary_secondary_dc_mode = str(config.primary_secondary_dc_mode).strip().lower()
+    if primary_secondary_dc_mode not in {"analytic_halfspace", "empymod_quasistatic"}:
+        raise ValueError("primary_secondary_dc_mode must be 'analytic_halfspace' or 'empymod_quasistatic'")
+    primary_secondary_dc_conductivity_mode = str(
+        config.primary_secondary_dc_conductivity_mode
+    ).strip().lower()
+    if primary_secondary_dc_conductivity_mode not in {"sigma_initial", "sigma_infinity"}:
+        raise ValueError(
+            "primary_secondary_dc_conductivity_mode must be 'sigma_initial' or 'sigma_infinity'"
+        )
+    primary_secondary_transient_background_mode = str(
+        config.primary_secondary_transient_background_mode
+    ).strip().lower()
+    if primary_secondary_transient_background_mode not in {"same", "scalar_top", "ip_increment"}:
+        raise ValueError(
+            "primary_secondary_transient_background_mode must be 'same', 'scalar_top', or 'ip_increment'"
+        )
+    primary_secondary_dc_rhs_sign = float(config.primary_secondary_dc_rhs_sign)
+    if primary_secondary_dc_rhs_sign not in {-1.0, 1.0}:
+        raise ValueError(
+            "primary_secondary_dc_rhs_sign must be -1 or 1; "
+            f"got {primary_secondary_dc_rhs_sign:.12g}"
+        )
+    primary_secondary_rhs_mass_mode = str(config.primary_secondary_rhs_mass_mode).strip().lower()
+    if primary_secondary_rhs_mass_mode not in {"sigma", "unit", "effective"}:
+        raise ValueError("primary_secondary_rhs_mass_mode must be 'sigma', 'unit', or 'effective'")
+    primary_secondary_rhs_scale = float(config.primary_secondary_rhs_scale)
+    if not math.isfinite(primary_secondary_rhs_scale) or primary_secondary_rhs_scale <= 0.0:
+        raise ValueError("primary_secondary_rhs_scale must be finite and positive")
+    primary_secondary_rhs_projection = str(config.primary_secondary_rhs_projection).strip().lower()
+    if primary_secondary_rhs_projection not in {"none", "conductivity"}:
+        raise ValueError("primary_secondary_rhs_projection must be 'none' or 'conductivity'")
+    primary_secondary_current_correction = str(config.primary_secondary_current_correction).strip().lower()
+    if primary_secondary_current_correction not in {"none", "conductivity"}:
+        raise ValueError("primary_secondary_current_correction must be 'none' or 'conductivity'")
+    primary_secondary_current_correction_relaxation = float(
+        config.primary_secondary_current_correction_relaxation
+    )
+    if (
+        not math.isfinite(primary_secondary_current_correction_relaxation)
+        or primary_secondary_current_correction_relaxation < 0.0
+    ):
+        raise ValueError(
+            "primary_secondary_current_correction_relaxation must be finite and nonnegative"
+        )
+    if config.primary_secondary_current_correction_relaxation_late is not None:
+        primary_secondary_current_correction_relaxation_late = float(
+            config.primary_secondary_current_correction_relaxation_late
+        )
+        if (
+            not math.isfinite(primary_secondary_current_correction_relaxation_late)
+            or primary_secondary_current_correction_relaxation_late < 0.0
+        ):
+            raise ValueError(
+                "primary_secondary_current_correction_relaxation_late must be finite and nonnegative"
+            )
+    else:
+        primary_secondary_current_correction_relaxation_late = None
+    primary_secondary_current_correction_relaxation_transition_time = float(
+        config.primary_secondary_current_correction_relaxation_transition_time
+    )
+    if (
+        not math.isfinite(primary_secondary_current_correction_relaxation_transition_time)
+        or primary_secondary_current_correction_relaxation_transition_time <= 0.0
+    ):
+        raise ValueError(
+            "primary_secondary_current_correction_relaxation_transition_time must be finite and positive"
+        )
+    primary_secondary_current_correction_relaxation_transition_width = float(
+        config.primary_secondary_current_correction_relaxation_transition_width
+    )
+    if (
+        not math.isfinite(primary_secondary_current_correction_relaxation_transition_width)
+        or primary_secondary_current_correction_relaxation_transition_width <= 0.0
+    ):
+        raise ValueError(
+            "primary_secondary_current_correction_relaxation_transition_width must be finite and positive"
+        )
     stop_after_outputs = int(config.stop_after_outputs)
     if stop_after_outputs < 0:
         raise ValueError(f"stop_after_outputs must be nonnegative; got {stop_after_outputs}")
@@ -486,8 +633,10 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     if nedelec_order not in {1, 2}:
         raise ValueError(f"nedelec_order must be 1 or 2; got {nedelec_order}")
     source_term_mode = str(config.source_term_mode).strip().lower()
-    if source_term_mode not in {"impressed_current", "primary_dc"}:
-        raise ValueError("source_term_mode must be 'impressed_current' or 'primary_dc'")
+    if source_term_mode not in {"impressed_current", "primary_dc", "primary_secondary"}:
+        raise ValueError(
+            "source_term_mode must be 'impressed_current', 'primary_dc', or 'primary_secondary'"
+        )
     source_projection_mode = str(config.source_projection_mode).strip().lower()
     if source_projection_mode not in {"charge_conserving", "raw"}:
         raise ValueError("source_projection_mode must be 'charge_conserving' or 'raw'")
@@ -497,10 +646,12 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "magnetic_receiver_mode must be 'curl', 'biot_current', 'biot_ohmic', or 'faraday_integrated'"
         )
     magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
-    if magnetic_dbdt_mode not in {"curl", "biot_rate"}:
-        raise ValueError("magnetic_dbdt_mode must be 'curl' or 'biot_rate'")
+    if magnetic_dbdt_mode not in {"curl", "biot_rate", "ampere_rate"}:
+        raise ValueError("magnetic_dbdt_mode must be 'curl', 'biot_rate', or 'ampere_rate'")
     if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
+    if magnetic_dbdt_mode == "ampere_rate" and source_term_mode != "primary_secondary":
+        raise ValueError("magnetic_dbdt_mode='ampere_rate' requires source_term_mode='primary_secondary'")
     outer_boundary_mode = str(config.outer_boundary_mode).strip().lower()
     if outer_boundary_mode not in {"pec", "natural", "robin"}:
         raise ValueError("outer_boundary_mode must be 'pec', 'natural', or 'robin'")
@@ -510,9 +661,39 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             f"got {float(config.outer_boundary_robin_scale):.12g}"
         )
     receiver_evaluation_mode = str(config.receiver_evaluation_mode).strip().lower()
-    if receiver_evaluation_mode not in {"first_cell", "mean", "median", "nearest_center", "shallowest"}:
+    receiver_modes = {
+        "first_cell",
+        "mean",
+        "median",
+        "nearest_center",
+        "shallowest",
+        "local_lsq",
+        "local_lsq_earth",
+        "local_lsq_air",
+        "local_lsq_interface",
+    }
+    if receiver_evaluation_mode not in receiver_modes:
         raise ValueError(
-            "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', or 'shallowest'"
+            "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', "
+            "'shallowest', 'local_lsq', 'local_lsq_earth', 'local_lsq_air', or 'local_lsq_interface'"
+        )
+    magnetic_dbdt_evaluation_mode = str(config.magnetic_dbdt_evaluation_mode).strip().lower()
+    if magnetic_dbdt_evaluation_mode in {"", "same"}:
+        magnetic_dbdt_evaluation_mode = "same"
+    elif magnetic_dbdt_evaluation_mode not in {
+        "first_cell",
+        "mean",
+        "median",
+        "nearest_center",
+        "shallowest",
+        "local_lsq",
+        "local_lsq_earth",
+        "local_lsq_air",
+        "local_lsq_interface",
+    }:
+        raise ValueError(
+            "magnetic_dbdt_evaluation_mode must be 'same', 'first_cell', 'mean', 'median', "
+            "'nearest_center', 'shallowest', 'local_lsq', 'local_lsq_earth', 'local_lsq_air', or 'local_lsq_interface'"
         )
     receiver_type = str(config.receiver_type).strip().lower()
     if receiver_type not in {"point", "volume_average", "disk_average"}:
@@ -570,10 +751,50 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         raise ValueError(f"t_max must be greater than t_min; got t_min={config.t_min:.12g}, t_max={config.t_max:.12g}")
     if not math.isfinite(float(config.time_growth)) or float(config.time_growth) <= 1.0:
         raise ValueError(f"time_growth must be finite and greater than 1; got {float(config.time_growth):.12g}")
+    if not math.isfinite(float(config.max_internal_dt)) or float(config.max_internal_dt) < 0.0:
+        raise ValueError(
+            "max_internal_dt must be finite and nonnegative; "
+            f"got {float(config.max_internal_dt):.12g}"
+        )
+    if (
+        not math.isfinite(float(config.max_internal_dt_fraction))
+        or float(config.max_internal_dt_fraction) < 0.0
+    ):
+        raise ValueError(
+            "max_internal_dt_fraction must be finite and nonnegative; "
+            f"got {float(config.max_internal_dt_fraction):.12g}"
+        )
+    if (
+        not math.isfinite(float(config.max_internal_dt_fraction_until))
+        or float(config.max_internal_dt_fraction_until) < 0.0
+    ):
+        raise ValueError(
+            "max_internal_dt_fraction_until must be finite and nonnegative; "
+            f"got {float(config.max_internal_dt_fraction_until):.12g}"
+        )
+    explicit_times = tuple(float(value) for value in getattr(config, "explicit_observation_times", ()) or ())
+    if explicit_times:
+        if any(not math.isfinite(value) or value <= 0.0 for value in explicit_times):
+            raise ValueError("explicit_observation_times must be finite and positive")
+        if any(b <= a for a, b in zip(explicit_times[:-1], explicit_times[1:])):
+            raise ValueError("explicit_observation_times must be strictly increasing")
+        tol = 1.0e-12
+        if (
+            abs(explicit_times[0] - float(config.t_min)) > tol * max(1.0, abs(float(config.t_min)))
+            or abs(explicit_times[-1] - float(config.t_max)) > tol * max(1.0, abs(float(config.t_max)))
+        ):
+            raise ValueError("explicit_observation_times must cover t_min and t_max exactly")
     if not math.isfinite(float(config.diffusion_refinement_factor)) or float(config.diffusion_refinement_factor) < 0.0:
         raise ValueError(
             "diffusion_refinement_factor must be finite and nonnegative; "
             f"got {float(config.diffusion_refinement_factor):.12g}"
+        )
+    if config.diffusion_refinement_top is not None and not math.isfinite(float(config.diffusion_refinement_top)):
+        raise ValueError("diffusion_refinement_top must be finite when provided")
+    if not math.isfinite(float(config.far_field_mesh_size)) or float(config.far_field_mesh_size) <= 0.0:
+        raise ValueError(
+            "far_field_mesh_size must be finite and positive; "
+            f"got {float(config.far_field_mesh_size):.12g}"
         )
     time_theta = float(config.time_theta)
     if not math.isfinite(time_theta) or not (0.5 <= time_theta <= 1.0):
@@ -590,6 +811,9 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "min_steps_before_first_observation must be positive; "
             f"got {min_steps_before_first_observation}"
         )
+    checkpoint_interval_steps = int(config.checkpoint_interval_steps)
+    if checkpoint_interval_steps < 0:
+        raise ValueError(f"checkpoint_interval_steps must be nonnegative; got {checkpoint_interval_steps}")
     if not math.isfinite(float(config.error_min_time)) or float(config.error_min_time) < 0.0:
         raise ValueError(f"error_min_time must be finite and nonnegative; got {float(config.error_min_time):.12g}")
     weak_fraction = float(config.weak_component_reference_fraction)
@@ -618,12 +842,15 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     for name, depth in [
         ("source_start", source_depth_start),
         ("source_end", source_depth_end),
-        ("receiver", receiver_depth),
     ]:
         if depth <= tol:
             raise ValueError(f"{name} must be below the z=0 earth surface for the air-earth empymod comparison")
         if depth >= float(config.earth_depth) - tol:
             raise ValueError(f"{name} depth {depth:.12g} m exceeds the finite FEM earth depth {config.earth_depth:.12g} m")
+    if receiver_depth < -tol:
+        raise ValueError("receiver must not be above the z=0 earth surface for the air-earth empymod comparison")
+    if receiver_depth >= float(config.earth_depth) - tol:
+        raise ValueError(f"receiver depth {receiver_depth:.12g} m exceeds the finite FEM earth depth {config.earth_depth:.12g} m")
     if abs(source_depth_start - source_depth_end) > tol:
         raise ValueError(
             "source_start and source_end must have matching depths for the horizontal finite-wire empymod comparison"
@@ -651,6 +878,9 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         raise ValueError("Cole-Cole Debye memory terms currently require time_method='theta' and time_theta=1.0")
     if polarization == "cole-cole" and divergence_cleaning != "none":
         raise ValueError("divergence_cleaning='conductivity' is currently implemented for non-polarizable runs only")
+    debye_time_scheme = str(config.debye_time_scheme).strip().lower()
+    if debye_time_scheme not in {"backward_euler", "exponential"}:
+        raise ValueError("debye_time_scheme must be 'backward_euler' or 'exponential'")
     if time_method == "bdf2" and bool(config.resume_forward):
         raise ValueError("time_method='bdf2' does not support resume_forward checkpoints yet")
     if polarization == "cole-cole":
@@ -727,6 +957,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "cole_layer_bottom": float(config.cole_layer_bottom)
             if math.isfinite(float(config.cole_layer_bottom))
             else float(config.earth_depth),
+            "debye_time_scheme": debye_time_scheme,
             "source_current": float(config.source_current),
             "source_rhs_sign": float(config.source_rhs_sign),
             "source_quadrature_points": source_quadrature_points,
@@ -734,14 +965,30 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "source_only": bool(config.source_only),
             "nedelec_order": nedelec_order,
             "source_term_mode": source_term_mode,
+            "primary_secondary_sampling_strategy": primary_secondary_sampling_strategy,
+            "primary_secondary_dc_mode": primary_secondary_dc_mode,
+            "primary_secondary_dc_conductivity_mode": primary_secondary_dc_conductivity_mode,
+            "primary_secondary_transient_background_mode": primary_secondary_transient_background_mode,
+            "primary_secondary_dc_rhs_sign": primary_secondary_dc_rhs_sign,
+            "primary_secondary_rhs_mass_mode": primary_secondary_rhs_mass_mode,
+            "primary_secondary_rhs_scale": primary_secondary_rhs_scale,
+            "primary_secondary_rhs_projection": primary_secondary_rhs_projection,
+            "primary_secondary_current_correction": primary_secondary_current_correction,
+            "primary_secondary_current_correction_relaxation": primary_secondary_current_correction_relaxation,
+            "primary_secondary_current_correction_relaxation_late": primary_secondary_current_correction_relaxation_late,
+            "primary_secondary_current_correction_relaxation_transition_time": primary_secondary_current_correction_relaxation_transition_time,
+            "primary_secondary_current_correction_relaxation_transition_width": primary_secondary_current_correction_relaxation_transition_width,
             "initial_dc_mode": initial_dc_mode,
             "magnetic_receiver_mode": magnetic_receiver_mode,
             "magnetic_dbdt_mode": magnetic_dbdt_mode,
             "outer_boundary_mode": outer_boundary_mode,
             "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
             "receiver_evaluation_mode": receiver_evaluation_mode,
+            "magnetic_dbdt_evaluation_mode": magnetic_dbdt_evaluation_mode,
             "receiver_type": receiver_type,
             "receiver_average_radius": receiver_average_radius,
+            "receiver_local_lsq_radius_factor": float(config.receiver_local_lsq_radius_factor),
+            "receiver_local_lsq_max_samples": receiver_local_lsq_max_samples,
             "receiver_diagnostic_types": receiver_diagnostic_types,
             "divergence_cleaning": divergence_cleaning,
             "divergence_cleaning_strength": divergence_cleaning_strength,
@@ -802,6 +1049,48 @@ def log(message: str, *, comm: Any | None = None) -> None:
         return
     if comm.rank == 0:
         print(message, flush=True)
+
+
+def _record_timing_event(
+    config: PipelineConfig,
+    event: str,
+    start_time: float,
+    *,
+    now: float | None = None,
+    **fields: Any,
+) -> None:
+    """Append a JSONL timing event that survives interrupted long runs."""
+
+    timestamp = time.perf_counter() if now is None else float(now)
+    payload = {
+        "event": str(event),
+        "elapsed_seconds": float(timestamp - start_time),
+    }
+    payload.update(fields)
+    path = config.workdir / "timing_events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+@contextmanager
+def _timed_stage(config: PipelineConfig, stage: str, start_time: float, **fields: Any):
+    """Record paired start/done timing events for long-running stages."""
+
+    stage_start = time.perf_counter()
+    _record_timing_event(config, f"{stage}_start", start_time, now=stage_start, **fields)
+    try:
+        yield
+    finally:
+        stage_done = time.perf_counter()
+        _record_timing_event(
+            config,
+            f"{stage}_done",
+            start_time,
+            now=stage_done,
+            seconds=float(stage_done - stage_start),
+            **fields,
+        )
 
 
 def _import_module(name: str):
@@ -890,6 +1179,9 @@ def generate_time_array(config: PipelineConfig):
 
     import numpy as np
 
+    explicit_times = tuple(float(value) for value in getattr(config, "explicit_observation_times", ()) or ())
+    if explicit_times:
+        return np.asarray(explicit_times, dtype=float)
     if config.t_min <= 0.0 or config.t_max <= config.t_min:
         raise ValueError("time bounds must satisfy 0 < t_min < t_max")
     if config.time_growth <= 1.0:
@@ -897,7 +1189,7 @@ def generate_time_array(config: PipelineConfig):
     values = [float(config.t_min)]
     while values[-1] < config.t_max:
         nxt = values[-1] * config.time_growth
-        if nxt >= config.t_max:
+        if nxt >= config.t_max or np.isclose(nxt, config.t_max, rtol=1.0e-9, atol=1.0e-30):
             values.append(float(config.t_max))
             break
         values.append(float(nxt))
@@ -928,10 +1220,55 @@ def _forward_observation_schedule(times, config: PipelineConfig):
         ramp_steps = np.linspace(ramp_start, ramp_time, min_steps)
         output_internal_times = ramp_time + observation_times
         first_obs_steps = int(config.min_steps_before_first_observation)
+        if str(getattr(config, "formulation", "e")).strip().lower() == "h":
+            first_obs_steps = max(first_obs_steps, 50)
         first_obs_internal_steps = np.linspace(ramp_time, output_internal_times[0], first_obs_steps + 1)[1:]
         step_times = np.unique(np.r_[ramp_steps, first_obs_internal_steps, output_internal_times])
+        if (
+            str(getattr(config, "formulation", "e")).strip().lower() == "h"
+            and float(getattr(config, "max_internal_dt", 0.0)) <= 0.0
+        ):
+            h_interval_steps = 10
+            h_substeps = []
+            previous_output = ramp_time
+            for output_time in output_internal_times:
+                h_substeps.extend(
+                    float(value)
+                    for value in np.linspace(previous_output, float(output_time), h_interval_steps + 1)[1:]
+                )
+                previous_output = float(output_time)
+            step_times = np.unique(np.r_[step_times, h_substeps])
     else:
         raise ValueError("time_origin must be 'after_ramp' or 'ramp_start'")
+
+    max_internal_dt = float(getattr(config, "max_internal_dt", 0.0))
+    max_internal_dt_fraction = float(getattr(config, "max_internal_dt_fraction", 0.0))
+    max_internal_dt_fraction_until = float(getattr(config, "max_internal_dt_fraction_until", 0.0))
+    if max_internal_dt > 0.0 or max_internal_dt_fraction > 0.0:
+        expanded = [float(step_times[0])]
+        ramp_time = float(config.ramp_off_time) if time_origin == "after_ramp" else 0.0
+        first_output_internal_time = float(output_internal_times[0])
+        for target in step_times[1:]:
+            previous = expanded[-1]
+            interval = float(target) - previous
+            candidate_limits = []
+            if max_internal_dt > 0.0:
+                candidate_limits.append(max_internal_dt)
+            if max_internal_dt_fraction > 0.0 and float(target) > first_output_internal_time:
+                elapsed_target = max(float(target) - ramp_time, 0.0)
+                fraction_active = (
+                    max_internal_dt_fraction_until <= 0.0
+                    or elapsed_target <= max_internal_dt_fraction_until
+                )
+                if elapsed_target > 0.0 and fraction_active:
+                    candidate_limits.append(max_internal_dt_fraction * elapsed_target)
+            interval_limit = min(candidate_limits) if candidate_limits else 0.0
+            if interval_limit > 0.0 and interval > interval_limit:
+                substeps = int(math.ceil(interval / interval_limit))
+                expanded.extend(float(value) for value in np.linspace(previous, float(target), substeps + 1)[1:])
+            else:
+                expanded.append(float(target))
+        step_times = np.unique(np.asarray(expanded, dtype=float))
 
     output_step_indices: list[int] = []
     for output_time in output_internal_times:
@@ -945,6 +1282,26 @@ def _forward_observation_schedule(times, config: PipelineConfig):
         "return_times": observation_times,
         "output_step_indices": output_step_indices,
     }
+
+
+def _resume_start_step_from_time(step_times, previous_time: float, completed_step: int) -> int:
+    """Return the first step index strictly after a checkpoint time."""
+
+    import numpy as np
+
+    times = np.asarray(step_times, dtype=float)
+    if times.ndim != 1 or times.size == 0:
+        raise ValueError("step_times must be a non-empty one-dimensional array")
+    previous = float(previous_time)
+    if not math.isfinite(previous):
+        raise ValueError("previous_time must be finite")
+    matches = np.flatnonzero(np.isclose(times, previous, rtol=1.0e-12, atol=1.0e-30))
+    if matches.size:
+        return int(matches[-1]) + 1
+    later = np.flatnonzero(times > previous)
+    if later.size:
+        return int(later[0])
+    return max(int(completed_step) + 1, int(times.size))
 
 
 def _add_box_field(gmsh, xmin, xmax, ymin, ymax, zmin, zmax, vin, vout, thickness):
@@ -1070,7 +1427,7 @@ def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[floa
     receiver = (x, y, z)
     for point in raw_points:
         key = tuple(round(v, 12) for v in point)
-        if key == receiver or key in seen:
+        if key == receiver or key in seen or key[2] >= 0.0:
             continue
         seen.add(key)
         points.append(key)
@@ -1095,9 +1452,10 @@ def _receiver_surface_refinement_points(config: PipelineConfig) -> list[tuple[fl
 
     points: list[tuple[float, float, float]] = []
     seen: set[tuple[float, float, float]] = set()
+    receiver_key = tuple(round(float(v), 12) for v in config.receiver)
     for point in raw_points:
         key = tuple(round(v, 12) for v in point)
-        if key in seen:
+        if key in seen or (_receiver_is_on_surface(config) and key == receiver_key):
             continue
         seen.add(key)
         points.append(key)
@@ -1111,6 +1469,30 @@ def _receiver_anchor_mesh_size(config: PipelineConfig) -> float:
     if anchor > 0.0:
         return max(anchor, 1.0e-9)
     return max(float(config.receiver_mesh_size), 1.0e-9)
+
+
+def _receiver_is_on_surface(config: PipelineConfig) -> bool:
+    """Return True when the receiver lies on the z=0 air-earth interface."""
+
+    return abs(float(config.receiver[2])) <= float(config.geometry_tolerance)
+
+
+def _far_field_mesh_size(config: PipelineConfig) -> float:
+    """Return the coarse mesh size away from source, receiver, and diffusion boxes."""
+
+    return max(float(config.far_field_mesh_size), 1.0e-9)
+
+
+def _source_refinement_transition_distance(config: PipelineConfig) -> float:
+    """Return the source refinement transition distance."""
+
+    return max(2500.0, float(config.source_refinement_radius))
+
+
+def _receiver_refinement_transition_distance(config: PipelineConfig) -> float:
+    """Return the receiver refinement transition distance."""
+
+    return max(3000.0, float(config.receiver_refinement_radius))
 
 
 def _source_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
@@ -1182,6 +1564,18 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
     msh_path = config.mesh_path()
     if msh_path.exists() and not config.force_mesh:
         print(f"[mesh] Reusing existing mesh: {msh_path}", flush=True)
+        _mesh_memory_preflight_for_path(config, msh_path)
+        return msh_path
+    if config.mesh_source_path is not None:
+        source_path = Path(config.mesh_source_path)
+        if not source_path.exists():
+            raise FileNotFoundError(f"locked mesh source does not exist: {source_path}")
+        msh_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.resolve() != msh_path.resolve():
+            shutil.copy2(source_path, msh_path)
+            print(f"[mesh] Copied locked mesh {source_path} -> {msh_path}", flush=True)
+        else:
+            print(f"[mesh] Reusing locked mesh in place: {msh_path}", flush=True)
         _mesh_memory_preflight_for_path(config, msh_path)
         return msh_path
 
@@ -1286,11 +1680,18 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         ]
         if not top_earth_vols:
             raise RuntimeError("failed to identify top earth layer volumes for source and receiver embedding")
+        receiver_on_surface = _receiver_is_on_surface(config)
+        earth_receiver_points = [*source_cloud, *receiver_cloud]
+        if not receiver_on_surface:
+            earth_receiver_points.append(rp)
+        surface_receiver_points = [*receiver_surface_cloud]
+        if receiver_on_surface:
+            surface_receiver_points.append(rp)
         for earth_vol in top_earth_vols:
             gmsh.model.mesh.embed(1, [source_line], 3, earth_vol)
-            gmsh.model.mesh.embed(0, [*source_cloud, rp, *receiver_cloud], 3, earth_vol)
+            gmsh.model.mesh.embed(0, earth_receiver_points, 3, earth_vol)
         for interface_surf in interface:
-            gmsh.model.mesh.embed(0, receiver_surface_cloud, 2, interface_surf)
+            gmsh.model.mesh.embed(0, surface_receiver_points, 2, interface_surf)
 
         f_line = gmsh.model.mesh.field.add("Distance")
         gmsh.model.mesh.field.setNumbers(f_line, "CurvesList", [source_line])
@@ -1298,18 +1699,19 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         f_source = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(f_source, "InField", f_line)
         gmsh.model.mesh.field.setNumber(f_source, "SizeMin", config.source_mesh_size)
-        gmsh.model.mesh.field.setNumber(f_source, "SizeMax", 2500.0)
+        far_field_mesh_size = _far_field_mesh_size(config)
+        gmsh.model.mesh.field.setNumber(f_source, "SizeMax", far_field_mesh_size)
         gmsh.model.mesh.field.setNumber(f_source, "DistMin", config.source_refinement_radius)
-        gmsh.model.mesh.field.setNumber(f_source, "DistMax", 2500.0)
+        gmsh.model.mesh.field.setNumber(f_source, "DistMax", _source_refinement_transition_distance(config))
 
         f_point = gmsh.model.mesh.field.add("Distance")
         gmsh.model.mesh.field.setNumbers(f_point, "PointsList", [rp, *receiver_surface_cloud])
         f_receiver = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(f_receiver, "InField", f_point)
         gmsh.model.mesh.field.setNumber(f_receiver, "SizeMin", receiver_anchor_mesh_size)
-        gmsh.model.mesh.field.setNumber(f_receiver, "SizeMax", 2500.0)
+        gmsh.model.mesh.field.setNumber(f_receiver, "SizeMax", far_field_mesh_size)
         gmsh.model.mesh.field.setNumber(f_receiver, "DistMin", config.receiver_refinement_radius)
-        gmsh.model.mesh.field.setNumber(f_receiver, "DistMax", 3000.0)
+        gmsh.model.mesh.field.setNumber(f_receiver, "DistMax", _receiver_refinement_transition_distance(config))
 
         f_receiver_ball = gmsh.model.mesh.field.add("Ball")
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "XCenter", config.receiver[0])
@@ -1317,7 +1719,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "ZCenter", config.receiver[2])
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "Radius", config.receiver_refinement_radius)
         gmsh.model.mesh.field.setNumber(f_receiver_ball, "VIn", receiver_anchor_mesh_size)
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "VOut", 2500.0)
+        gmsh.model.mesh.field.setNumber(f_receiver_ball, "VOut", far_field_mesh_size)
 
         diffusion_box = _diffusion_refinement_box(config)
         f_box = _add_box_field(
@@ -1329,14 +1731,14 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
             -diffusion_box["depth"],
             diffusion_box["top"],
             diffusion_box["mesh_size"],
-            2500.0,
+            far_field_mesh_size,
             diffusion_box["radius"],
         )
         f_min = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", [f_source, f_receiver, f_receiver_ball, f_box])
         gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(5.0, config.source_mesh_size, receiver_anchor_mesh_size))
-        gmsh.option.setNumber("Mesh.MeshSizeMax", 3000.0)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", far_field_mesh_size)
         gmsh.option.setNumber("Mesh.Optimize", 1)
         gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
 
@@ -2132,6 +2534,118 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     return {"mode": "manual_line", "coeff": None, "vector": source_vec, "local_projection_diagnostics": local_diagnostics}
 
 
+def _physical_curl_from_reference_tabulation(tabulation, J):
+    import numpy as np
+
+    tab = np.asarray(tabulation, dtype=float)
+    if tab.shape[0] < 4 or tab.shape[1] != 1 or tab.shape[3] != 3:
+        raise ValueError("first-derivative tabulation must have shape (>=4, 1, ndofs, 3)")
+    d_dx = tab[1, 0]
+    d_dy = tab[2, 0]
+    d_dz = tab[3, 0]
+    curl_ref = np.column_stack(
+        (
+            d_dy[:, 2] - d_dz[:, 1],
+            d_dz[:, 0] - d_dx[:, 2],
+            d_dx[:, 1] - d_dy[:, 0],
+        )
+    )
+    jac = np.asarray(J, dtype=float).reshape(3, 3)
+    det_j = float(np.linalg.det(jac))
+    if det_j == 0.0:
+        raise ValueError("cell Jacobian is singular")
+    return np.asarray(curl_ref @ jac.T / det_j, dtype=float)
+
+
+def _build_manual_line_h_source_vector(msh, spaces: dict[str, Any], materials: dict[str, Any], config: PipelineConfig):
+    """Assemble int_Gamma rho * t . curl(v) dl for a unit H-form source current."""
+
+    import numpy as np
+    from dolfinx import fem
+    from dolfinx import geometry
+    from petsc4py import PETSc
+
+    V = spaces["V"]
+    source_fun = fem.Function(V, name="manual_line_h_source_work")
+    source_vec = source_fun.x.petsc_vec.copy()
+    source_vec.set(0.0)
+    p0 = np.asarray(config.source_start, dtype=float)
+    p1 = np.asarray(config.source_end, dtype=float)
+    axis = p1 - p0
+    length = float(np.linalg.norm(axis))
+    if length <= 0.0:
+        raise ValueError("source_start and source_end must be distinct")
+    tangent = axis / length
+    mesh_segments = _source_line_segments_from_msh(config.mesh_path(), config)
+    points, weights, svals, integration_diagnostics = _manual_line_source_integration_points(
+        config,
+        mesh_segments=mesh_segments,
+    )
+    npts = int(points.shape[0])
+
+    tree = geometry.bb_tree(msh, msh.topology.dim, padding=1.0e-8)
+    candidates = geometry.compute_collisions_points(tree, points)
+    colliding = geometry.compute_colliding_cells(msh, candidates, points)
+    be = V.element.basix_element
+    dofmap = V.dofmap
+    index_map = dofmap.index_map
+    local_cells = msh.topology.index_map(msh.topology.dim).size_local
+    msh.topology.create_entity_permutations()
+    permutations = msh.topology.get_cell_permutation_info()
+    added = 0
+    missed = 0
+    hit_cell_ids: list[int | None] = []
+    cell_l1_contributions: dict[int, float] = {}
+    dof_l1_contributions: dict[int, float] = {}
+    rho = materials["rho"]
+    for ip, point in enumerate(points):
+        cells = [int(c) for c in colliding.links(ip) if int(c) < local_cells]
+        if not cells:
+            missed += 1
+            hit_cell_ids.append(None)
+            continue
+        cell = cells[0]
+        hit_cell_ids.append(cell)
+        cell_geom = _cell_geometry(msh, cell)
+        X = msh.geometry.cmap.pull_back(point.reshape(1, 3), cell_geom)
+        tab = be.tabulate(1, X)
+        J = np.column_stack((cell_geom[1] - cell_geom[0], cell_geom[2] - cell_geom[0], cell_geom[3] - cell_geom[0]))
+        curl_phi = _physical_curl_from_reference_tabulation(tab, J)
+        rho_value = float(np.asarray(rho.eval(point.reshape(1, 3), np.asarray([cell], dtype=np.int32))).reshape(-1)[0])
+        local = np.asarray(curl_phi @ tangent, dtype=float) * float(weights[ip]) * rho_value
+        if V.element.needs_dof_transformations:
+            local_t = local.copy()
+            V.element.Tt_inv_apply(local_t, permutations[cell : cell + 1], 1)
+            local = local_t
+        local_dofs = dofmap.cell_dofs(cell)
+        global_dofs = index_map.local_to_global(local_dofs).astype(PETSc.IntType)
+        source_vec.setValues(global_dofs, local, addv=PETSc.InsertMode.ADD_VALUES)
+        local_l1 = float(np.sum(np.abs(local)))
+        cell_l1_contributions[cell] = cell_l1_contributions.get(cell, 0.0) + local_l1
+        for dof, value in zip(global_dofs, local):
+            key = int(dof)
+            dof_l1_contributions[key] = dof_l1_contributions.get(key, 0.0) + abs(float(value))
+        added += 1
+    source_vec.assemble()
+    diagnostics = _summarize_manual_line_source_local_diagnostics(
+        npts=npts,
+        added=added,
+        missed=missed,
+        hit_cell_ids=hit_cell_ids,
+        svals=svals,
+        cell_l1_contributions=cell_l1_contributions,
+        dof_l1_contributions=dof_l1_contributions,
+    )
+    diagnostics.update(integration_diagnostics)
+    log(
+        f"[source:h] mode=manual_line; integration={integration_diagnostics['integration_mode']}; "
+        f"quadrature points={npts}; added={added}; missed={missed}; "
+        f"assembled line integral int_Gamma rho*t.curl(v) dl; norm={source_vec.norm():.6e}",
+        comm=msh.comm,
+    )
+    return source_vec
+
+
 def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=None):
     """Build the source vector for a unit current derivative."""
 
@@ -2233,6 +2747,66 @@ def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=
     return {"mode": mode, "coeff": source_coeff, "vector": source_vec, "projection_diagnostics": projection_diagnostics}
 
 
+def _regularized_h_source_point_weight(point, p0, tangent, length: float, kernel_radius: float) -> float:
+    import numpy as np
+
+    point_arr = np.asarray(point, dtype=float)
+    p0_arr = np.asarray(p0, dtype=float)
+    tangent_arr = np.asarray(tangent, dtype=float)
+    s = float(np.dot(point_arr - p0_arr, tangent_arr))
+    if s < 0.0 or s > float(length):
+        return 0.0
+    closest = p0_arr + s * tangent_arr
+    radius = float(np.linalg.norm(point_arr - closest))
+    return float(math.exp(-((radius / float(kernel_radius)) ** 2)))
+
+
+def _regularized_h_source_cell_weight(cell_geometry, p0, tangent, length: float, kernel_radius: float, *, order: int = 6) -> float:
+    import numpy as np
+
+    vertices = np.asarray(cell_geometry, dtype=float).reshape(-1, 3)
+    if vertices.shape != (4, 3):
+        raise ValueError("cell_geometry must contain four tetrahedron vertices")
+    barycentric, weights = _tetrahedron_average_quadrature(order=order)
+    sample_points = barycentric @ vertices
+    values = [
+        _regularized_h_source_point_weight(point, p0, tangent, length, kernel_radius)
+        for point in sample_points
+    ]
+    return float(np.dot(weights, np.asarray(values, dtype=float)))
+
+
+def _tetrahedron_average_quadrature(order: int = 6):
+    import functools
+
+    return _tetrahedron_average_quadrature_cached(int(order))
+
+
+@functools.lru_cache(maxsize=None)
+def _tetrahedron_average_quadrature_cached(order: int):
+    import numpy as np
+
+    n = max(2, int(order))
+    qx, qw = np.polynomial.legendre.leggauss(n)
+    q = 0.5 * (qx + 1.0)
+    w = 0.5 * qw
+    barycentric = []
+    weights = []
+    for i, r in enumerate(q):
+        for j, s in enumerate(q):
+            for k, t in enumerate(q):
+                l1 = r
+                l2 = (1.0 - r) * s
+                l3 = (1.0 - r) * (1.0 - s) * t
+                l0 = (1.0 - r) * (1.0 - s) * (1.0 - t)
+                jac = (1.0 - r) ** 2 * (1.0 - s)
+                barycentric.append((l0, l1, l2, l3))
+                weights.append(6.0 * w[i] * w[j] * w[k] * jac)
+    weight_arr = np.asarray(weights, dtype=float)
+    weight_arr /= float(np.sum(weight_arr))
+    return np.asarray(barycentric, dtype=float), weight_arr
+
+
 def _build_regularized_current_density(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=None):
     """Build a DG0 vector current density with unit current moment."""
 
@@ -2252,6 +2826,7 @@ def _build_regularized_current_density(msh, spaces: dict[str, Any], config: Pipe
     dm = W.dofmap
     block_size = int(dm.bs)
     kernel_radius = max(float(config.wire_radius), 1.0e-12)
+    quadrature_order = int(getattr(config, "source_quadrature_points", 0))
     earth_cells = None
     if cell_tags is not None:
         earth_cells = {int(cell) for cell in cell_tags.find(PHYS_EARTH)}
@@ -2264,11 +2839,22 @@ def _build_regularized_current_density(msh, spaces: dict[str, Any], config: Pipe
         s = float(np.dot(rel, tangent))
         closest = p0 + min(max(s, 0.0), length) * tangent
         radius = float(np.linalg.norm(center - closest))
-        if 0.0 <= s <= length:
-            nearest.append((radius, cell))
+        nearest.append((radius, cell))
+        if quadrature_order > 0:
+            weight = _regularized_h_source_cell_weight(
+                _cell_geometry(msh, cell),
+                p0,
+                tangent,
+                length,
+                kernel_radius,
+                order=quadrature_order,
+            )
+        elif 0.0 <= s <= length:
             weight = math.exp(-((radius / kernel_radius) ** 2))
-            if weight > 1.0e-14 and cell_volumes[cell] > 0.0:
-                weights.append((cell, weight))
+        else:
+            weight = 0.0
+        if weight > 1.0e-14 and cell_volumes[cell] > 0.0:
+            weights.append((cell, weight))
     if not weights:
         nearest.sort()
         for _, cell in nearest[: max(1, min(32, len(nearest)))]:
@@ -2277,6 +2863,7 @@ def _build_regularized_current_density(msh, spaces: dict[str, Any], config: Pipe
     if kernel_integral <= 0.0:
         raise RuntimeError("regularized H-form source kernel has zero discrete volume integral")
     density_scale = length / kernel_integral
+    effective_area = kernel_integral / length
     arr = source_coeff.x.array
     for cell, weight in weights:
         dofs = dm.cell_dofs(cell)
@@ -2285,7 +2872,9 @@ def _build_regularized_current_density(msh, spaces: dict[str, Any], config: Pipe
     source_coeff.x.scatter_forward()
     log(
         f"[source:h] regularized current density for H-form; radius={config.wire_radius} m; "
-        f"weighted local cells={len(weights)}; density_scale={density_scale:.6e}",
+        f"weight_mode={'tetra_gauss' if quadrature_order > 0 else 'cell_center'}; "
+        f"weighted local cells={len(weights)}; kernel_integral={kernel_integral:.6e} m^3; "
+        f"effective_area={effective_area:.6e} m^2; density_scale={density_scale:.6e}",
         comm=msh.comm,
     )
     return source_coeff
@@ -2708,6 +3297,31 @@ def _validate_h_solver_state(label: str, ksp, solution, *, rhs_norm: float, conf
     return {"its": its, "reason": reason, "residual": residual, "relative_residual": float(relative_residual)}
 
 
+def _h_static_initial_mass_scale(config: PipelineConfig) -> float:
+    """Mass scale for the H-form initial Ampere solve gauge floor."""
+
+    import math
+
+    from scipy.constants import mu_0
+
+    static_dt = max(float(config.t_max), float(config.ramp_off_time), 1.0) * 1.0e9
+    time_scale = 1.0 / static_dt
+    length_scale = max(
+        2.0 * abs(float(config.x_extent)),
+        2.0 * abs(float(config.y_extent)),
+        abs(float(config.air_height)) + abs(float(config.earth_depth)),
+        1.0,
+    )
+    rho_candidates = [float(config.rho_air), float(config.rho_earth), *[float(v) for v in config.layer_resistivities]]
+    positive_rho = [value for value in rho_candidates if math.isfinite(value) and value > 0.0]
+    rho_min = min(positive_rho) if positive_rho else 1.0
+    mu_max = mu_0 * max(abs(float(config.mu_r_air)), abs(float(config.mu_r_earth)), 1.0e-12)
+    spectral_floor = 1.0e-6 * rho_min / max(mu_max * length_scale * length_scale, 1.0e-300)
+    # Keep the static H-form gauge floor strong enough for AMS on locally refined
+    # source/receiver meshes while remaining small relative to transient mass terms.
+    return max(float(time_scale), float(spectral_floor), 2.0e-3)
+
+
 def assemble_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], facet_tags, config: PipelineConfig, debye=None):
     """Assemble curl-curl and conductivity mass matrices."""
 
@@ -2721,10 +3335,13 @@ def assemble_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], f
     bc, bc_dofs, bc_global = _make_zero_tangential_bc(msh, spaces, facet_tags, config)
 
     K_form = fem.form(materials["mu_inv"] * ufl.inner(ufl.curl(u), ufl.curl(v)) * ufl.dx)
+    M_unit_form = fem.form(ufl.inner(u, v) * ufl.dx)
     M_form = fem.form(materials["sigma"] * ufl.inner(u, v) * ufl.dx)
     Minf_form = fem.form(materials["sigma_infinity"] * ufl.inner(u, v) * ufl.dx)
     K = fem_petsc.assemble_matrix(K_form)
     K.assemble()
+    M_unit = fem_petsc.assemble_matrix(M_unit_form)
+    M_unit.assemble()
     M = fem_petsc.assemble_matrix(M_form)
     M.assemble()
     M_inf = fem_petsc.assemble_matrix(Minf_form)
@@ -2748,9 +3365,10 @@ def assemble_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], f
             mat.assemble()
             debye_mats.append(mat)
 
-    log("[operators] Assembled K, M_sigma, and M_sigma_infinity matrices.", comm=msh.comm)
+    log("[operators] Assembled K, M_unit, M_sigma, and M_sigma_infinity matrices.", comm=msh.comm)
     return {
         "K": K,
+        "M_unit": M_unit,
         "M": M,
         "M_inf": M_inf,
         "B_robin": B_robin,
@@ -2795,6 +3413,7 @@ def configure_ams_solver(A, spaces: dict[str, Any], config: PipelineConfig):
         ez.x.scatter_forward()
         pc.setHYPRESetEdgeConstantVectors(ex.x.petsc_vec, ey.x.petsc_vec, ez.x.petsc_vec)
         pc.setUp()
+        pc.setReusePreconditioner(True)
     except Exception as exc:
         raise SystemExit(f"Failed to configure HYPRE AMS with discrete gradient and edge constants: {exc}") from exc
 
@@ -2815,6 +3434,113 @@ def configure_lu_solver(A, *, comm=None):
     ksp.setFromOptions()
     log("[solver:h] Configured KSP preonly with PC lu.", comm=A.comm)
     return {"ksp": ksp}
+
+
+def _configure_h_solver(A, spaces: dict[str, Any], config: PipelineConfig):
+    """Configure the production H-form Nedelec solver."""
+
+    return configure_ams_solver(A, spaces, config)
+
+
+def _configure_h_step_solver(previous_context, A, spaces: dict[str, Any], config: PipelineConfig):
+    """Configure an H-form solver for a new time-step matrix."""
+
+    return _configure_h_solver(A, spaces, config)
+
+
+def _release_native_solver_memory() -> None:
+    import gc
+    import sys
+
+    gc.collect()
+    try:
+        from petsc4py import PETSc
+
+        PETSc.garbage_cleanup()
+    except Exception:
+        pass
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            malloc_trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim(0)
+        except Exception:
+            pass
+
+
+def _destroy_solver_context(context) -> None:
+    if context is None:
+        return
+    for key in ("ksp", "G"):
+        resource = context.get(key)
+        destroy = getattr(resource, "destroy", None)
+        if callable(destroy):
+            destroy()
+    context.clear()
+    _release_native_solver_memory()
+
+
+def _refresh_ams_solver_context(context, A, config: PipelineConfig) -> None:
+    from petsc4py import PETSc
+
+    context["ksp"].destroy()
+    ksp = PETSc.KSP().create(A.comm)
+    context["ksp"] = ksp
+    ksp.setOperators(A)
+    ksp.setType(config.ksp_type)
+    ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=config.max_it)
+    pc = ksp.getPC()
+    pc.setType("hypre")
+    pc.setHYPREType("ams")
+    pc.setHYPREDiscreteGradient(context["G"])
+    ex, ey, ez = context["edge_constants"]
+    pc.setHYPRESetEdgeConstantVectors(ex.x.petsc_vec, ey.x.petsc_vec, ez.x.petsc_vec)
+    pc.setReusePreconditioner(False)
+    pc.setUp()
+    pc.setReusePreconditioner(True)
+    _release_native_solver_memory()
+
+
+def _configure_e_step_solver(
+    previous_context,
+    A,
+    spaces: dict[str, Any],
+    config: PipelineConfig,
+    *,
+    matrix_signature,
+):
+    """Refresh AMS whenever the E-form time-step matrix changes."""
+
+    signature = tuple(matrix_signature)
+    previous_signature = None if previous_context is None else previous_context.get("matrix_signature")
+    signatures_match = previous_signature is not None and len(previous_signature) == len(signature)
+    if signatures_match:
+        for previous_value, value in zip(previous_signature, signature):
+            if isinstance(previous_value, bool) or isinstance(value, bool):
+                equal = previous_value is value
+            elif isinstance(previous_value, (int, float)) and isinstance(value, (int, float)):
+                equal = math.isclose(float(previous_value), float(value), rel_tol=1.0e-12, abs_tol=1.0e-30)
+            else:
+                equal = previous_value == value
+            if not equal:
+                signatures_match = False
+                break
+    if previous_context is not None and signatures_match:
+        previous_context["ksp"].setOperators(A)
+        previous_context["ksp"].getPC().setReusePreconditioner(True)
+        return previous_context
+    if previous_context is not None:
+        current_dt = float(signature[0])
+        _refresh_ams_solver_context(previous_context, A, config)
+        previous_context["preconditioner_dt"] = current_dt
+        previous_context["matrix_signature"] = signature
+        return previous_context
+    context = configure_ams_solver(A, spaces, config)
+    context["matrix_signature"] = signature
+    context["preconditioner_dt"] = float(signature[0])
+    return context
 
 
 def _source_current(t: float, config: PipelineConfig) -> float:
@@ -3036,6 +3762,89 @@ def _collapse_receiver_cell_candidates(values, mode: str, *, centers=None, point
     return collapsed
 
 
+def _local_lsq_receiver_value(values, centers, point):
+    import numpy as np
+
+    arr = np.asarray(values, dtype=float)
+    center_arr = np.asarray(centers, dtype=float)
+    point_arr = np.asarray(point, dtype=float).reshape(1, 3)
+    if center_arr.shape != (arr.shape[0], 3):
+        raise ValueError("candidate cell centers must have shape (n_candidates, 3)")
+
+    offsets = center_arr - point_arr
+    design = np.column_stack((np.ones(arr.shape[0], dtype=float), offsets))
+    coeffs, residuals, rank, singular_values = np.linalg.lstsq(design, arr, rcond=None)
+    fitted = design @ coeffs
+    residual = fitted - arr
+    if singular_values.size and float(np.min(singular_values)) > 0.0:
+        condition = float(np.max(singular_values) / np.min(singular_values))
+    else:
+        condition = float("inf")
+    metadata = {
+        "local_lsq_sample_count": int(arr.shape[0]),
+        "local_lsq_rank": int(rank),
+        "local_lsq_residual_norm": float(np.linalg.norm(residual)),
+        "local_lsq_condition": condition,
+    }
+    return np.asarray(coeffs[0], dtype=float), metadata
+
+
+def _local_lsq_receiver_radius(config: PipelineConfig, *, quantity: str = "field") -> float:
+    factor = float(getattr(config, "receiver_local_lsq_radius_factor", 2.0))
+    quantity = str(quantity).strip().lower()
+    radius = factor * float(config.receiver_mesh_size)
+    if quantity in {"dbdt", "dbzdt", "magnetic_dbdt"}:
+        radius = max(radius, 35.0)
+    return max(1.0e-9, radius, float(config.receiver_average_radius))
+
+
+def _local_lsq_receiver_max_samples(config: PipelineConfig, *, quantity: str = "field") -> int:
+    configured = int(getattr(config, "receiver_local_lsq_max_samples", 0))
+    if configured > 0:
+        return configured
+    quantity = str(quantity).strip().lower()
+    if quantity in {"dbdt", "dbzdt", "magnetic_dbdt"}:
+        return 1024
+    return 32
+
+
+def _local_lsq_receiver_sample_cells(
+    cell_centers,
+    *,
+    point,
+    radius: float,
+    max_samples: int = 32,
+    min_samples: int = 4,
+):
+    import numpy as np
+
+    centers = np.asarray(cell_centers, dtype=float)
+    if centers.ndim != 2 or centers.shape[1] != 3:
+        raise ValueError("cell_centers must have shape (n_cells, 3)")
+    point_arr = np.asarray(point, dtype=float).reshape(3)
+    distances = np.linalg.norm(centers - point_arr.reshape(1, 3), axis=1)
+    same_side = np.ones(centers.shape[0], dtype=bool)
+    if point_arr[2] < 0.0:
+        same_side = centers[:, 2] <= 0.0
+    elif point_arr[2] > 0.0:
+        same_side = centers[:, 2] >= 0.0
+
+    radius = float(radius)
+    max_samples = max(1, int(max_samples))
+    min_samples = max(1, int(min_samples))
+    mask = same_side & (distances <= radius)
+    if int(np.count_nonzero(mask)) < min_samples:
+        mask = same_side
+    if int(np.count_nonzero(mask)) < min_samples:
+        mask = np.ones(centers.shape[0], dtype=bool)
+    candidate_indices = np.flatnonzero(mask)
+    if candidate_indices.size == 0:
+        return np.asarray([], dtype=np.int32)
+    order = np.argsort(distances[candidate_indices], kind="mergesort")
+    selected = candidate_indices[order[:max_samples]]
+    return np.asarray(selected, dtype=np.int32)
+
+
 def _collapse_receiver_cell_candidates_with_metadata(values, mode: str, *, centers=None, point=None):
     import numpy as np
 
@@ -3051,6 +3860,61 @@ def _collapse_receiver_cell_candidates_with_metadata(values, mode: str, *, cente
         collapsed = np.median(arr, axis=0)
     elif mode == "mean":
         collapsed = np.mean(arr, axis=0)
+    elif mode in {"local_lsq", "local_lsq_earth", "local_lsq_air", "local_lsq_interface"}:
+        if centers is None:
+            raise ValueError(f"receiver_evaluation_mode='{mode}' requires candidate cell centers")
+        if point is None:
+            raise ValueError(f"receiver_evaluation_mode='{mode}' requires the receiver point")
+        center_arr = np.asarray(centers, dtype=float)
+        if center_arr.shape != (arr.shape[0], 3):
+            raise ValueError("candidate cell centers must have shape (n_candidates, 3)")
+        if mode == "local_lsq_interface":
+            earth_mask = center_arr[:, 2] <= 0.0
+            air_mask = center_arr[:, 2] >= 0.0
+            if np.any(earth_mask) and np.any(air_mask):
+                earth_value, earth_metadata = _local_lsq_receiver_value(arr[earth_mask], center_arr[earth_mask], point)
+                air_value, air_metadata = _local_lsq_receiver_value(arr[air_mask], center_arr[air_mask], point)
+                collapsed = 0.5 * (earth_value + air_value)
+                centers = center_arr
+                local_metadata = {
+                    "local_lsq_sample_count": int(arr.shape[0]),
+                    "local_lsq_rank": int(min(earth_metadata["local_lsq_rank"], air_metadata["local_lsq_rank"])),
+                    "local_lsq_residual_norm": float(
+                        max(
+                            earth_metadata["local_lsq_residual_norm"],
+                            air_metadata["local_lsq_residual_norm"],
+                        )
+                    ),
+                    "local_lsq_condition": float(
+                        max(
+                            earth_metadata["local_lsq_condition"],
+                            air_metadata["local_lsq_condition"],
+                        )
+                    ),
+                    "local_lsq_earth_sample_count": int(np.count_nonzero(earth_mask)),
+                    "local_lsq_air_sample_count": int(np.count_nonzero(air_mask)),
+                    "local_lsq_earth_value_z": float(earth_value[2]) if earth_value.size >= 3 else float("nan"),
+                    "local_lsq_air_value_z": float(air_value[2]) if air_value.size >= 3 else float("nan"),
+                }
+            else:
+                collapsed, local_metadata = _local_lsq_receiver_value(arr, center_arr, point)
+                centers = center_arr
+                local_metadata["local_lsq_earth_sample_count"] = int(np.count_nonzero(earth_mask))
+                local_metadata["local_lsq_air_sample_count"] = int(np.count_nonzero(air_mask))
+                local_metadata["local_lsq_earth_value_z"] = float("nan")
+                local_metadata["local_lsq_air_value_z"] = float("nan")
+        else:
+            if mode == "local_lsq_earth":
+                side_mask = center_arr[:, 2] <= 0.0
+            elif mode == "local_lsq_air":
+                side_mask = center_arr[:, 2] >= 0.0
+            else:
+                side_mask = np.ones(arr.shape[0], dtype=bool)
+            if not np.any(side_mask):
+                side_mask = np.ones(arr.shape[0], dtype=bool)
+            arr = arr[side_mask]
+            centers = center_arr[side_mask]
+            collapsed, local_metadata = _local_lsq_receiver_value(arr, centers, point)
     elif mode in {"nearest_center", "shallowest"}:
         if centers is None:
             raise ValueError(f"receiver_evaluation_mode='{mode}' requires candidate cell centers")
@@ -3068,10 +3932,13 @@ def _collapse_receiver_cell_candidates_with_metadata(values, mode: str, *, cente
         collapsed = arr[idx]
     else:
         raise ValueError(
-            "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', or 'shallowest'"
+            "receiver_evaluation_mode must be 'first_cell', 'mean', 'median', 'nearest_center', "
+            "'shallowest', 'local_lsq', 'local_lsq_earth', 'local_lsq_air', or 'local_lsq_interface'"
         )
 
     metadata: dict[str, Any] = {"selected_index": selected_index, "candidate_count": int(arr.shape[0])}
+    if mode in {"local_lsq", "local_lsq_earth", "local_lsq_air", "local_lsq_interface"}:
+        metadata.update(local_metadata)
     if centers is not None:
         center_arr = np.asarray(centers, dtype=float)
         if center_arr.shape != (arr.shape[0], 3):
@@ -3140,6 +4007,36 @@ def _receiver_candidate_count_stats(counts) -> dict[str, float | int]:
     }
 
 
+def _receiver_component_candidate_stats(sample_values, component_index: int, prefix: str) -> dict[str, float | int]:
+    import numpy as np
+
+    values = []
+    component_index = int(component_index)
+    for sample in sample_values or []:
+        arr = np.asarray(sample, dtype=float)
+        if arr.ndim != 2 or arr.shape[1] <= component_index:
+            continue
+        values.extend(float(value) for value in arr[:, component_index])
+    if not values:
+        return {
+            f"{prefix}_candidate_count": 0,
+            f"{prefix}_candidate_min": float("nan"),
+            f"{prefix}_candidate_median": float("nan"),
+            f"{prefix}_candidate_mean": float("nan"),
+            f"{prefix}_candidate_max": float("nan"),
+            f"{prefix}_candidate_std": float("nan"),
+        }
+    arr = np.asarray(values, dtype=float)
+    return {
+        f"{prefix}_candidate_count": int(arr.size),
+        f"{prefix}_candidate_min": float(np.min(arr)),
+        f"{prefix}_candidate_median": float(np.median(arr)),
+        f"{prefix}_candidate_mean": float(np.mean(arr)),
+        f"{prefix}_candidate_max": float(np.max(arr)),
+        f"{prefix}_candidate_std": float(np.std(arr)),
+    }
+
+
 def _receiver_candidate_geometry_stats(sample_metadata) -> dict[str, float | int]:
     import numpy as np
 
@@ -3165,9 +4062,33 @@ def _receiver_candidate_geometry_stats(sample_metadata) -> dict[str, float | int
     z_mins = []
     z_maxs = []
     multi_count = 0
+    lsq_sample_counts = []
+    lsq_earth_sample_counts = []
+    lsq_air_sample_counts = []
+    lsq_earth_value_z = []
+    lsq_air_value_z = []
+    lsq_ranks = []
+    lsq_residuals = []
+    lsq_conditions = []
     for item in items:
         if int(item.get("candidate_count", 0)) > 1:
             multi_count += 1
+        if "local_lsq_sample_count" in item:
+            lsq_sample_counts.append(float(item["local_lsq_sample_count"]))
+        if "local_lsq_earth_sample_count" in item:
+            lsq_earth_sample_counts.append(float(item["local_lsq_earth_sample_count"]))
+        if "local_lsq_air_sample_count" in item:
+            lsq_air_sample_counts.append(float(item["local_lsq_air_sample_count"]))
+        if math.isfinite(float(item.get("local_lsq_earth_value_z", math.nan))):
+            lsq_earth_value_z.append(float(item["local_lsq_earth_value_z"]))
+        if math.isfinite(float(item.get("local_lsq_air_value_z", math.nan))):
+            lsq_air_value_z.append(float(item["local_lsq_air_value_z"]))
+        if "local_lsq_rank" in item:
+            lsq_ranks.append(float(item["local_lsq_rank"]))
+        if math.isfinite(float(item.get("local_lsq_residual_norm", math.nan))):
+            lsq_residuals.append(float(item["local_lsq_residual_norm"]))
+        if math.isfinite(float(item.get("local_lsq_condition", math.nan))):
+            lsq_conditions.append(float(item["local_lsq_condition"]))
         if math.isfinite(float(item.get("candidate_center_distance_mean", math.nan))):
             distances.append(float(item["candidate_center_distance_mean"]))
             distance_mins.append(float(item["candidate_center_distance_min"]))
@@ -3190,7 +4111,32 @@ def _receiver_candidate_geometry_stats(sample_metadata) -> dict[str, float | int
         "candidate_center_z_min": float(np.min(z_mins)) if z_mins else float("nan"),
         "candidate_center_z_max": float(np.max(z_maxs)) if z_maxs else float("nan"),
         "selected_center_z_mean": float(np.mean(selected_z)) if selected_z else float("nan"),
+        "local_lsq_sample_count_mean": float(np.mean(lsq_sample_counts)) if lsq_sample_counts else float("nan"),
+        "local_lsq_earth_sample_count_mean": (
+            float(np.mean(lsq_earth_sample_counts)) if lsq_earth_sample_counts else float("nan")
+        ),
+        "local_lsq_air_sample_count_mean": (
+            float(np.mean(lsq_air_sample_counts)) if lsq_air_sample_counts else float("nan")
+        ),
+        "local_lsq_earth_value_z_mean": float(np.mean(lsq_earth_value_z)) if lsq_earth_value_z else float("nan"),
+        "local_lsq_air_value_z_mean": float(np.mean(lsq_air_value_z)) if lsq_air_value_z else float("nan"),
+        "local_lsq_rank_min": int(np.min(lsq_ranks)) if lsq_ranks else 0,
+        "local_lsq_residual_norm_max": float(np.max(lsq_residuals)) if lsq_residuals else float("nan"),
+        "local_lsq_condition_max": float(np.max(lsq_conditions)) if lsq_conditions else float("nan"),
     }
+
+
+def _resolved_magnetic_dbdt_evaluation_mode(config: PipelineConfig, receiver_mode: str) -> str:
+    dbdt_mode = str(config.magnetic_dbdt_evaluation_mode).strip().lower()
+    if dbdt_mode not in {"", "same"}:
+        return dbdt_mode
+
+    mode = str(receiver_mode).strip().lower()
+    receiver_z = float(config.receiver[2])
+    surface_tol = max(float(config.geometry_tolerance), 1.0e-10)
+    if str(config.formulation).strip().lower() == "h" and abs(receiver_z) <= surface_tol:
+        return "local_lsq_interface"
+    return mode
 
 
 def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
@@ -3198,35 +4144,71 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
 
     import numpy as np
 
+    mode = str(config.receiver_evaluation_mode).strip().lower()
+    dbdt_mode = _resolved_magnetic_dbdt_evaluation_mode(config, mode)
     if not getattr(evaluate_receivers, "_logged_dbdt_mode", False):
         log(
             f"[receiver] Ex/Ey and dBz/dt are evaluated with receiver_type={config.receiver_type}, "
-            f"receiver_evaluation_mode={config.receiver_evaluation_mode}. "
+            f"receiver_evaluation_mode={config.receiver_evaluation_mode}, "
+            f"magnetic_dbdt_evaluation_mode={config.magnetic_dbdt_evaluation_mode}, "
+            f"resolved_dbdt_evaluation_mode={dbdt_mode}. "
             "dBz/dt comes from a DG0 interpolation of -curl(E); at shared receiver points, "
             "the selected mode combines the colliding cellwise-constant candidates.",
             comm=msh.comm,
         )
         setattr(evaluate_receivers, "_logged_dbdt_mode", True)
-    mode = str(config.receiver_evaluation_mode).strip().lower()
     e_samples = []
     dbdt_samples = []
-    center_samples = []
-    point_samples = []
+    e_center_samples = []
+    dbdt_center_samples = []
+    e_point_samples = []
+    dbdt_point_samples = []
     candidate_counts = []
-    needs_geometry_stats = bool(_parse_receiver_diagnostic_types(config)) or mode in {"nearest_center", "shallowest"}
+    needs_geometry_stats = bool(_parse_receiver_diagnostic_types(config)) or mode in {
+        "nearest_center",
+        "shallowest",
+        "local_lsq",
+        "local_lsq_earth",
+        "local_lsq_air",
+        "local_lsq_interface",
+    } or dbdt_mode in {
+        "nearest_center",
+        "shallowest",
+        "local_lsq",
+        "local_lsq_earth",
+        "local_lsq_air",
+        "local_lsq_interface",
+    }
     cell_centers = _cell_centers(msh) if needs_geometry_stats else None
+
+    def sample_cells_for_mode(sample_point, sample_mode: str, *, quantity: str):
+        if sample_mode in {"local_lsq", "local_lsq_earth", "local_lsq_air", "local_lsq_interface"}:
+            cells = _local_lsq_receiver_sample_cells(
+                cell_centers,
+                point=sample_point,
+                radius=_local_lsq_receiver_radius(config, quantity=quantity),
+                max_samples=_local_lsq_receiver_max_samples(config, quantity=quantity),
+            )
+            eval_points = cell_centers[np.asarray(cells, dtype=int)] if len(cells) else np.empty((0, 3), dtype=float)
+        else:
+            cells = _find_cells_for_point(msh, sample_point)
+            eval_points = np.repeat(np.asarray(sample_point, dtype=float).reshape(1, 3), len(cells), axis=0)
+        return np.asarray(cells, dtype=np.int32), np.asarray(eval_points, dtype=float)
+
     for sample_point in _receiver_sampling_points(config):
-        cells = _find_cells_for_point(msh, sample_point)
-        if len(cells) == 0:
+        e_cells, e_eval_points = sample_cells_for_mode(sample_point, mode, quantity="field")
+        dbdt_cells, dbdt_eval_points = sample_cells_for_mode(sample_point, dbdt_mode, quantity="dbdt")
+        if len(e_cells) == 0 or len(dbdt_cells) == 0:
             continue
-        candidate_counts.append(int(len(cells)))
-        point = np.repeat(np.asarray(sample_point, dtype=float).reshape(1, 3), len(cells), axis=0)
-        e_vals = np.asarray(E.eval(point, cells), dtype=float).reshape(len(cells), -1)
-        dbdt_vals = np.asarray(dbdt.eval(point, cells), dtype=float).reshape(len(cells), -1)
+        candidate_counts.append(int(len(dbdt_cells)))
+        e_vals = np.asarray(E.eval(e_eval_points, e_cells), dtype=float).reshape(len(e_cells), -1)
+        dbdt_vals = np.asarray(dbdt.eval(dbdt_eval_points, dbdt_cells), dtype=float).reshape(len(dbdt_cells), -1)
         e_samples.append(e_vals)
         dbdt_samples.append(dbdt_vals)
-        center_samples.append(cell_centers[np.asarray(cells, dtype=int)] if cell_centers is not None else None)
-        point_samples.append(np.asarray(sample_point, dtype=float))
+        e_center_samples.append(cell_centers[np.asarray(e_cells, dtype=int)] if cell_centers is not None else None)
+        dbdt_center_samples.append(cell_centers[np.asarray(dbdt_cells, dtype=int)] if cell_centers is not None else None)
+        e_point_samples.append(np.asarray(sample_point, dtype=float))
+        dbdt_point_samples.append(np.asarray(sample_point, dtype=float))
     if not e_samples:
         raise RuntimeError(
             f"receiver {config.receiver} was not found in a local cell; run in serial "
@@ -3235,18 +4217,19 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     e_val = _aggregate_receiver_sample_values(
         e_samples,
         mode,
-        sample_centers=center_samples,
-        sample_points=point_samples,
+        sample_centers=e_center_samples,
+        sample_points=e_point_samples,
     )
     dbdt_val, candidate_geometry_stats = _aggregate_receiver_sample_values_with_metadata(
         dbdt_samples,
-        mode,
-        sample_centers=center_samples,
-        sample_points=point_samples,
+        dbdt_mode,
+        sample_centers=dbdt_center_samples,
+        sample_points=dbdt_point_samples,
     )
     rec = {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
     rec.update(_receiver_candidate_count_stats(candidate_counts))
     rec.update(candidate_geometry_stats)
+    rec.update(_receiver_component_candidate_stats(dbdt_samples, 2, "dBzdt"))
     return rec
 
 
@@ -3256,6 +4239,7 @@ def _make_secondary_receiver_projector_from_evaluate_receivers(
     *,
     msh,
     config: PipelineConfig,
+    diagnostics: dict[str, Any] | None = None,
 ):
     """Build a primary-secondary receiver projector from existing DOLFINx sampling.
 
@@ -3271,6 +4255,63 @@ def _make_secondary_receiver_projector_from_evaluate_receivers(
         E_secondary = electric_getter(state, Ep_new, time_value, dt)
         dbdt_secondary = dbdt_getter(state, Ep_new, time_value, dt)
         rec = evaluate_receivers(E_secondary, dbdt_secondary, msh, config)
+        rec["dBzdt_curl"] = float(rec.get("dBzdt", np.nan))
+        if diagnostics is not None:
+            h_receiver = diagnostics.get("secondary_H_receiver")
+            dbdt_biot = diagnostics.get("secondary_dbdt_biot_rate")
+            dbdt_ampere = diagnostics.get("secondary_dbdt_ampere_rate")
+            if h_receiver is not None:
+                h_values = np.asarray(h_receiver, dtype=float).reshape(-1)
+                if h_values.size == 3 and np.all(np.isfinite(h_values)):
+                    rec["Hz"] = float(h_values[2])
+            if (
+                "Hz" not in rec
+                and str(config.magnetic_receiver_mode).strip().lower() == "faraday_integrated"
+                and np.isfinite(float(rec.get("dBzdt", np.nan)))
+            ):
+                previous_hz = float(diagnostics.get("secondary_faraday_hz", 0.0))
+                rec["Hz"] = _advance_faraday_receiver_hz(
+                    previous_hz=previous_hz,
+                    dbzdt_new=float(rec["dBzdt"]),
+                    dt=float(dt),
+                )
+                diagnostics["secondary_faraday_hz"] = float(rec["Hz"])
+            if str(config.magnetic_dbdt_mode).strip().lower() == "biot_rate" and dbdt_biot is not None:
+                dbdt_values = np.asarray(dbdt_biot, dtype=float).reshape(-1)
+                if dbdt_values.size == 3 and np.all(np.isfinite(dbdt_values)):
+                    rec["dBzdt_biot_rate"] = float(dbdt_values[2])
+                    rec["dBzdt"] = float(dbdt_values[2])
+            if str(config.magnetic_dbdt_mode).strip().lower() == "ampere_rate" and dbdt_ampere is not None:
+                dbdt_values = np.asarray(dbdt_ampere, dtype=float).reshape(-1)
+                if dbdt_values.size == 3 and np.all(np.isfinite(dbdt_values)):
+                    rec["dBzdt_ampere_rate"] = float(dbdt_values[2])
+                    rec["dBzdt"] = float(dbdt_values[2])
+        if diagnostics is not None:
+            candidate_stats = {
+                key: float(rec.get(key, np.nan))
+                for key in (
+                    "dBzdt_candidate_min",
+                    "dBzdt_candidate_median",
+                    "dBzdt_candidate_mean",
+                    "dBzdt_candidate_max",
+                    "dBzdt_candidate_std",
+                )
+            }
+            candidate_stats["dBzdt_candidate_count"] = int(rec.get("dBzdt_candidate_count", 0))
+            diagnostics.setdefault("secondary_receiver_rows", []).append(
+                {
+                    "time_value": float(time_value),
+                    "dt": float(dt),
+                    "Ex": float(rec.get("Ex", np.nan)),
+                    "Ey": float(rec.get("Ey", np.nan)),
+                    "Hz": float(rec.get("Hz", np.nan)),
+                    "dBzdt": float(rec.get("dBzdt", np.nan)),
+                    "dBzdt_curl": float(rec.get("dBzdt_curl", np.nan)),
+                    "dBzdt_biot_rate": float(rec.get("dBzdt_biot_rate", np.nan)),
+                    "dBzdt_ampere_rate": float(rec.get("dBzdt_ampere_rate", np.nan)),
+                    **candidate_stats,
+                }
+            )
         row = []
         for component in components:
             if component not in rec:
@@ -3326,6 +4367,7 @@ def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time
                 "dBzdt": float(rec.get("dBzdt", np.nan)),
                 "dBzdt_curl": float(rec.get("dBzdt_curl", np.nan)),
                 "dBzdt_biot_rate": float(rec.get("dBzdt_biot_rate", np.nan)),
+                "dBzdt_ampere_rate": float(rec.get("dBzdt_ampere_rate", np.nan)),
                 "sample_count": int(rec.get("sample_count", 0)),
                 "candidate_count_min": int(rec.get("candidate_count_min", 0)),
                 "candidate_count_max": int(rec.get("candidate_count_max", 0)),
@@ -3339,6 +4381,16 @@ def _evaluate_receiver_diagnostics(E, dbdt, msh, config: PipelineConfig, *, time
                 "candidate_center_z_min": float(rec.get("candidate_center_z_min", np.nan)),
                 "candidate_center_z_max": float(rec.get("candidate_center_z_max", np.nan)),
                 "selected_center_z_mean": float(rec.get("selected_center_z_mean", np.nan)),
+                "local_lsq_sample_count_mean": float(rec.get("local_lsq_sample_count_mean", np.nan)),
+                "local_lsq_earth_sample_count_mean": float(
+                    rec.get("local_lsq_earth_sample_count_mean", np.nan)
+                ),
+                "local_lsq_air_sample_count_mean": float(rec.get("local_lsq_air_sample_count_mean", np.nan)),
+                "local_lsq_earth_value_z_mean": float(rec.get("local_lsq_earth_value_z_mean", np.nan)),
+                "local_lsq_air_value_z_mean": float(rec.get("local_lsq_air_value_z_mean", np.nan)),
+                "local_lsq_rank_min": int(rec.get("local_lsq_rank_min", 0)),
+                "local_lsq_residual_norm_max": float(rec.get("local_lsq_residual_norm_max", np.nan)),
+                "local_lsq_condition_max": float(rec.get("local_lsq_condition_max", np.nan)),
             }
         )
     return rows
@@ -3443,6 +4495,7 @@ def _receiver_reference_summary(receiver_diagnostic_rows, times, ref_data, compo
                 continue
             floor = _validation_floor(component, ref[:, col])
             max_abs_ref = float(np.max(np.abs(ref[:, col]))) if ref.shape[0] else 0.0
+            ordinary_errors = []
             robust_errors = []
             peak_errors = []
             error_times = []
@@ -3456,19 +4509,21 @@ def _receiver_reference_summary(receiver_diagnostic_rows, times, ref_data, compo
                     continue
                 ref_value = float(ref[idx, col])
                 abs_error = abs(pred_value - ref_value)
+                ordinary_errors.append(_ordinary_relative_error(abs_error, ref_value))
                 robust_errors.append(abs_error / max(abs(ref_value), floor))
                 peak_errors.append(abs_error / max(max_abs_ref, floor))
                 error_times.append(time_obs)
-            if not robust_errors:
+            if not ordinary_errors:
                 continue
-            max_index = max(range(len(robust_errors)), key=lambda i: robust_errors[i])
+            max_index = max(range(len(ordinary_errors)), key=lambda i: ordinary_errors[i])
             component_errors[component] = {
-                "sample_count": len(robust_errors),
-                "max_relative_error": float(robust_errors[max_index]),
-                "mean_relative_error": float(sum(robust_errors) / len(robust_errors)),
+                "sample_count": len(ordinary_errors),
+                "max_relative_error": float(ordinary_errors[max_index]),
+                "mean_relative_error": float(sum(ordinary_errors) / len(ordinary_errors)),
+                "max_relative_error_with_floor": float(max(robust_errors)),
                 "max_peak_normalized_error": float(max(peak_errors)),
                 "time_at_max_relative_error": float(error_times[max_index]),
-                "passes_threshold": bool(max(robust_errors) <= float(threshold) and max(peak_errors) <= float(threshold)),
+                "passes_threshold": bool(max(ordinary_errors) <= float(threshold)),
             }
         by_type[receiver_type] = component_errors
 
@@ -3525,7 +4580,7 @@ def _receiver_reference_error_rows(receiver_diagnostic_rows, times, ref_data, co
             floor = _validation_floor(component, ref[:, col])
             max_abs_ref = float(np.max(np.abs(ref[:, col]))) if ref.shape[0] else 0.0
             abs_error = abs(pred_value - ref_value)
-            ordinary = abs_error / abs(ref_value) if ref_value != 0.0 else float("inf")
+            ordinary = _ordinary_relative_error(abs_error, ref_value)
             robust = abs_error / max(abs(ref_value), floor)
             peak = abs_error / max(max_abs_ref, floor)
             out.append(
@@ -3539,7 +4594,7 @@ def _receiver_reference_error_rows(receiver_diagnostic_rows, times, ref_data, co
                     "ordinary_relative_error": float(ordinary),
                     "relative_error_with_floor": float(robust),
                     "peak_normalized_error": float(peak),
-                    "pass_5pct": bool(robust <= float(threshold) and peak <= float(threshold)),
+                    "pass_5pct": bool(ordinary <= float(threshold)),
                 }
             )
     return out
@@ -3598,22 +4653,16 @@ def _write_receiver_reference_error_artifacts(workdir: Path, receiver_rows: list
             subset.sort(key=lambda row: float(row["time_obs"]))
             if not subset:
                 continue
+            ordinary = np.asarray([float(row["ordinary_relative_error"]) for row in subset], dtype=float)
+            ordinary[~np.isfinite(ordinary)] = np.nan
             ax.semilogx(
                 [float(row["time_obs"]) for row in subset],
-                [float(row["relative_error_with_floor"]) for row in subset],
+                ordinary,
                 marker=markers[i % len(markers)],
-                label=f"{receiver_type} robust",
-            )
-            ax.semilogx(
-                [float(row["time_obs"]) for row in subset],
-                [float(row["peak_normalized_error"]) for row in subset],
-                linestyle="--",
-                marker=markers[i % len(markers)],
-                alpha=0.75,
-                label=f"{receiver_type} peak",
+                label=f"{receiver_type} pointwise",
             )
         ax.axhline(0.05, color="black", linestyle=":", linewidth=1.2, label="5%")
-        ax.set_ylabel(component)
+        ax.set_ylabel(f"{component} pointwise rel. error")
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(loc="best")
     axes_arr[-1].set_xlabel("t_obs (s)")
@@ -3626,8 +4675,16 @@ def _write_receiver_reference_error_artifacts(workdir: Path, receiver_rows: list
 def _forward_components(config: PipelineConfig) -> list[str]:
     components = ["Ex", "Ey"]
     magnetic_mode = str(config.magnetic_receiver_mode).strip().lower()
+    magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
     formulation = str(config.formulation).strip().lower()
-    if formulation == "h" or magnetic_mode in {"biot_current", "biot_ohmic", "faraday_integrated"}:
+    source_term_mode = str(config.source_term_mode).strip().lower()
+    primary_secondary_dbdt_override = (
+        source_term_mode == "primary_secondary" and magnetic_dbdt_mode in {"biot_rate", "ampere_rate"}
+    )
+    if (
+        formulation == "h"
+        or magnetic_mode in {"biot_current", "biot_ohmic", "faraday_integrated"}
+    ) and not primary_secondary_dbdt_override:
         components.append("Hz")
     components.append("dBzdt")
     return components
@@ -3689,12 +4746,27 @@ def _polarizable_earth_cells(msh, cell_tags, config: PipelineConfig):
         return earth_cells
     top = float(config.cole_layer_top)
     bottom = float(config.cole_layer_bottom)
-    if math.isinf(bottom):
-        return earth_cells
     centers = _cell_centers(msh)
     depths = -centers[earth_cells.astype(int), 2]
-    mask = (depths >= top) & (depths <= bottom)
+    mask = _polarizable_depth_mask(depths, top=top, bottom=bottom)
     return earth_cells[mask]
+
+
+def _polarizable_depth_mask(depths, *, top: float, bottom: float):
+    import numpy as np
+
+    depth_values = np.asarray(depths, dtype=float)
+    top_value = float(top)
+    bottom_value = float(bottom)
+    if not math.isfinite(top_value) or top_value < 0.0:
+        raise ValueError("cole_layer_top must be finite and nonnegative")
+    if bottom_value < top_value:
+        raise ValueError("cole_layer_bottom must be greater than or equal to cole_layer_top")
+    if math.isinf(bottom_value):
+        return depth_values >= top_value
+    if not math.isfinite(bottom_value):
+        raise ValueError("cole_layer_bottom must be finite or inf")
+    return (depth_values >= top_value) & (depth_values <= bottom_value)
 
 
 def _build_debye_materials(msh, cell_tags, spaces: dict[str, Any], fit: DebyeFit, config: PipelineConfig):
@@ -3734,7 +4806,41 @@ def _debye_backward_euler_coefficients(term: DebyeTerm, dt: float) -> tuple[floa
     return tau / denom, dt / denom
 
 
-def _debye_total_field_step_metadata(debye, dt: float) -> dict[str, Any]:
+def _debye_time_coefficients(term: DebyeTerm, dt: float, scheme: str = "backward_euler") -> tuple[float, float]:
+    """Return alpha, beta for one Debye memory update."""
+
+    tau = float(term.tau)
+    dt = float(dt)
+    if tau <= 0.0 or dt <= 0.0:
+        raise ValueError("Debye tau and timestep must be positive")
+    scheme_value = str(scheme).strip().lower()
+    if scheme_value == "backward_euler":
+        return _debye_backward_euler_coefficients(term, dt)
+    if scheme_value == "exponential":
+        alpha = math.exp(-dt / tau)
+        return alpha, 1.0 - alpha
+    raise ValueError("debye_time_scheme must be 'backward_euler' or 'exponential'")
+
+
+def _debye_coefficients_for_terms(terms, dt: float, scheme: str = "backward_euler"):
+    import numpy as np
+
+    coeffs = [_debye_time_coefficients(term, dt, scheme) for term in terms]
+    if not coeffs:
+        return np.empty(0, dtype=float), np.empty(0, dtype=float)
+    alpha, beta = zip(*coeffs)
+    return np.asarray(alpha, dtype=float), np.asarray(beta, dtype=float)
+
+
+def _debye_sigma_eff_for_terms(sigma_inf: float, terms, dt: float, scheme: str = "backward_euler") -> float:
+    _alpha, beta = _debye_coefficients_for_terms(terms, dt, scheme)
+    sigma_eff = float(sigma_inf)
+    for term, beta_i in zip(terms, beta):
+        sigma_eff -= float(term.delta_sigma) * float(beta_i)
+    return float(sigma_eff)
+
+
+def _debye_total_field_step_metadata(debye, dt: float, scheme: str = "backward_euler") -> dict[str, Any]:
     """Return the task-book E-form total-field Debye BE convention.
 
     The DOLFINx total-field IP step uses
@@ -3762,22 +4868,20 @@ def _debye_total_field_step_metadata(debye, dt: float) -> dict[str, Any]:
     else:
         raise ValueError("Debye metadata requires fit.sigma_infinity or sigma_infinity")
     terms = tuple(debye.get("terms", ()))
-    alpha: list[float] = []
-    beta: list[float] = []
     delta_sigma: list[float] = []
-    sigma_eff = sigma_inf
-    for term in terms:
-        alpha_i, beta_i = _debye_backward_euler_coefficients(term, dt)
+    alpha_array, beta_array = _debye_coefficients_for_terms(terms, dt, scheme)
+    alpha = [float(value) for value in alpha_array]
+    beta = [float(value) for value in beta_array]
+    sigma_eff = float(sigma_inf)
+    for term, beta_i in zip(terms, beta):
         delta_i = float(term.delta_sigma)
-        alpha.append(float(alpha_i))
-        beta.append(float(beta_i))
         delta_sigma.append(delta_i)
         sigma_eff -= delta_i * float(beta_i)
 
     sum_delta = float(sum(delta_sigma))
     return {
         "enabled": True,
-        "time_scheme": "backward_euler",
+        "time_scheme": str(scheme).strip().lower(),
         "current_convention": "J = sigma_inf E - sum(delta_sigma_k chi_k)",
         "memory_update": "chi_k_new = alpha_k * chi_k_old + beta_k * E_new",
         "memory_initial_condition": "chi_k0 = E0",
@@ -3795,20 +4899,26 @@ def _debye_total_field_step_metadata(debye, dt: float) -> dict[str, Any]:
     }
 
 
-def _matrix_for_effective_conductivity(operators, debye, dt: float):
+def _matrix_for_effective_conductivity(operators, debye, dt: float, scheme: str = "backward_euler"):
     from petsc4py import PETSc
 
     if debye is None or not debye["terms"]:
         return operators["M"]
     M_eff = operators["M_inf"].copy()
     for term, M_delta in zip(debye["terms"], operators["M_debye"]):
-        _alpha, beta = _debye_backward_euler_coefficients(term, dt)
+        _alpha, beta = _debye_time_coefficients(term, dt, scheme)
         M_eff.axpy(-beta, M_delta, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
     M_eff.assemble()
     return M_eff
 
 
-def _assemble_history_rhs(operators, debye, memories, E_old, dt: float):
+def _matrix_for_secondary_step_conductivity(operators, debye, sigma_eff: float, dt: float, scheme: str = "backward_euler"):
+    if debye is not None and debye.get("terms", ()):
+        return _matrix_for_effective_conductivity(operators, debye, dt, scheme)
+    return operators["M"].copy()
+
+
+def _assemble_history_rhs(operators, debye, memories, E_old, dt: float, scheme: str = "backward_euler"):
     if debye is None or not debye["terms"]:
         b = E_old.x.petsc_vec.duplicate()
         operators["M"].mult(E_old.x.petsc_vec, b)
@@ -3819,7 +4929,7 @@ def _assemble_history_rhs(operators, debye, memories, E_old, dt: float):
     operators["M_inf"].mult(E_old.x.petsc_vec, b)
     tmp = E_old.x.petsc_vec.duplicate()
     for term, M_delta, chi in zip(debye["terms"], operators["M_debye"], memories):
-        _alpha, beta = _debye_backward_euler_coefficients(term, dt)
+        _alpha, beta = _debye_time_coefficients(term, dt, scheme)
         M_delta.mult(chi.x.petsc_vec, tmp)
         b.axpy(-beta, tmp)
     b.scale(1.0 / dt)
@@ -3854,6 +4964,38 @@ def _bdf2_step_coefficients(dt: float, previous_dt: float) -> dict[str, float]:
         "lhs": (1.0 + 2.0 * ratio) / (dt * (1.0 + ratio)),
         "old": (1.0 + ratio) / dt,
         "older": -(ratio * ratio) / (dt * (1.0 + ratio)),
+    }
+
+
+def _h_time_discretization_coefficients(
+    config: PipelineConfig,
+    *,
+    dt: float,
+    previous_dt: float | None,
+    has_older: bool,
+) -> dict[str, float | str]:
+    """Return H-form mass/stiffness coefficients for one implicit time step."""
+
+    time_method = str(config.time_method).strip().lower()
+    if time_method == "bdf2" and has_older and previous_dt is not None:
+        coeffs = _bdf2_step_coefficients(dt, previous_dt)
+        return {
+            "method": "bdf2",
+            "lhs_mass": coeffs["lhs"],
+            "lhs_stiffness": 1.0,
+            "old_mass": coeffs["old"],
+            "older_mass": coeffs["older"],
+            "old_stiffness": 0.0,
+        }
+
+    coeffs = _theta_step_coefficients(dt, float(config.time_theta))
+    return {
+        "method": "theta",
+        "lhs_mass": coeffs["mass_lhs"],
+        "lhs_stiffness": coeffs["stiffness_lhs"],
+        "old_mass": coeffs["mass_rhs"],
+        "older_mass": 0.0,
+        "old_stiffness": coeffs["stiffness_rhs"],
     }
 
 
@@ -4006,6 +5148,116 @@ def _biot_savart_cell_current_h_at_receiver(
             )
         h_values.append(h)
     return np.mean(np.vstack(h_values), axis=0)
+
+
+def _cell_biot_center_points_weights(msh):
+    """Return cached cell-center quadrature data for fast Biot recovery."""
+
+    cached = getattr(msh, "_atem3d_cell_biot_center_points_weights", None)
+    if cached is not None:
+        return cached
+    centers, _radii, volumes = _cell_centers_radii_volumes(msh)
+    import numpy as np
+
+    cells = np.arange(centers.shape[0], dtype=np.int32)
+    cached = (centers, cells, volumes)
+    setattr(msh, "_atem3d_cell_biot_center_points_weights", cached)
+    return cached
+
+
+def _biot_savart_function_current_h_at_receiver(
+    current_density,
+    msh,
+    config: PipelineConfig,
+    *,
+    integration: str = "quadrature",
+):
+    """Recover receiver H from a vector-valued cell current density function."""
+
+    import numpy as np
+
+    integration_mode = str(integration).strip().lower()
+    if integration_mode == "quadrature":
+        points, cells, weights = _cell_biot_quadrature_points_weights(msh)
+    elif integration_mode == "cell_center":
+        points, cells, weights = _cell_biot_center_points_weights(msh)
+    else:
+        raise ValueError("Biot current integration must be 'quadrature' or 'cell_center'")
+    currents = np.asarray(current_density.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
+    h_values = []
+    for receiver in _receiver_sampling_points(config):
+        r = np.asarray(receiver, dtype=float)[None, :] - points
+        norm = np.linalg.norm(r, axis=1)
+        mask = norm > 0.0
+        h = np.zeros(3, dtype=float)
+        if np.any(mask):
+            h = np.sum(
+                weights[mask, None]
+                * np.cross(currents[mask], r[mask])
+                / (4.0 * np.pi * norm[mask, None] ** 3),
+                axis=0,
+            )
+        h_values.append(h)
+    return np.mean(np.vstack(h_values), axis=0)
+
+
+def _tetrahedron_quadrature_points_weights(coords, volume: float):
+    """Return symmetric four-point tetrahedron quadrature coordinates."""
+
+    import numpy as np
+
+    xyz = np.asarray(coords, dtype=float)
+    if xyz.shape != (4, 3):
+        raise ValueError("tetrahedron coordinates must have shape (4, 3)")
+    alpha = 0.5854101966249685
+    beta = 0.1381966011250105
+    barycentric = np.asarray(
+        [
+            [alpha, beta, beta, beta],
+            [beta, alpha, beta, beta],
+            [beta, beta, alpha, beta],
+            [beta, beta, beta, alpha],
+        ],
+        dtype=float,
+    )
+    points = barycentric @ xyz
+    weights = np.full(4, float(volume) / 4.0, dtype=float)
+    return points, weights
+
+
+def _cell_biot_quadrature_points_weights(msh):
+    """Return cell-wise points, owning cells, and weights for Biot integration."""
+
+    import numpy as np
+
+    tdim = msh.topology.dim
+    msh.topology.create_connectivity(tdim, 0)
+    c_to_v = msh.topology.connectivity(tdim, 0)
+    geometry = msh.geometry.x
+    n_local = msh.topology.index_map(tdim).size_local
+    centers, _radii, volumes = _cell_centers_radii_volumes(msh)
+    point_blocks = []
+    cell_blocks = []
+    weight_blocks = []
+    for cell in range(n_local):
+        vertices = c_to_v.links(cell)
+        coords = geometry[vertices]
+        volume = float(volumes[cell])
+        if tdim == 3 and coords.shape == (4, 3) and volume > 0.0:
+            q_points, q_weights = _tetrahedron_quadrature_points_weights(coords, volume)
+        else:
+            q_points = centers[cell].reshape(1, 3)
+            q_weights = np.asarray([volume], dtype=float)
+        point_blocks.append(q_points)
+        cell_blocks.append(np.full(q_points.shape[0], cell, dtype=np.int32))
+        weight_blocks.append(q_weights)
+    if not point_blocks:
+        return (
+            np.zeros((0, 3), dtype=float),
+            np.zeros(0, dtype=np.int32),
+            np.zeros(0, dtype=float),
+        )
+    return np.vstack(point_blocks), np.concatenate(cell_blocks), np.concatenate(weight_blocks)
 
 
 def _biot_savart_line_h_at_receiver(config: PipelineConfig, *, current: float, n_quad: int = 201):
@@ -4166,9 +5418,7 @@ def _make_nedelec_rhs_interpolator_from_samples(
             )
         if points is None:
             raise ValueError("sample_points are required for non-constant secondary RHS samples")
-        from atem3d.primary import TabulatedVectorField
-
-        field = TabulatedVectorField(points=points, values=values)
+        field = _FastTabulatedVectorField(points=points, values=values)
         return _interpolate_vector_callable_to_nedelec_function(
             spaces,
             name=name,
@@ -4178,7 +5428,42 @@ def _make_nedelec_rhs_interpolator_from_samples(
     return convert
 
 
-def _make_nedelec_solution_sampler_at_points(msh, sample_points):
+class _FastTabulatedVectorField:
+    """DOLFINx interpolation callable backed by rounded-coordinate hash lookup."""
+
+    def __init__(self, *, points, values, decimals: int = 10):
+        import numpy as np
+
+        self.points = np.asarray(points, dtype=float)
+        self.values = np.asarray(values, dtype=float)
+        if self.points.shape != self.values.shape or self.points.ndim != 2 or self.points.shape[1] != 3:
+            raise ValueError("points and values must both have shape (n, 3)")
+        self.decimals = int(decimals)
+        rounded = np.round(self.points, self.decimals)
+        self.lookup = {
+            tuple(float(item) for item in point): self.values[index].copy()
+            for index, point in enumerate(rounded)
+        }
+
+    def __call__(self, x):
+        import numpy as np
+
+        query = np.asarray(x, dtype=float)
+        if query.ndim != 2 or query.shape[0] != 3:
+            raise ValueError("x must have shape (3, n_points)")
+        rounded = np.round(query.T, self.decimals)
+        output = np.empty((3, query.shape[1]), dtype=float)
+        for column, point in enumerate(rounded):
+            key = tuple(float(item) for item in point)
+            value = self.lookup.get(key)
+            if value is None:
+                index = int(np.argmin(np.sum((self.points - query[:, column]) ** 2, axis=1)))
+                value = self.values[index]
+            output[:, column] = value
+        return output
+
+
+def _make_nedelec_solution_sampler_at_points(msh, sample_points, sample_cells=None):
     """Return a sampler that evaluates a Nedelec Function at physical points."""
 
     import numpy as np
@@ -4186,13 +5471,18 @@ def _make_nedelec_solution_sampler_at_points(msh, sample_points):
     points = np.asarray(sample_points, dtype=float)
     if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] == 0:
         raise ValueError("sample_points must have shape (n_samples, 3)")
-    cells = []
-    for point in points:
-        point_cells = _find_cells_for_point(msh, point)
-        if len(point_cells) == 0:
-            raise RuntimeError(f"sample point {point.tolist()} was not found in a local cell")
-        cells.append(int(point_cells[0]))
-    cell_array = np.asarray(cells, dtype=np.int32)
+    if sample_cells is None:
+        cells = []
+        for point in points:
+            point_cells = _find_cells_for_point(msh, point)
+            if len(point_cells) == 0:
+                raise RuntimeError(f"sample point {point.tolist()} was not found in a local cell")
+            cells.append(int(point_cells[0]))
+        cell_array = np.asarray(cells, dtype=np.int32)
+    else:
+        cell_array = np.asarray(sample_cells, dtype=np.int32)
+        if cell_array.shape != (points.shape[0],):
+            raise ValueError("sample_cells must contain one cell index per sample point")
 
     def sample(solution, _rhs_samples=None):
         values = np.asarray(solution.eval(points, cell_array), dtype=float)
@@ -4268,7 +5558,8 @@ def _solve_dc_secondary_field(
     Ep0,
     config: PipelineConfig,
     *,
-    sigma_background: float,
+    sigma_background,
+    sigma_lhs=None,
 ):
     """Solve the primary-secondary DC initialization problem.
 
@@ -4289,10 +5580,26 @@ def _solve_dc_secondary_field(
 
     V = spaces["V"]
     S = spaces["S"]
-    sigma0 = materials.get("sigma_initial", materials["sigma"])
-    sigma_b = float(sigma_background)
+    sigma0 = _primary_secondary_dc_conductivity(materials, config)
+    sigma_lhs_expr = sigma0 if sigma_lhs is None else sigma_lhs
+    sigma_b_values = (
+        np.asarray(sigma_background.x.array, dtype=float)
+        if hasattr(sigma_background, "x")
+        else None
+    )
+    sigma_b = (
+        float(np.max(np.abs(sigma_b_values))) if sigma_b_values is not None and sigma_b_values.size else float(sigma_background)
+    )
+    if sigma_b <= 0.0 or not math.isfinite(sigma_b):
+        raise ValueError("sigma_background must be finite and positive")
     sigma_values = np.asarray(sigma0.x.array, dtype=float)
-    local_contrast = float(np.max(np.abs(sigma_values - sigma_b))) if sigma_values.size else 0.0
+    if sigma_b_values is not None:
+        if sigma_b_values.shape != sigma_values.shape:
+            raise ValueError("sigma_background function must match sigma_initial DG0 shape")
+        contrast_values = sigma_values - sigma_b_values
+    else:
+        contrast_values = sigma_values - sigma_b
+    local_contrast = float(np.max(np.abs(contrast_values))) if sigma_values.size else 0.0
     contrast_norm = float(msh.comm.allreduce(local_contrast, op=MPI.MAX))
     contrast_is_zero = contrast_norm <= max(1.0e-14, 1.0e-12 * abs(sigma_b))
 
@@ -4311,13 +5618,17 @@ def _solve_dc_secondary_field(
             "ksp_iterations": 0,
             "ksp_reason": 0,
             "ksp_residual": 0.0,
+            "dc_conductivity_mode": str(
+                getattr(config, "primary_secondary_dc_conductivity_mode", "sigma_initial")
+            ).strip().lower(),
         }
 
     u = ufl.TrialFunction(S)
     q = ufl.TestFunction(S)
-    sigma_b_const = fem.Constant(msh, PETSc.ScalarType(sigma_b))
-    a = fem.form(sigma0 * ufl.inner(ufl.grad(u), ufl.grad(q)) * ufl.dx)
-    L = fem.form((sigma0 - sigma_b_const) * ufl.inner(Ep0, ufl.grad(q)) * ufl.dx)
+    a = fem.form(sigma_lhs_expr * ufl.inner(ufl.grad(u), ufl.grad(q)) * ufl.dx)
+    sigma_b_expr = sigma_background if sigma_b_values is not None else fem.Constant(msh, PETSc.ScalarType(sigma_b))
+    dc_rhs_sign = float(getattr(config, "primary_secondary_dc_rhs_sign", 1.0))
+    L = fem.form(dc_rhs_sign * (sigma0 - sigma_b_expr) * ufl.inner(Ep0, ufl.grad(q)) * ufl.dx)
     gauge_dofs = _scalar_potential_gauge_dofs(S)
     bc = fem.dirichletbc(PETSc.ScalarType(0.0), gauge_dofs, S)
     A = fem_petsc.assemble_matrix(a, bcs=[bc])
@@ -4358,7 +5669,23 @@ def _solve_dc_secondary_field(
         "ksp_iterations": its,
         "ksp_reason": reason,
         "ksp_residual": residual,
+        "dc_rhs_sign": dc_rhs_sign,
+        "dc_conductivity_mode": str(
+            getattr(config, "primary_secondary_dc_conductivity_mode", "sigma_initial")
+        ).strip().lower(),
+        "dc_lhs_conductivity": "dc_conductivity" if sigma_lhs is None else "custom",
     }
+
+
+def _primary_secondary_dc_conductivity(materials, config: PipelineConfig):
+    mode = str(getattr(config, "primary_secondary_dc_conductivity_mode", "sigma_initial")).strip().lower()
+    if mode == "sigma_initial":
+        return materials.get("sigma_initial", materials["sigma"])
+    if mode == "sigma_infinity":
+        return materials.get("sigma_infinity", materials["sigma"])
+    raise ValueError(
+        "primary_secondary_dc_conductivity_mode must be 'sigma_initial' or 'sigma_infinity'"
+    )
 
 
 def _make_dolfinx_secondary_step_solver(
@@ -4368,6 +5695,7 @@ def _make_dolfinx_secondary_step_solver(
     *,
     rhs_to_function=None,
     solution_to_samples=None,
+    mass_matrix_for_sigma_eff=None,
 ):
     """Return a DOLFINx-backed secondary step solver callable.
 
@@ -4393,7 +5721,12 @@ def _make_dolfinx_secondary_step_solver(
             raise ValueError("dt must be finite and positive")
         if float(sigma_eff) <= 0.0 or not math.isfinite(float(sigma_eff)):
             raise ValueError("sigma_eff must be finite and positive")
-        A = _copy_and_combine_matrix(operators["K"], operators["M"], 1.0 / dt_value)
+        if mass_matrix_for_sigma_eff is None:
+            M_lhs = operators["M"].copy()
+        else:
+            M_lhs = mass_matrix_for_sigma_eff(float(sigma_eff), dt_value)
+        A = _copy_and_combine_matrix(operators["K"], M_lhs, 1.0 / dt_value)
+        M_lhs.destroy()
         if str(config.outer_boundary_mode).strip().lower() == "robin":
             B_robin = operators.get("B_robin")
             if B_robin is None:
@@ -4407,12 +5740,31 @@ def _make_dolfinx_secondary_step_solver(
             A.assemble()
         _zero_rows_columns(A, operators["bc_global"], diag=1.0)
 
+        rhs_mass_mode = str(getattr(config, "primary_secondary_rhs_mass_mode", "sigma")).strip().lower()
+        destroy_rhs_mass = False
+        if rhs_mass_mode == "unit":
+            M_rhs = operators.get("M_unit")
+            if M_rhs is None:
+                A.destroy()
+                raise RuntimeError("primary_secondary_rhs_mass_mode='unit' requires M_unit")
+        elif rhs_mass_mode == "sigma":
+            M_rhs = operators["M"]
+        elif rhs_mass_mode == "effective":
+            if mass_matrix_for_sigma_eff is None:
+                M_rhs = operators["M"]
+            else:
+                M_rhs = mass_matrix_for_sigma_eff(float(sigma_eff), dt_value)
+                destroy_rhs_mass = True
+        else:
+            A.destroy()
+            raise ValueError("primary_secondary_rhs_mass_mode must be 'sigma', 'unit', or 'effective'")
+
         b = solution.x.petsc_vec.duplicate()
         if rhs_is_function:
             if float(rhs_density.x.petsc_vec.norm()) == 0.0:
                 b.set(0.0)
             else:
-                operators["M"].mult(rhs_density.x.petsc_vec, b)
+                M_rhs.mult(rhs_density.x.petsc_vec, b)
         elif np.allclose(rhs_array, 0.0, rtol=0.0, atol=0.0):
             b.set(0.0)
         else:
@@ -4421,8 +5773,13 @@ def _make_dolfinx_secondary_step_solver(
                 A.destroy()
                 raise ValueError("rhs_to_function is required for nonzero secondary RHS samples")
             rhs_function = rhs_to_function(rhs_array)
-            operators["M"].mult(rhs_function.x.petsc_vec, b)
+            M_rhs.mult(rhs_function.x.petsc_vec, b)
+        rhs_scale = float(getattr(config, "primary_secondary_rhs_scale", 1.0))
+        if rhs_scale != 1.0:
+            b.scale(rhs_scale)
         b.assemble()
+        if destroy_rhs_mass:
+            M_rhs.destroy()
         _zero_rhs_entries(b, operators["bc_global"])
 
         if solver_context["ksp"] is None:
@@ -4454,12 +5811,23 @@ def _make_dolfinx_secondary_step_solver(
     return solve
 
 
+def _primary_secondary_corrected_trial_solution(
+    previous_solution,
+    trial_solution,
+    apply_current_continuity_correction,
+):
+    """Apply current-continuity correction to the newly solved secondary field."""
+
+    return apply_current_continuity_correction(trial_solution)
+
+
 def _record_primary_secondary_step_equation(
     diagnostics: dict[str, Any],
     *,
     material,
     sigma_background: float,
     dt: float,
+    debye_time_scheme: str = "backward_euler",
 ) -> dict[str, Any]:
     from atem3d.solvers import secondary_step_equation_metadata
 
@@ -4470,6 +5838,17 @@ def _record_primary_secondary_step_equation(
     )
     metadata["adapter_backend"] = "dolfinx_primary_secondary"
     metadata["dt_source"] = "secondary_state_stepper_runtime_dt"
+    metadata["debye_time_scheme"] = str(debye_time_scheme).strip().lower()
+    if material.terms:
+        alpha, beta = _debye_coefficients_for_terms(material.terms, dt, debye_time_scheme)
+        metadata["alpha"] = alpha.tolist()
+        metadata["beta"] = beta.tolist()
+        metadata["sigma_eff"] = _debye_sigma_eff_for_terms(
+            material.sigma_inf,
+            material.terms,
+            dt,
+            debye_time_scheme,
+        )
     diagnostics["primary_secondary_step_equation"] = metadata
     return metadata
 
@@ -4483,6 +5862,7 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     fem_points,
     *,
     sigma_background: float,
+    fem_cells=None,
     debye=None,
 ):
     """Wire DOLFINx secondary solves into the pure primary-secondary core.
@@ -4503,36 +5883,100 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     sigma_b = float(sigma_background)
     if sigma_b <= 0.0 or not math.isfinite(sigma_b):
         raise ValueError("sigma_background must be finite and positive")
-    sigma_initial = materials.get("sigma_initial", materials["sigma"])
-    sigma_values = np.asarray(sigma_initial.x.array, dtype=float)
-    if sigma_values.size == 0:
-        raise ValueError("sigma_initial must contain local DG values")
-    local_contrast = sigma_values - sigma_b
-    contrast_index = int(np.argmax(np.abs(local_contrast)))
-    nominal_contrast = float(local_contrast[contrast_index])
-    if abs(nominal_contrast) <= max(1.0e-14, 1.0e-12 * abs(sigma_b)):
-        raise ValueError("nonzero contrast is required for this adapter")
-
-    V = spaces["V"]
-    sigma = materials["sigma"]
-    sigma_infinity = materials.get("sigma_infinity", sigma)
-    sigma_b_const = fem.Constant(msh, float(sigma_b))
     debye_terms = tuple(debye.get("terms", ())) if debye is not None else ()
     delta_functions = tuple(debye.get("delta_functions", ())) if debye is not None else ()
     if delta_functions and len(delta_functions) != len(debye_terms):
         raise ValueError("debye delta_functions must match debye terms")
+    debye_time_scheme = str(getattr(config, "debye_time_scheme", "backward_euler")).strip().lower()
+    sigma_initial = materials.get("sigma_initial", materials["sigma"])
+    sigma_dc = _primary_secondary_dc_conductivity(materials, config)
+    sigma_values = np.asarray(sigma_dc.x.array, dtype=float)
+    if sigma_values.size == 0:
+        raise ValueError("primary-secondary DC conductivity must contain local DG values")
+    transient_background_mode = str(
+        getattr(config, "primary_secondary_transient_background_mode", "same")
+    ).strip().lower()
+    sigma_background_function = materials.get("sigma_background")
+    if sigma_background_function is not None:
+        sigma_background_values = np.asarray(sigma_background_function.x.array, dtype=float)
+        if sigma_background_values.shape != sigma_values.shape:
+            raise ValueError("sigma_background DG0 function must match DC conductivity")
+    else:
+        sigma_background_values = None
+    if transient_background_mode == "same":
+        local_contrast = (
+            sigma_values - sigma_background_values
+            if sigma_background_values is not None
+            else sigma_values - sigma_b
+        )
+        sigma_dc_lhs_expr = None
+    elif transient_background_mode == "scalar_top":
+        local_contrast = sigma_values - sigma_b
+        sigma_dc_lhs_expr = None
+    elif transient_background_mode == "ip_increment":
+        sigma_initial_values = np.asarray(sigma_initial.x.array, dtype=float)
+        if sigma_initial_values.shape != sigma_values.shape:
+            raise ValueError("sigma_initial DG0 function must match DC conductivity")
+        local_contrast = sigma_values - sigma_initial_values
+        sigma_dc_lhs_expr = sigma_initial
+    else:
+        raise ValueError(
+            "primary_secondary_transient_background_mode must be 'same', 'scalar_top', or 'ip_increment'"
+        )
+    contrast_index = int(np.argmax(np.abs(local_contrast)))
+    nominal_contrast = float(local_contrast[contrast_index])
+    if abs(nominal_contrast) <= max(1.0e-14, 1.0e-12 * abs(sigma_b)):
+        if debye_terms:
+            nominal_contrast = 1.0
+        else:
+            raise ValueError("nonzero contrast is required for this adapter")
+
+    V = spaces["V"]
+    sigma = materials["sigma"]
+    sigma_infinity = materials.get("sigma_infinity", sigma)
+    if transient_background_mode == "same":
+        sigma_b_expr = sigma_background_function if sigma_background_function is not None else fem.Constant(msh, float(sigma_b))
+    elif transient_background_mode == "scalar_top":
+        sigma_b_expr = fem.Constant(msh, float(sigma_b))
+    elif transient_background_mode == "ip_increment":
+        sigma_b_expr = sigma_initial
+    else:
+        raise ValueError(
+            "primary_secondary_transient_background_mode must be 'same', 'scalar_top', or 'ip_increment'"
+        )
+    sigma_b_transient_expr = sigma_b_expr
     sample_to_function = _make_nedelec_rhs_interpolator_from_samples(
         spaces,
         sample_points=points,
         name="primary_secondary_sample_field",
     )
-    sample_solution = _make_nedelec_solution_sampler_at_points(msh, points)
+    sample_solution = _make_nedelec_solution_sampler_at_points(msh, points, sample_cells=fem_cells)
     latest_secondary = {
         "E": fem.Function(V, name="E_secondary_latest"),
         "deltaJ": None,
         "chi": [],
         "dc_result": None,
+        "secondary_H_receiver": None,
+        "secondary_dbdt_biot_rate": None,
+        "secondary_H_ampere": None,
+        "secondary_dbdt_ampere_rate": None,
     }
+    latest_secondary["sigma_initial_min"] = float(np.min(sigma_values))
+    latest_secondary["sigma_initial_max"] = float(np.max(sigma_values))
+    latest_secondary["dc_conductivity_mode"] = str(
+        getattr(config, "primary_secondary_dc_conductivity_mode", "sigma_initial")
+    ).strip().lower()
+    latest_secondary["transient_background_mode"] = transient_background_mode
+    if sigma_background_function is not None:
+        latest_secondary["sigma_background_min"] = float(np.min(sigma_background_values))
+        latest_secondary["sigma_background_max"] = float(np.max(sigma_background_values))
+    else:
+        latest_secondary["sigma_background_min"] = sigma_b
+        latest_secondary["sigma_background_max"] = sigma_b
+    latest_secondary["contrast_min"] = float(np.min(local_contrast))
+    latest_secondary["contrast_max"] = float(np.max(local_contrast))
+    latest_secondary["nominal_contrast"] = nominal_contrast
+    latest_secondary["fem_primary_sample_points"] = int(points.shape[0])
     latest_secondary["E"].x.array[:] = 0.0
     latest_secondary["E"].x.scatter_forward()
 
@@ -4548,12 +5992,280 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             return delta_functions[index]
         return float(term.delta_sigma)
 
+    def sigma_eff_expression(material, dt_value: float):
+        if not material.terms:
+            return sigma
+        function = fem.Function(spaces["Q"], name="primary_secondary_sigma_eff")
+        function.x.array[:] = sigma_infinity.x.array
+        _alpha, beta = _debye_coefficients_for_terms(material.terms, dt_value, debye_time_scheme)
+        for index, (_term, beta_i) in enumerate(zip(material.terms, beta)):
+            delta = delta_functions[index] if index < len(delta_functions) else None
+            if delta is None:
+                function.x.array[:] -= float(beta_i) * float(material.terms[index].delta_sigma)
+            else:
+                function.x.array[:] -= float(beta_i) * delta.x.array
+        function.x.scatter_forward()
+        return function
+
+    def should_update_secondary_biot_h() -> bool:
+        magnetic_mode = str(getattr(config, "magnetic_receiver_mode", "curl")).strip().lower()
+        return magnetic_mode in {"biot_current", "biot_ohmic"}
+
+    def should_use_secondary_biot_rate() -> bool:
+        magnetic_dbdt_mode = str(getattr(config, "magnetic_dbdt_mode", "curl")).strip().lower()
+        return magnetic_dbdt_mode == "biot_rate" and should_update_secondary_biot_h()
+
+    def should_use_secondary_ampere_rate() -> bool:
+        magnetic_dbdt_mode = str(getattr(config, "magnetic_dbdt_mode", "curl")).strip().lower()
+        source_mode = str(getattr(config, "source_term_mode", "impressed_current")).strip().lower()
+        return magnetic_dbdt_mode == "ampere_rate" and source_mode == "primary_secondary"
+
+    ampere_h_solver = _make_ampere_h_recovery_solver(msh, spaces, config) if should_use_secondary_ampere_rate() else None
+
+    def update_secondary_biot_rate(deltaJ_new, dt_value: float) -> None:
+        if not should_update_secondary_biot_h():
+            return
+        h_new = _biot_savart_function_current_h_at_receiver(
+            deltaJ_new,
+            msh,
+            config,
+            integration="cell_center",
+        )
+        h_old = latest_secondary.get("secondary_H_receiver")
+        if h_old is None:
+            dbdt = np.zeros(3, dtype=float)
+        else:
+            dbdt = _biot_receiver_dbdt_from_h(h_new, h_old, dt=dt_value)
+        latest_secondary["secondary_H_receiver"] = np.asarray(h_new, dtype=float)
+        if should_use_secondary_biot_rate():
+            latest_secondary["secondary_dbdt_biot_rate"] = np.asarray(dbdt, dtype=float)
+        trace = latest_secondary.setdefault("secondary_biot_rate_trace", [])
+        if len(trace) < 256:
+            trace.append(
+                {
+                    "dt": float(dt_value),
+                    "Hz": float(h_new[2]),
+                    "dBzdt": float(dbdt[2]),
+                }
+            )
+
+    def update_secondary_ampere_rate(deltaJ_new, dt_value: float) -> None:
+        if not should_use_secondary_ampere_rate():
+            return
+        if ampere_h_solver is None:
+            raise RuntimeError("Ampere H recovery solver was not initialized")
+        h_old = latest_secondary.get("secondary_H_ampere")
+        h_new = ampere_h_solver(deltaJ_new)
+        if h_old is None:
+            dbdt = np.zeros(3, dtype=float)
+            h_receiver = _evaluate_ampere_h_receiver(h_new, h_new, dt_value, msh, config)["H"]
+        else:
+            receiver = _evaluate_ampere_h_receiver(h_new, h_old, dt_value, msh, config)
+            h_receiver = receiver["H"]
+            dbdt = receiver["dBdt"]
+        latest_secondary["secondary_H_ampere"] = h_new
+        latest_secondary["secondary_H_receiver"] = np.asarray(h_receiver, dtype=float)
+        latest_secondary["secondary_dbdt_ampere_rate"] = np.asarray(dbdt, dtype=float)
+        diagnostics = getattr(h_new, "_ampere_recovery_diagnostics", {})
+        trace = latest_secondary.setdefault("secondary_ampere_rate_trace", [])
+        if len(trace) < 256:
+            trace.append(
+                {
+                    "dt": float(dt_value),
+                    "Hz": float(h_receiver[2]),
+                    "dBzdt": float(dbdt[2]),
+                    "regularization": float(diagnostics.get("regularization", np.nan)),
+                    "ksp_iterations": int(diagnostics.get("ksp_iterations", -1)),
+                    "ksp_reason": int(diagnostics.get("ksp_reason", 0)),
+                    "ksp_residual": float(diagnostics.get("ksp_residual", np.nan)),
+                }
+            )
+
+    def project_rhs_current_density(rhs_function, material, dt_value: float):
+        mode = str(getattr(config, "primary_secondary_rhs_projection", "none")).strip().lower()
+        if mode == "none":
+            return rhs_function
+        if mode != "conductivity":
+            raise ValueError("primary_secondary_rhs_projection must be 'none' or 'conductivity'")
+
+        import ufl
+        from dolfinx.fem import petsc as fem_petsc
+        from petsc4py import PETSc
+
+        S = spaces["S"]
+        sigma_eff = sigma_eff_expression(material, dt_value)
+        phi = fem.Function(S, name="primary_secondary_rhs_projection_phi")
+        u = ufl.TrialFunction(S)
+        q = ufl.TestFunction(S)
+        a = fem.form(sigma_eff * ufl.inner(ufl.grad(u), ufl.grad(q)) * ufl.dx)
+        L = fem.form(ufl.inner(rhs_function, ufl.grad(q)) * ufl.dx)
+        gauge_dofs = _scalar_potential_gauge_dofs(S)
+        bc = fem.dirichletbc(PETSc.ScalarType(0.0), gauge_dofs, S)
+        A = fem_petsc.assemble_matrix(a, bcs=[bc])
+        A.assemble()
+        b = fem_petsc.assemble_vector(L)
+        before_norm = float(b.norm())
+        fem_petsc.set_bc(b, [bc])
+
+        ksp = PETSc.KSP().create(A.comm)
+        ksp.setOperators(A)
+        ksp.setType("cg")
+        ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=max(config.max_it, 1000))
+        pc = ksp.getPC()
+        pc.setType("hypre")
+        pc.setHYPREType("boomeramg")
+        ksp.setFromOptions()
+        ksp.solve(b, phi.x.petsc_vec)
+        phi.x.scatter_forward()
+        reason = int(ksp.getConvergedReason())
+        residual = float(ksp.getResidualNorm())
+        its = int(ksp.getIterationNumber())
+        if reason < 0:
+            ksp.destroy()
+            b.destroy()
+            A.destroy()
+            raise RuntimeError(
+                "primary-secondary RHS projection solve failed, "
+                f"reason={reason}, residual={residual:.6e}"
+            )
+
+        projected = interpolate_vector_expression(
+            "primary_secondary_rhs_projected",
+            rhs_function - sigma_eff * ufl.grad(phi),
+        )
+        residual_form = fem.form(ufl.inner(projected, ufl.grad(q)) * ufl.dx)
+        residual_vec = fem_petsc.assemble_vector(residual_form)
+        after_norm = float(residual_vec.norm())
+        trace = latest_secondary.setdefault("rhs_projection_trace", [])
+        if len(trace) < 256:
+            trace.append(
+                {
+                    "dt": float(dt_value),
+                    "before_divergence_residual_norm": before_norm,
+                    "after_divergence_residual_norm": after_norm,
+                    "phi_norm": float(phi.x.petsc_vec.norm()),
+                    "ksp_iterations": its,
+                    "ksp_reason": reason,
+                    "ksp_residual": residual,
+                }
+            )
+        residual_vec.destroy()
+        ksp.destroy()
+        b.destroy()
+        A.destroy()
+        return projected
+
+    def apply_current_continuity_correction(Es_trial, c_new, material, dt_value: float, time_value: float):
+        import ufl
+        from dolfinx.fem import petsc as fem_petsc
+        from petsc4py import PETSc
+
+        mode = str(getattr(config, "primary_secondary_current_correction", "none")).strip().lower()
+        if mode == "none":
+            return Es_trial
+        if mode != "conductivity":
+            raise ValueError("primary_secondary_current_correction must be 'none' or 'conductivity'")
+
+        relaxation = _primary_secondary_current_correction_relaxation_at_time(config, time_value)
+        if relaxation < 0.0 or not math.isfinite(relaxation):
+            raise ValueError("primary_secondary_current_correction_relaxation must be finite and nonnegative")
+
+        S = spaces["S"]
+        sigma_eff = sigma_eff_expression(material, dt_value)
+        phi = fem.Function(S, name="primary_secondary_current_correction_phi")
+        u = ufl.TrialFunction(S)
+        q = ufl.TestFunction(S)
+        deltaJ_trial = sigma_eff * Es_trial + c_new
+        a = fem.form(sigma_eff * ufl.inner(ufl.grad(u), ufl.grad(q)) * ufl.dx)
+        L = fem.form(ufl.inner(deltaJ_trial, ufl.grad(q)) * ufl.dx)
+        gauge_dofs = _scalar_potential_gauge_dofs(S)
+        bc = fem.dirichletbc(PETSc.ScalarType(0.0), gauge_dofs, S)
+        A = fem_petsc.assemble_matrix(a, bcs=[bc])
+        A.assemble()
+        b = fem_petsc.assemble_vector(L)
+        before_norm = float(b.norm())
+        fem_petsc.set_bc(b, [bc])
+
+        ksp = PETSc.KSP().create(A.comm)
+        ksp.setOperators(A)
+        ksp.setType("cg")
+        ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=max(config.max_it, 1000))
+        pc = ksp.getPC()
+        pc.setType("hypre")
+        pc.setHYPREType("boomeramg")
+        ksp.setFromOptions()
+        ksp.solve(b, phi.x.petsc_vec)
+        phi.x.scatter_forward()
+        reason = int(ksp.getConvergedReason())
+        residual = float(ksp.getResidualNorm())
+        its = int(ksp.getIterationNumber())
+        if reason < 0:
+            ksp.destroy()
+            b.destroy()
+            A.destroy()
+            raise RuntimeError(
+                "primary-secondary current correction solve failed, "
+                f"reason={reason}, residual={residual:.6e}"
+            )
+
+        corrected = interpolate_vector_expression(
+            "primary_secondary_E_corrected",
+            Es_trial - relaxation * ufl.grad(phi),
+        )
+        residual_form = fem.form(
+            ufl.inner(sigma_eff * corrected + c_new, ufl.grad(q)) * ufl.dx
+        )
+        residual_vec = fem_petsc.assemble_vector(residual_form)
+        after_norm = float(residual_vec.norm())
+        trace = latest_secondary.setdefault("current_correction_trace", [])
+        if len(trace) < 256:
+            trace.append(
+                {
+                    "dt": float(dt_value),
+                    "time": float(time_value),
+                    "before_divergence_residual_norm": before_norm,
+                    "after_divergence_residual_norm": after_norm,
+                    "phi_norm": float(phi.x.petsc_vec.norm()),
+                    "relaxation": relaxation,
+                    "ksp_iterations": its,
+                    "ksp_reason": reason,
+                    "ksp_residual": residual,
+                }
+            )
+        residual_vec.destroy()
+        ksp.destroy()
+        b.destroy()
+        A.destroy()
+        return corrected
+
     def build_initialization(Ep0_samples, material, sigma_background_value):
         from atem3d.solvers.dc_secondary import DCSecondaryInitialization
 
         if abs(float(sigma_background_value) - sigma_b) > max(1.0e-14, 1.0e-12 * abs(sigma_b)):
             raise ValueError("sigma_background mismatch in DOLFINx primary-secondary initializer")
         Ep0_array = np.asarray(Ep0_samples, dtype=float)
+        latest_secondary["Ep0_sample_norm"] = float(np.linalg.norm(Ep0_array.ravel()))
+        latest_secondary["Ep0_sample_max_abs"] = float(np.max(np.abs(Ep0_array))) if Ep0_array.size else 0.0
+        try:
+            receiver_points = np.asarray([tuple(float(value) for value in config.receiver)], dtype=float)
+            unmasked_primary = _make_pipeline_empymod_primary_provider(config).base
+            receiver_primary_dc = unmasked_primary.get_Ep_dc_on_V(receiver_points)
+            active_mask = _primary_secondary_active_primary_sample_mask(points, config)
+            latest_secondary["active_primary_sample_points"] = int(np.count_nonzero(active_mask))
+            if np.any(active_mask):
+                active_Ep0 = Ep0_array[active_mask]
+                latest_secondary["active_Ep0_sample_norm"] = float(np.linalg.norm(active_Ep0.ravel()))
+                latest_secondary["active_Ep0_sample_max_abs"] = float(np.max(np.abs(active_Ep0)))
+            else:
+                latest_secondary["active_Ep0_sample_norm"] = 0.0
+                latest_secondary["active_Ep0_sample_max_abs"] = 0.0
+            latest_secondary["unmasked_primary_dc_receiver"] = {
+                "Ex": float(receiver_primary_dc[0, 0]),
+                "Ey": float(receiver_primary_dc[0, 1]),
+                "Ez": float(receiver_primary_dc[0, 2]),
+            }
+        except Exception as exc:
+            latest_secondary["primary_dc_receiver_error"] = str(exc)
         Ep0_function = sample_to_function(Ep0_array)
         result = _solve_dc_secondary_field(
             msh,
@@ -4561,10 +6273,20 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             materials,
             Ep0_function,
             config,
-            sigma_background=sigma_b,
+            sigma_background=sigma_b_expr,
+            sigma_lhs=sigma_dc_lhs_expr,
         )
         latest_secondary["E"] = result["Es0"]
         latest_secondary["dc_result"] = result
+        try:
+            dc_rec = evaluate_receivers(result["Es0"], compute_dbdt(result["Es0"], spaces), msh, config)
+            latest_secondary["dc_secondary_receiver"] = {
+                "Ex": float(dc_rec.get("Ex", np.nan)),
+                "Ey": float(dc_rec.get("Ey", np.nan)),
+                "dBzdt": float(dc_rec.get("dBzdt", np.nan)),
+            }
+        except Exception as exc:
+            latest_secondary["dc_secondary_receiver_error"] = str(exc)
         Es0_samples = sample_solution(result["Es0"], Ep0_array)
         Etotal0_samples = Ep0_array + Es0_samples
         Etotal0_expr = Ep0_function + result["Es0"]
@@ -4573,16 +6295,37 @@ def _make_dolfinx_primary_secondary_forward_adapters(
                 interpolate_vector_expression(f"primary_secondary_chi_{index}_dc", Etotal0_expr)
                 for index, _term in enumerate(material.terms)
             ]
-            deltaJ_expr = sigma_infinity * Etotal0_expr - sigma_b_const * Ep0_function
+            deltaJ_expr = sigma_infinity * Etotal0_expr - sigma_b_transient_expr * Ep0_function
             for index, (term, memory) in enumerate(zip(material.terms, latest_secondary["chi"])):
                 deltaJ_expr = deltaJ_expr - delta_expression(term, index) * memory
         else:
             latest_secondary["chi"] = []
-            deltaJ_expr = sigma * Etotal0_expr - sigma_b_const * Ep0_function
-        latest_secondary["deltaJ"] = interpolate_vector_expression(
+            deltaJ_expr = sigma * Etotal0_expr - sigma_b_transient_expr * Ep0_function
+        deltaJ_dc = interpolate_vector_expression(
             "primary_secondary_deltaJ_dc",
             deltaJ_expr,
         )
+        raw_deltaJ_dc_norm = float(deltaJ_dc.x.petsc_vec.norm())
+        if bool(result["contrast_is_zero"]):
+            deltaJ_dc.x.petsc_vec.set(0.0)
+            deltaJ_dc.x.petsc_vec.assemble()
+            deltaJ_dc.x.array[:] = 0.0
+            deltaJ_dc.x.scatter_forward()
+        latest_secondary["deltaJ"] = deltaJ_dc
+        latest_secondary["deltaJ_dc_raw_norm"] = raw_deltaJ_dc_norm
+        latest_secondary["deltaJ_dc_norm"] = float(latest_secondary["deltaJ"].x.petsc_vec.norm())
+        if should_update_secondary_biot_h():
+            latest_secondary["secondary_H_receiver"] = _biot_savart_function_current_h_at_receiver(
+                latest_secondary["deltaJ"],
+                msh,
+                config,
+                integration="cell_center",
+            )
+            if should_use_secondary_biot_rate():
+                latest_secondary["secondary_dbdt_biot_rate"] = np.zeros(3, dtype=float)
+        if should_use_secondary_ampere_rate():
+            update_secondary_ampere_rate(latest_secondary["deltaJ"], 1.0)
+            latest_secondary["secondary_dbdt_ampere_rate"] = np.zeros(3, dtype=float)
         deltaJ0_samples = sample_solution(latest_secondary["deltaJ"], Ep0_array)
         chi0_samples = [sample_solution(memory, Ep0_array) for memory in latest_secondary["chi"]]
         return DCSecondaryInitialization(
@@ -4619,6 +6362,13 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             name="secondary_rhs_density",
         ),
         solution_to_samples=solution_to_samples,
+        mass_matrix_for_sigma_eff=lambda sigma_eff, dt: _matrix_for_secondary_step_conductivity(
+            operators,
+            debye,
+            sigma_eff,
+            dt,
+            debye_time_scheme,
+        ),
     )
 
     def electric_getter(_state, _Ep_new, _time_value, _dt):
@@ -4627,7 +6377,7 @@ def _make_dolfinx_primary_secondary_forward_adapters(
     def dbdt_getter(_state, _Ep_new, _time_value, _dt):
         return compute_dbdt(latest_secondary["E"], spaces)
 
-    def secondary_state_stepper(state, Ep_old, Ep_new, material, sigma_background_value, dt):
+    def secondary_state_stepper(state, Ep_old, Ep_new, material, sigma_background_value, dt, primary_time):
         from atem3d.solvers.tdem_secondary import SecondaryState
 
         if abs(float(sigma_background_value) - sigma_b) > max(1.0e-14, 1.0e-12 * abs(sigma_b)):
@@ -4642,6 +6392,7 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             material=material,
             sigma_background=sigma_b,
             dt=dt_value,
+            debye_time_scheme=debye_time_scheme,
         )
         Ep_new_function = sample_to_function(Ep_new)
         if material.terms and len(latest_secondary["chi"]) != len(material.terms):
@@ -4652,9 +6403,8 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             if len(latest_secondary["chi"]) != len(material.terms):
                 raise ValueError("state.chi must contain one memory field per Debye term")
         if material.terms:
-            alpha = material.alpha(dt_value)
-            beta = material.beta(dt_value)
-            c_expr = (sigma_infinity - sigma_b_const) * Ep_new_function
+            alpha, beta = _debye_coefficients_for_terms(material.terms, dt_value, debye_time_scheme)
+            c_expr = (sigma_infinity - sigma_b_transient_expr) * Ep_new_function
             for index, (term, memory, alpha_i, beta_i) in enumerate(
                 zip(material.terms, latest_secondary["chi"], alpha, beta)
             ):
@@ -4662,17 +6412,60 @@ def _make_dolfinx_primary_secondary_forward_adapters(
                 c_expr = c_expr - delta * float(beta_i) * Ep_new_function
                 c_expr = c_expr - delta * float(alpha_i) * memory
         else:
-            c_expr = (sigma - sigma_b_const) * Ep_new_function
+            c_expr = (sigma - sigma_b_transient_expr) * Ep_new_function
         c_new = interpolate_vector_expression("primary_secondary_c_new", c_expr)
         rhs_function = fem.Function(V, name="primary_secondary_rhs_density")
         rhs_function.x.array[:] = (latest_secondary["deltaJ"].x.array - c_new.x.array) / dt_value
         rhs_function.x.scatter_forward()
-        step_sigma = material.sigma_eff(dt_value) if material.terms else material.sigma_inf
-        Es_new = secondary_step_solver(rhs_function, step_sigma, dt_value)
+        rhs_function = project_rhs_current_density(rhs_function, material, dt_value)
+        step_trace = latest_secondary.setdefault("step_trace", [])
+        step_item = {
+            "dt": dt_value,
+            "deltaJ_norm": float(latest_secondary["deltaJ"].x.petsc_vec.norm()),
+            "c_new_norm": float(c_new.x.petsc_vec.norm()),
+            "rhs_norm": float(rhs_function.x.petsc_vec.norm()),
+        }
+        step_sigma = (
+            _debye_sigma_eff_for_terms(material.sigma_inf, material.terms, dt_value, debye_time_scheme)
+            if material.terms
+            else material.sigma_inf
+        )
+        previous_E = latest_secondary["E"]
+        Es_new = np.asarray(secondary_step_solver(rhs_function, step_sigma, dt_value), dtype=float)
+        if Es_new.shape != np.asarray(Ep_new, dtype=float).shape:
+            raise ValueError("secondary_step_solver returned an Es field with the wrong shape")
+        step_item["Es_new_sample_norm"] = float(np.linalg.norm(Es_new.ravel()))
+        trial_E = latest_secondary["E"]
+        trial_samples = sample_solution(trial_E, Ep_new)
+        sample_atol = max(1.0e-14, 1.0e-10 * float(np.max(np.abs(Es_new))) if Es_new.size else 1.0e-14)
+        if trial_samples.shape != Es_new.shape or not np.allclose(
+            trial_samples,
+            Es_new,
+            rtol=1.0e-10,
+            atol=sample_atol,
+        ):
+            trial_E = sample_to_function(Es_new)
+            latest_secondary["E"] = trial_E
+            step_item["Es_trial_source"] = "solver_return_samples"
+        else:
+            step_item["Es_trial_source"] = "solver_side_effect_function"
+        correction_callback = lambda Es_trial: apply_current_continuity_correction(
+            Es_trial,
+            c_new,
+            material,
+            dt_value,
+            float(primary_time),
+        )
+        latest_secondary["E"] = _primary_secondary_corrected_trial_solution(
+            previous_E,
+            trial_E,
+            correction_callback,
+        )
+        Es_new = sample_solution(latest_secondary["E"], Ep_new)
+        step_item["Es_corrected_sample_norm"] = float(np.linalg.norm(np.asarray(Es_new, dtype=float).ravel()))
         Etotal_new = Ep_new_function + latest_secondary["E"]
         if material.terms:
-            alpha = material.alpha(dt_value)
-            beta = material.beta(dt_value)
+            alpha, beta = _debye_coefficients_for_terms(material.terms, dt_value, debye_time_scheme)
             chi_new = []
             for index, (old_memory, alpha_i, beta_i) in enumerate(zip(latest_secondary["chi"], alpha, beta)):
                 chi_new.append(
@@ -4682,19 +6475,33 @@ def _make_dolfinx_primary_secondary_forward_adapters(
                     )
                 )
             latest_secondary["chi"] = chi_new
-            deltaJ_expr = sigma_infinity * Etotal_new - sigma_b_const * Ep_new_function
+            deltaJ_expr = sigma_infinity * Etotal_new - sigma_b_transient_expr * Ep_new_function
             for index, (term, memory) in enumerate(zip(material.terms, latest_secondary["chi"])):
                 deltaJ_expr = deltaJ_expr - delta_expression(term, index) * memory
         else:
-            deltaJ_expr = sigma * Etotal_new - sigma_b_const * Ep_new_function
+            deltaJ_expr = sigma * Etotal_new - sigma_b_transient_expr * Ep_new_function
             latest_secondary["chi"] = []
         deltaJ_new = interpolate_vector_expression("primary_secondary_deltaJ", deltaJ_expr)
+        step_item["deltaJ_new_norm"] = float(deltaJ_new.x.petsc_vec.norm())
+        update_secondary_biot_rate(deltaJ_new, dt_value)
+        update_secondary_ampere_rate(deltaJ_new, dt_value)
+        if len(step_trace) < 256:
+            step_trace.append(step_item)
         latest_secondary["deltaJ"] = deltaJ_new
+        chi_samples = [sample_solution(memory, Ep_new) for memory in latest_secondary["chi"]]
         return SecondaryState(
             Es=Es_new,
             deltaJ=sample_solution(deltaJ_new, Ep_new),
-            chi=[],
+            chi=chi_samples,
         )
+
+    def load_secondary_state(state, Ep_old):
+        latest_secondary["E"] = sample_to_function(np.asarray(state.Es, dtype=float))
+        latest_secondary["deltaJ"] = sample_to_function(np.asarray(state.deltaJ, dtype=float))
+        latest_secondary["chi"] = [
+            sample_to_function(np.asarray(memory, dtype=float))
+            for memory in list(state.chi)
+        ]
 
     return {
         "secondary_state_initializer": build_initialization,
@@ -4705,7 +6512,9 @@ def _make_dolfinx_primary_secondary_forward_adapters(
             dbdt_getter,
             msh=msh,
             config=config,
+            diagnostics=latest_secondary,
         ),
+        "secondary_state_loader": load_secondary_state,
         "secondary_state_stepper": secondary_state_stepper,
         "diagnostics": latest_secondary,
     }
@@ -4748,6 +6557,7 @@ def _make_dolfinx_primary_secondary_forward_operator(
         config,
         fem_points,
         sigma_background=sigma_background,
+        fem_cells=interpolation.get("cells"),
         debye=debye,
     )
     operator = PrimarySecondaryForwardOperator(
@@ -4758,11 +6568,14 @@ def _make_dolfinx_primary_secondary_forward_operator(
         material=material,
         sigma_background=sigma_background,
         secondary_state_initializer=adapters["secondary_state_initializer"],
+        secondary_state_loader=adapters["secondary_state_loader"],
         secondary_step_solver=adapters["secondary_step_solver"],
         secondary_receiver_projector=adapters["secondary_receiver_projector"],
         secondary_state_stepper=adapters["secondary_state_stepper"],
         turnoff_time=turnoff_time,
         turnoff_steps=turnoff_steps,
+        max_internal_dt=float(getattr(config, "max_internal_dt", 0.0)),
+        primary_time_floor=0.0,
         diagnostics=adapters["diagnostics"],
     )
     return {
@@ -4774,52 +6587,937 @@ def _make_dolfinx_primary_secondary_forward_operator(
     }
 
 
-def _update_debye_memories(debye, memories, E_new, dt: float) -> None:
+def _primary_secondary_current_correction_relaxation_at_time(
+    config: PipelineConfig,
+    time_value: float,
+) -> float:
+    early = float(getattr(config, "primary_secondary_current_correction_relaxation", 1.0))
+    late_value = getattr(config, "primary_secondary_current_correction_relaxation_late", None)
+    if late_value is None:
+        return early
+    late = float(late_value)
+    transition_time = float(
+        getattr(config, "primary_secondary_current_correction_relaxation_transition_time", 0.1)
+    )
+    transition_width = float(
+        getattr(config, "primary_secondary_current_correction_relaxation_transition_width", 1.0)
+    )
+    if not math.isfinite(early) or early < 0.0:
+        raise ValueError("primary_secondary_current_correction_relaxation must be finite and nonnegative")
+    if not math.isfinite(late) or late < 0.0:
+        raise ValueError("primary_secondary_current_correction_relaxation_late must be finite and nonnegative")
+    if not math.isfinite(transition_time) or transition_time <= 0.0:
+        raise ValueError("primary_secondary_current_correction_relaxation_transition_time must be finite and positive")
+    if not math.isfinite(transition_width) or transition_width <= 0.0:
+        raise ValueError("primary_secondary_current_correction_relaxation_transition_width must be finite and positive")
+    time_clamped = max(float(time_value), sys.float_info.min)
+    coordinate = (math.log10(time_clamped) - math.log10(transition_time)) / transition_width
+    fraction = min(1.0, max(0.0, 0.5 + 0.5 * coordinate))
+    return early + fraction * (late - early)
+
+
+def _primary_secondary_background_sigma(config: PipelineConfig) -> float:
+    """Use the top earth layer as the 1D background primary half-space."""
+
+    _layer_depths, layer_resistivities = _normalise_layer_model(config)
+    return 1.0 / float(layer_resistivities[0])
+
+
+def _make_primary_secondary_background_sigma_function(msh, spaces, config: PipelineConfig):
+    """DG0 background matching the air/top-earth primary model."""
+
+    import numpy as np
+    from dolfinx import fem
+
+    Q = spaces["Q"]
+    sigma_background = fem.Function(Q, name="sigma_background")
+    centers = _cell_centers(msh)
+    values = np.empty(centers.shape[0], dtype=float)
+    air = centers[:, 2] >= 0.0
+    values[air] = 1.0 / float(config.rho_air)
+    earth = ~air
+    if str(config.primary_secondary_background_mode).strip().lower() == "layered":
+        depths = -centers[earth, 2]
+        values[earth] = _primary_secondary_layered_background_sigma_values(depths, config)
+    else:
+        values[earth] = _primary_secondary_background_sigma(config)
+    sigma_background.x.array[:] = values
+    sigma_background.x.scatter_forward()
+    return sigma_background
+
+
+def _primary_secondary_layered_background_sigma_values(depths, config: PipelineConfig):
+    import numpy as np
+
+    depth_values = np.asarray(depths, dtype=float)
+    sigma = np.asarray(
+        [1.0 / _earth_resistivity_at_depth(float(depth), config) for depth in depth_values],
+        dtype=float,
+    )
+    if (
+        str(config.polarization).strip().lower() != "cole-cole"
+        or str(config.primary_secondary_background_mode).strip().lower() != "layered_ip"
+        or depth_values.size == 0
+    ):
+        return sigma
+    fit = fit_cole_cole_to_debye(config)
+    top = float(config.cole_layer_top)
+    bottom = float(config.cole_layer_bottom)
+    mask = (depth_values >= top) & (depth_values < bottom)
+    sigma[mask] = float(fit.sigma_infinity)
+    return sigma
+
+
+def _empymod_cole_cole_resistivity_model(depths, resistivities, config: PipelineConfig):
+    import numpy as np
+
+    fit = fit_cole_cole_to_debye(config)
+    polarizable_indices = _empymod_polarizable_layer_indices(depths, resistivities, config)
+    if not polarizable_indices:
+        raise RuntimeError(
+            "No empymod earth layer overlaps the configured Cole-Cole layer window "
+            f"{float(config.cole_layer_top):.6g}-{float(config.cole_layer_bottom):.6g} m"
+        )
+    sigma = 1.0 / np.asarray(resistivities, dtype=float)
+    for idx in polarizable_indices:
+        sigma[idx] = float(fit.sigma_infinity)
+
+    def func_eta(_model, context):
+        freq = np.asarray(context["freq"], dtype=float)
+        eta = np.tile(np.asarray(sigma, dtype=float), (freq.size, 1)).astype(complex)
+        for idx in polarizable_indices:
+            for term in fit.terms:
+                eta[:, idx] -= term.delta_sigma / (1.0 + 1j * 2.0 * np.pi * freq * term.tau)
+        return eta, eta
+
+    res_base = list(resistivities)
+    for idx in polarizable_indices:
+        res_base[idx] = 1.0 / float(fit.sigma_infinity)
+    return {"res": res_base, "func_eta": func_eta}
+
+
+def _empymod_sigma_infinity_resistivity_model(depths, resistivities, config: PipelineConfig):
+    fit = fit_cole_cole_to_debye(config)
+    polarizable_indices = _empymod_polarizable_layer_indices(depths, resistivities, config)
+    if not polarizable_indices:
+        raise RuntimeError(
+            "No empymod earth layer overlaps the configured Cole-Cole layer window "
+            f"{float(config.cole_layer_top):.6g}-{float(config.cole_layer_bottom):.6g} m"
+        )
+    res_base = list(resistivities)
+    for idx in polarizable_indices:
+        res_base[idx] = 1.0 / float(fit.sigma_infinity)
+    return res_base
+
+
+def _primary_secondary_empymod_primary_config(config: PipelineConfig) -> dict[str, Any]:
+    """Return the empymod 1D background primary model."""
+
+    background_mode = str(config.primary_secondary_background_mode).strip().lower()
+    if background_mode == "top_halfspace":
+        _layer_depths, layer_resistivities = _normalise_layer_model(config)
+        depths = [0.0]
+        resistivities = [float(config.rho_air), float(layer_resistivities[0])]
+    else:
+        depths, resistivities = _empymod_depth_res(config)
+    if str(config.polarization).strip().lower() == "cole-cole" and background_mode == "layered_ip":
+        resistivities = _empymod_cole_cole_resistivity_model(depths, resistivities, config)
+    return {
+        "source_start": tuple(float(value) for value in config.source_start),
+        "source_end": tuple(float(value) for value in config.source_end),
+        "depths": depths,
+        "resistivities": resistivities,
+        "strength": float(config.source_current),
+        "signal": -1,
+        "coordinate_system": "z_up",
+        "ramp_off_time": float(config.ramp_off_time),
+        "time_origin": str(config.time_origin),
+        "ramp_average_quadrature_points": 9,
+    }
+
+
+def _primary_secondary_active_primary_sample_mask(points, config: PipelineConfig):
+    """Return FEM sample points where primary samples are needed for contrast RHS."""
+
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError("points must have shape (n, 3)")
+    depth = -pts[:, 2]
+    active = np.zeros(pts.shape[0], dtype=bool)
+    if str(config.primary_secondary_background_mode).strip().lower() in {
+        "top_halfspace",
+        "layered_primary_top_current",
+    }:
+        layer_depths, _layer_resistivities = _normalise_layer_model(config)
+        if layer_depths:
+            active |= depth >= float(layer_depths[0])
+    if (
+        str(config.polarization).strip().lower() == "cole-cole"
+        and str(config.primary_secondary_background_mode).strip().lower() != "layered_ip"
+    ):
+        top = float(config.cole_layer_top)
+        bottom = float(config.cole_layer_bottom)
+        active |= (depth >= top) & (depth < bottom)
+    return active
+
+
+def _primary_secondary_has_active_contrast(config: PipelineConfig) -> bool:
+    mode = str(config.primary_secondary_background_mode).strip().lower()
+    if mode in {"top_halfspace", "layered_primary_top_current"}:
+        layer_depths, layer_resistivities = _normalise_layer_model(config)
+        if layer_depths and any(abs(float(rho) - float(layer_resistivities[0])) > 0.0 for rho in layer_resistivities[1:]):
+            return True
+    if mode == "layered_ip" and str(config.polarization).strip().lower() == "cole-cole":
+        return False
+    if str(config.polarization).strip().lower() == "cole-cole":
+        return True
+    return False
+
+
+def _primary_secondary_zero_contrast_reference_mode(config: PipelineConfig) -> str:
+    return "cole-cole" if str(config.polarization).strip().lower() == "cole-cole" else "noip"
+
+
+def _primary_secondary_primary_reference_mode(config: PipelineConfig) -> str:
+    if (
+        str(config.primary_secondary_background_mode).strip().lower() == "layered_ip"
+        and str(config.polarization).strip().lower() == "cole-cole"
+    ):
+        return "cole-cole"
+    return "noip"
+
+
+def _primary_secondary_zero_contrast_diagnostics(observation_times, config: PipelineConfig) -> dict[str, Any]:
+    import numpy as np
+
+    times = np.asarray(observation_times, dtype=float)
+    last_output = float(np.max(times)) if times.size else 0.0
+    background_mode = str(config.primary_secondary_background_mode).strip().lower()
+    polarization = str(config.polarization).strip().lower()
+    if background_mode == "layered_ip" and polarization == "cole-cole":
+        reason = "full_1d_cole_cole_layered_primary_background"
+    elif polarization == "cole-cole":
+        reason = "cole_cole_zero_secondary_contrast"
+    else:
+        reason = "ohmic_zero_secondary_contrast"
+    return {
+        "contrast_is_zero": True,
+        "secondary_solver_skipped": True,
+        "zero_contrast_reason": reason,
+        "primary_secondary_background_mode": background_mode,
+        "primary_reference_mode": _primary_secondary_zero_contrast_reference_mode(config),
+        "primary_secondary_internal_time_grid": {
+            "contains_turnoff_start": True,
+            "contains_turnoff_end": True,
+            "contains_all_observation_outputs": True,
+            "last_output_internal_time_s": last_output,
+        },
+    }
+
+
+def _primary_secondary_spatial_sample_indices(points, max_samples: int, config: PipelineConfig | None = None):
+    """Return deterministic, spatially distributed sample indices."""
+
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    max_samples = int(max_samples)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError("points must have shape (n, 3)")
+    if max_samples <= 0 or pts.shape[0] <= max_samples:
+        return np.arange(pts.shape[0], dtype=np.int64)
+    if config is not None:
+        strategy = str(getattr(config, "primary_secondary_sampling_strategy", "weighted_farthest")).strip().lower()
+        if strategy == "priority_hull":
+            return _primary_secondary_priority_sample_indices(pts, max_samples, config)
+        if strategy == "uniform":
+            return _primary_secondary_uniform_spatial_sample_indices(pts, max_samples)
+        if strategy != "weighted_farthest":
+            raise ValueError(
+                "primary_secondary_sampling_strategy must be 'weighted_farthest', 'priority_hull', or 'uniform'"
+            )
+        return _primary_secondary_weighted_farthest_sample_indices(
+            pts,
+            max_samples,
+            config,
+        )
+    return _primary_secondary_uniform_spatial_sample_indices(pts, max_samples)
+
+
+def _primary_secondary_uniform_spatial_sample_indices(points, max_samples: int):
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    mins = np.min(pts, axis=0)
+    spans = np.maximum(np.max(pts, axis=0) - mins, 1.0e-12)
+    grid_n = max(1, int(math.ceil(max_samples ** (1.0 / 3.0))))
+    bins = np.floor((pts - mins) / spans * grid_n).astype(np.int64)
+    bins = np.clip(bins, 0, grid_n - 1)
+    keys = bins[:, 0] + grid_n * bins[:, 1] + grid_n * grid_n * bins[:, 2]
+    order = np.lexsort((pts[:, 2], pts[:, 1], pts[:, 0], keys))
+    representatives = []
+    seen = set()
+    for index in order:
+        key = int(keys[index])
+        if key in seen:
+            continue
+        seen.add(key)
+        representatives.append(int(index))
+    if len(representatives) >= max_samples:
+        pick = np.linspace(0, len(representatives) - 1, max_samples, dtype=np.int64)
+        return np.asarray([representatives[int(i)] for i in pick], dtype=np.int64)
+    selected = list(representatives)
+    if len(selected) < max_samples:
+        remaining = np.setdiff1d(np.arange(pts.shape[0], dtype=np.int64), np.asarray(selected, dtype=np.int64))
+        fill_count = min(max_samples - len(selected), remaining.size)
+        if fill_count > 0:
+            fill = np.linspace(0, remaining.size - 1, fill_count, dtype=np.int64)
+            selected.extend(int(remaining[i]) for i in fill)
+    return np.asarray(selected[:max_samples], dtype=np.int64)
+
+
+def _primary_secondary_priority_sample_indices(points, max_samples: int, config: PipelineConfig):
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    if pts.size == 0 or max_samples <= 0:
+        return np.empty((0,), dtype=np.int64)
+    priority_budget = max(1, min(int(max_samples), pts.shape[0]))
+    mins = np.min(pts, axis=0)
+    maxs = np.max(pts, axis=0)
+    spans = np.maximum(np.max(pts, axis=0) - mins, 1.0e-12)
+    grid_n = max(1, int(math.ceil(priority_budget ** (1.0 / 3.0))) * 2)
+    bins = np.floor((pts - mins) / spans * grid_n).astype(np.int64)
+    bins = np.clip(bins, 0, grid_n - 1)
+    keys = bins[:, 0] + grid_n * bins[:, 1] + grid_n * grid_n * bins[:, 2]
+    score = _primary_secondary_sample_importance(pts, config)
+    order = np.argsort(-score, kind="mergesort")
+    selected = _primary_secondary_hull_anchor_indices(pts, mins, maxs)
+    selected = selected[:priority_budget]
+    seen = set(selected)
+    seen_bins = set()
+    for index in selected:
+        seen_bins.add(int(keys[index]))
+    for index in order:
+        if int(index) in seen:
+            continue
+        key = int(keys[index])
+        if key in seen_bins:
+            continue
+        seen_bins.add(key)
+        selected.append(int(index))
+        seen.add(int(index))
+        if len(selected) >= priority_budget:
+            break
+    if len(selected) < priority_budget:
+        for index in order:
+            item = int(index)
+            if item in seen:
+                continue
+            seen.add(item)
+            selected.append(item)
+            if len(selected) >= priority_budget:
+                break
+    return np.asarray(selected[:priority_budget], dtype=np.int64)
+
+
+def _primary_secondary_weighted_farthest_sample_indices(
+    points,
+    max_samples: int,
+    config: PipelineConfig,
+    *,
+    score_weight: float = 0.2,
+    seed_fraction: float = 0.125,
+):
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    max_samples = int(max_samples)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError("points must have shape (n, 3)")
+    if max_samples <= 0 or pts.shape[0] <= max_samples:
+        return np.arange(pts.shape[0], dtype=np.int64)
+
+    mins = np.min(pts, axis=0)
+    maxs = np.max(pts, axis=0)
+    spans = np.maximum(maxs - mins, 1.0e-12)
+    scaled = (pts - mins) / spans
+    score = _primary_secondary_sample_importance(pts, config)
+    score_span = max(float(np.ptp(score)), 1.0e-12)
+    normalized_score = (score - float(np.min(score))) / score_span
+    order = np.argsort(-score, kind="mergesort")
+
+    selected: list[int] = []
+    seen: set[int] = set()
+    for index in _primary_secondary_hull_anchor_indices(pts, mins, maxs):
+        item = int(index)
+        if item in seen:
+            continue
+        selected.append(item)
+        seen.add(item)
+        if len(selected) >= max_samples:
+            return np.asarray(selected, dtype=np.int64)
+
+    seed_count = max(1, int(round(max_samples * float(seed_fraction))))
+    for index in order[:seed_count]:
+        item = int(index)
+        if item in seen:
+            continue
+        selected.append(item)
+        seen.add(item)
+        if len(selected) >= max_samples:
+            return np.asarray(selected, dtype=np.int64)
+
+    if not selected:
+        selected.append(int(order[0]))
+        seen.add(int(order[0]))
+
+    min_distance2 = np.full(pts.shape[0], np.inf, dtype=float)
+    weight = max(0.0, float(score_weight))
+    while len(selected) < max_samples:
+        last = int(selected[-1])
+        distance2 = np.sum((scaled - scaled[last]) ** 2, axis=1)
+        min_distance2 = np.minimum(min_distance2, distance2)
+        objective = min_distance2 * (1.0 + weight * normalized_score)
+        if seen:
+            objective[list(seen)] = -1.0
+        next_index = int(np.argmax(objective))
+        if next_index in seen:
+            remaining = np.setdiff1d(
+                np.arange(pts.shape[0], dtype=np.int64),
+                np.asarray(selected, dtype=np.int64),
+                assume_unique=False,
+            )
+            if remaining.size == 0:
+                break
+            next_index = int(remaining[0])
+        selected.append(next_index)
+        seen.add(next_index)
+
+    return np.asarray(selected[:max_samples], dtype=np.int64)
+
+
+def _primary_secondary_hull_anchor_indices(points, mins, maxs):
+    import itertools
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    anchors = []
+    seen = set()
+    for corner_bits in itertools.product((0, 1), repeat=3):
+        corner = np.asarray(
+            [maxs[axis] if bit else mins[axis] for axis, bit in enumerate(corner_bits)],
+            dtype=float,
+        )
+        index = int(np.argmin(np.sum((pts - corner) ** 2, axis=1)))
+        if index in seen:
+            continue
+        seen.add(index)
+        anchors.append(index)
+    return anchors
+
+
+def _primary_secondary_sample_importance(points, config: PipelineConfig):
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    spans = np.maximum(np.ptp(pts, axis=0), 1.0)
+    horizontal_scale = max(float(np.linalg.norm(spans[:2])) * 0.15, 1.0)
+    depth_scale = max(float(spans[2]) * 0.15, 1.0)
+    receiver = np.asarray(config.receiver, dtype=float)
+    receiver_horizontal_distance = np.linalg.norm(pts[:, :2] - receiver[:2], axis=1)
+    score = 1.5 / (1.0 + receiver_horizontal_distance / horizontal_scale)
+
+    start = np.asarray(config.source_start, dtype=float)
+    end = np.asarray(config.source_end, dtype=float)
+    segment = end[:2] - start[:2]
+    segment_norm2 = float(np.dot(segment, segment))
+    if segment_norm2 > 0.0:
+        t = np.clip(((pts[:, :2] - start[:2]) @ segment) / segment_norm2, 0.0, 1.0)
+        closest = start[:2] + t[:, None] * segment
+        source_horizontal_distance = np.linalg.norm(pts[:, :2] - closest, axis=1)
+        score += 1.5 / (1.0 + source_horizontal_distance / horizontal_scale)
+
+    candidate_depths = []
+    layer_depths, _layer_resistivities = _normalise_layer_model(config)
+    candidate_depths.extend(float(value) for value in layer_depths)
+    if str(config.polarization).strip().lower() == "cole-cole":
+        candidate_depths.append(float(config.cole_layer_top))
+        bottom = float(config.cole_layer_bottom)
+        if math.isfinite(bottom):
+            candidate_depths.append(bottom)
+    if candidate_depths:
+        depth = -pts[:, 2]
+        interface_distance = np.min(
+            np.vstack([np.abs(depth - float(value)) for value in candidate_depths]),
+            axis=0,
+        )
+        score += 1.0 / (1.0 + interface_distance / depth_scale)
+    return score
+
+
+@dataclass(frozen=True)
+class _PrimarySamplePlan:
+    sample_indices: Any
+    sample_points: Any
+    inside_mask: Any
+    simplex_vertices: Any
+    barycentric_weights: Any
+    nearest_indices: Any
+
+
+class _MaskedPrimaryProvider:
+    """Primary provider wrapper that skips FEM samples outside contrast support."""
+
+    def __init__(self, base, config: PipelineConfig):
+        self.base = base
+        self.config = config
+        self._receiver_cache = {}
+        self._sample_plan_cache = {}
+
+    def get_Ep_on_V(self, t: float, points):
+        return self._masked(lambda selected: self.base.get_Ep_on_V(t, selected), points)
+
+    def get_Ep_dc_on_V(self, points):
+        return self._masked(self.base.get_Ep_dc_on_V, points)
+
+    def get_receiver_E(self, t: float, receivers):
+        import numpy as np
+
+        rows = []
+        for receiver in np.asarray(receivers, dtype=float):
+            ref = self._receiver_reference(float(t), tuple(float(value) for value in receiver))
+            rows.append([ref["Ex"], ref["Ey"], 0.0])
+        return np.asarray(rows, dtype=float)
+
+    def get_receiver_H(self, t: float, receivers):
+        import numpy as np
+
+        rows = []
+        for receiver in np.asarray(receivers, dtype=float):
+            ref = self._receiver_reference(float(t), tuple(float(value) for value in receiver))
+            rows.append([0.0, 0.0, ref["Hz"]])
+        return np.asarray(rows, dtype=float)
+
+    def get_receiver_dBdt(self, t: float, receivers):
+        import numpy as np
+
+        rows = []
+        for receiver in np.asarray(receivers, dtype=float):
+            ref = self._receiver_reference(float(t), tuple(float(value) for value in receiver))
+            rows.append([0.0, 0.0, ref["dBzdt"]])
+        return np.asarray(rows, dtype=float)
+
+    def prepare_receiver_reference_cache(self, times, receivers) -> None:
+        import numpy as np
+
+        time_values = np.asarray(times, dtype=float)
+        if time_values.ndim != 1:
+            raise ValueError("times must be one-dimensional")
+        for receiver in np.asarray(receivers, dtype=float):
+            receiver_tuple = tuple(float(value) for value in receiver)
+            cfg = _primary_secondary_receiver_reference_config(self.config, receiver_tuple)
+            reference = get_empymod_reference(
+                time_values,
+                cfg,
+                mode=_primary_secondary_primary_reference_mode(self.config),
+            )
+            components = [str(component) for component in reference["components"]]
+            for row, time_value in enumerate(time_values):
+                self._receiver_cache[(float(time_value), receiver_tuple)] = {
+                    component: float(reference["data"][row, index])
+                    for index, component in enumerate(components)
+                }
+
+    def _receiver_reference(self, time_value: float, receiver: tuple[float, float, float]):
+        import numpy as np
+
+        key = (float(time_value), receiver)
+        cached = self._receiver_cache.get(key)
+        if cached is not None:
+            return cached
+        cfg = _primary_secondary_receiver_reference_config(self.config, receiver)
+        reference = get_empymod_reference(
+            np.asarray([time_value], dtype=float),
+            cfg,
+            mode=_primary_secondary_primary_reference_mode(self.config),
+        )
+        component_values = {
+            component: float(reference["data"][0, index])
+            for index, component in enumerate(reference["components"])
+        }
+        self._receiver_cache[key] = component_values
+        return component_values
+
+    def _masked(self, sampler, points):
+        import numpy as np
+
+        pts = np.asarray(points, dtype=float)
+        mask = _primary_secondary_active_primary_sample_mask(pts, self.config)
+        values = np.zeros_like(pts, dtype=float)
+        if np.any(mask):
+            selected = pts[mask]
+            values[mask] = self._sample_selected(sampler, selected)
+        return values
+
+    def _sample_selected(self, sampler, selected):
+        import numpy as np
+
+        max_samples = int(getattr(self.config, "primary_secondary_max_primary_samples", 4096))
+        direct_sample_limit = int(max_samples * 2) if max_samples >= 32 else int(max_samples)
+        if max_samples == 0 or selected.shape[0] <= direct_sample_limit:
+            return np.asarray(sampler(selected), dtype=float)
+        plan = self._sample_plan(selected, max_samples)
+        sample_values = np.asarray(sampler(plan.sample_points), dtype=float)
+        return self._interpolate_sample_values(plan, sample_values, selected.shape[0])
+
+    def _sample_plan_key(self, selected, max_samples: int):
+        import hashlib
+        import numpy as np
+
+        pts = np.ascontiguousarray(selected, dtype=np.float64)
+        digest = hashlib.blake2b(pts.view(np.uint8), digest_size=16).hexdigest()
+        return (int(max_samples), tuple(int(value) for value in pts.shape), digest)
+
+    def _sample_plan(self, selected, max_samples: int) -> _PrimarySamplePlan:
+        import numpy as np
+
+        key = self._sample_plan_key(selected, max_samples)
+        cached = self._sample_plan_cache.get(key)
+        if cached is not None:
+            return cached
+
+        sample_indices = _primary_secondary_spatial_sample_indices(selected, max_samples, self.config)
+        sample_points = np.asarray(selected[sample_indices], dtype=float)
+        inside_mask = np.zeros(selected.shape[0], dtype=bool)
+        simplex_vertices = np.empty((0, 4), dtype=np.int64)
+        barycentric_weights = np.empty((0, 4), dtype=float)
+        nearest_indices = np.empty((0,), dtype=np.int64)
+        try:
+            from scipy.spatial import Delaunay, cKDTree
+
+            if sample_points.shape[0] >= 4:
+                triangulation = Delaunay(sample_points)
+                simplex = triangulation.find_simplex(selected)
+                inside_mask = simplex >= 0
+                if np.any(inside_mask):
+                    transform = triangulation.transform[simplex[inside_mask]]
+                    delta = selected[inside_mask] - transform[:, 3, :]
+                    bary_first = np.einsum("ijk,ik->ij", transform[:, :3, :], delta)
+                    barycentric_weights = np.column_stack(
+                        (bary_first, 1.0 - np.sum(bary_first, axis=1))
+                    )
+                    simplex_vertices = triangulation.simplices[simplex[inside_mask]]
+            else:
+                from scipy.spatial import cKDTree
+
+            if np.any(~inside_mask):
+                tree = cKDTree(sample_points)
+                _distances, nearest_indices = tree.query(selected[~inside_mask])
+        except Exception:
+            for row, point in enumerate(selected):
+                index = int(np.argmin(np.sum((sample_points - point) ** 2, axis=1)))
+                nearest_indices = np.append(nearest_indices, index)
+            inside_mask[:] = False
+            simplex_vertices = np.empty((0, 4), dtype=np.int64)
+            barycentric_weights = np.empty((0, 4), dtype=float)
+
+        plan = _PrimarySamplePlan(
+            sample_indices=np.asarray(sample_indices, dtype=np.int64),
+            sample_points=sample_points,
+            inside_mask=np.asarray(inside_mask, dtype=bool),
+            simplex_vertices=np.asarray(simplex_vertices, dtype=np.int64),
+            barycentric_weights=np.asarray(barycentric_weights, dtype=float),
+            nearest_indices=np.asarray(nearest_indices, dtype=np.int64),
+        )
+        self._sample_plan_cache[key] = plan
+        print(
+            "[primary] capped FEM primary sampling plan: "
+            f"active_points={selected.shape[0]}, sampled_points={sample_points.shape[0]}, "
+            f"linear_points={int(np.count_nonzero(plan.inside_mask))}, "
+            f"nearest_points={int(plan.nearest_indices.size)}",
+            flush=True,
+        )
+        return plan
+
+    def _interpolate_sample_values(self, plan: _PrimarySamplePlan, sample_values, output_size: int):
+        import numpy as np
+
+        sample_values = np.asarray(sample_values, dtype=float)
+        interpolated = np.empty((int(output_size), sample_values.shape[1]), dtype=float)
+        inside_mask = np.asarray(plan.inside_mask, dtype=bool)
+        if np.any(inside_mask):
+            vertex_values = sample_values[np.asarray(plan.simplex_vertices, dtype=np.int64)]
+            interpolated[inside_mask] = np.einsum(
+                "ij,ijk->ik",
+                np.asarray(plan.barycentric_weights, dtype=float),
+                vertex_values,
+            )
+        if np.any(~inside_mask):
+            interpolated[~inside_mask] = sample_values[np.asarray(plan.nearest_indices, dtype=np.int64)]
+        return interpolated
+
+
+def _primary_secondary_receiver_reference_config(config: PipelineConfig, receiver) -> PipelineConfig:
+    """Return the non-IP background config used by primary-secondary receiver rows."""
+
+    primary = _primary_secondary_empymod_primary_config(config)
+    depths = list(primary["depths"])
+    resistivities = primary["resistivities"]
+    if not depths or float(depths[0]) != 0.0:
+        raise ValueError("primary-secondary empymod primary config must include air-earth depth 0")
+    if isinstance(resistivities, dict):
+        res_values = list(resistivities["res"])
+    else:
+        res_values = list(resistivities)
+    if len(res_values) != len(depths) + 1:
+        raise ValueError("primary-secondary empymod primary config has inconsistent layers")
+    return replace(
+        config,
+        rho_air=float(res_values[0]),
+        layer_depths=tuple(float(value) for value in depths[1:]),
+        layer_resistivities=tuple(float(value) for value in res_values[1:]),
+        polarization=(
+            "cole-cole"
+            if _primary_secondary_primary_reference_mode(config) == "cole-cole"
+            else "none"
+        ),
+        receiver=tuple(float(value) for value in receiver),
+        receiver_type="point",
+    )
+
+
+def _make_pipeline_empymod_primary_provider(config: PipelineConfig):
+    from atem3d.primary import EmpymodPrimaryProvider, empymod_quasistatic_dc_runner
+
+    dc_mode = str(config.primary_secondary_dc_mode).strip().lower()
+    dc_runner = None
+    dc_kwargs = None
+    if dc_mode == "empymod_quasistatic":
+        dc_runner = empymod_quasistatic_dc_runner
+        dc_kwargs = {
+            "frequency": 1.0e-9,
+            "empymod_kwargs": _empymod_call_kwargs(config),
+        }
+    elif dc_mode != "analytic_halfspace":
+        raise ValueError("primary_secondary_dc_mode must be 'analytic_halfspace' or 'empymod_quasistatic'")
+
+    return _MaskedPrimaryProvider(
+        EmpymodPrimaryProvider(
+            config=_primary_secondary_empymod_primary_config(config),
+            empymod_kwargs=_empymod_call_kwargs(config),
+            dc_runner=dc_runner,
+            dc_kwargs=dc_kwargs,
+        ),
+        config,
+    )
+
+
+def _primary_secondary_representative_material(config: PipelineConfig, debye=None):
+    """Return the homogeneous material object needed by the orchestration core."""
+
+    from atem3d.materials.prony import PronyConductivity
+
+    if debye is not None and debye.get("terms"):
+        fit = debye.get("fit")
+        if fit is None:
+            raise ValueError("primary_secondary IP mode requires Debye fit metadata")
+        return PronyConductivity(
+            sigma_inf=float(fit.sigma_infinity),
+            terms=tuple(debye.get("terms", ())),
+        )
+    _layer_depths, layer_resistivities = _normalise_layer_model(config)
+    sigma_values = [1.0 / float(rho) for rho in layer_resistivities]
+    return PronyConductivity.no_ip(max(sigma_values))
+
+
+def _primary_secondary_primary_only_rows(primary, observation_times, receiver_locations, components):
+    import numpy as np
+
+    rows = []
+    for time_value in observation_times:
+        receiver_E = primary.get_receiver_E(float(time_value), receiver_locations)
+        receiver_H = primary.get_receiver_H(float(time_value), receiver_locations)
+        receiver_dbdt = primary.get_receiver_dBdt(float(time_value), receiver_locations)
+        values = {
+            "Ex": receiver_E[0, 0],
+            "Ey": receiver_E[0, 1],
+            "Ez": receiver_E[0, 2],
+            "Hx": receiver_H[0, 0],
+            "Hy": receiver_H[0, 1],
+            "Hz": receiver_H[0, 2],
+            "dBxdt": receiver_dbdt[0, 0],
+            "dBydt": receiver_dbdt[0, 1],
+            "dBzdt": receiver_dbdt[0, 2],
+        }
+        rows.append([float(values[component]) for component in components])
+    return np.asarray(rows, dtype=float)
+
+
+def _run_primary_secondary_fetd_forward(
+    msh,
+    facet_tags,
+    spaces,
+    materials,
+    config: PipelineConfig,
+    debye=None,
+    times=None,
+):
+    """Run the DOLFINx secondary solve driven by an empymod top-layer primary."""
+
+    import numpy as np
+    from atem3d.primary import EmpymodPrimaryProvider
+
+    if str(config.formulation).strip().lower() != "e":
+        raise ValueError("source_term_mode='primary_secondary' is currently implemented for E-formulation only")
+    if str(config.receiver_type).strip().lower() != "point":
+        raise ValueError("source_term_mode='primary_secondary' currently supports point receivers only")
+    if config.resume_forward:
+        raise ValueError("source_term_mode='primary_secondary' does not yet support checkpoint resume")
+
+    observation_times = generate_time_array(config) if times is None else np.asarray(times, dtype=float)
+    stop_after_outputs = int(getattr(config, "stop_after_outputs", 0))
+    if stop_after_outputs > 0:
+        observation_times = observation_times[:stop_after_outputs]
+    components = _forward_components(config)
+    sigma_background = _primary_secondary_background_sigma(config)
+    material = _primary_secondary_representative_material(config, debye=debye)
+    materials = dict(materials)
+    materials["sigma_background"] = _make_primary_secondary_background_sigma_function(msh, spaces, config)
+    primary = _make_pipeline_empymod_primary_provider(config)
+    receiver_locations = np.asarray([config.receiver], dtype=float)
+    if not _primary_secondary_has_active_contrast(config):
+        log("[source] source_term_mode=primary_secondary; zero contrast, returning primary response.", comm=msh.comm)
+        primary_reference = get_empymod_reference(
+            observation_times,
+            config,
+            mode=_primary_secondary_zero_contrast_reference_mode(config),
+        )
+        column_by_component = {
+            component: index for index, component in enumerate(primary_reference["components"])
+        }
+        return {
+            "times": observation_times,
+            "data": np.column_stack(
+                [
+                    primary_reference["data"][:, column_by_component[component]]
+                    for component in components
+                ]
+            ),
+            "components": components,
+            "solver_log": [],
+            "receiver_diagnostic_rows": [],
+            "primary_secondary_diagnostics": _primary_secondary_zero_contrast_diagnostics(observation_times, config),
+        }
+    built = _make_dolfinx_primary_secondary_forward_operator(
+        msh,
+        spaces,
+        materials,
+        assemble_operators(msh, spaces, materials, facet_tags, config, debye=debye),
+        config,
+        primary=primary,
+        receiver_locations=receiver_locations,
+        components=components,
+        material=material,
+        sigma_background=sigma_background,
+        debye=debye,
+        turnoff_time=float(config.ramp_off_time),
+        turnoff_steps=max(1, int(config.min_steps_during_turnoff)),
+    )
+    log(
+        "[source] source_term_mode=primary_secondary; "
+        f"sigma_background={sigma_background:.6e} S/m, components={','.join(components)}",
+        comm=msh.comm,
+    )
+    data = np.asarray(built["operator"].forward(observation_times), dtype=float)
+    return {
+        "times": observation_times,
+        "data": data,
+        "components": components,
+        "solver_log": [],
+        "receiver_diagnostic_rows": [],
+        "primary_secondary_diagnostics": dict(built["diagnostics"]),
+    }
+
+
+def _update_debye_memories(debye, memories, E_new, dt: float, scheme: str = "backward_euler") -> None:
     if debye is None:
         return
     for term, chi in zip(debye["terms"], memories):
-        alpha, beta = _debye_backward_euler_coefficients(term, dt)
+        alpha, beta = _debye_time_coefficients(term, dt, scheme)
         chi.x.array[:] = beta * E_new.x.array + alpha * chi.x.array
         chi.x.scatter_forward()
 
 
-def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, config: PipelineConfig, debye=None, times=None):
+def run_fetd_forward(
+    msh,
+    cell_tags,
+    facet_tags,
+    spaces,
+    materials,
+    source,
+    config: PipelineConfig,
+    debye=None,
+    times=None,
+    timing_start_time: float | None = None,
+):
     """Run backward-Euler FETD forward modelling."""
 
     import numpy as np
     from dolfinx import fem
     from petsc4py import PETSc
 
+    timing_t0 = time.perf_counter() if timing_start_time is None else float(timing_start_time)
     if times is None:
-        times = generate_time_array(config)
-    schedule = _forward_observation_schedule(times, config)
+        with _timed_stage(config, "forward_generate_times", timing_t0):
+            times = generate_time_array(config)
+    with _timed_stage(config, "forward_schedule", timing_t0, output_count=int(len(times))):
+        schedule = _forward_observation_schedule(times, config)
     step_times = schedule["step_times"]
     return_times = schedule["return_times"]
     output_step_indices = set(schedule["output_step_indices"])
     observation_time_by_step = {
         int(step): float(return_times[i]) for i, step in enumerate(schedule["output_step_indices"])
     }
-    operators = assemble_operators(msh, spaces, materials, facet_tags, config, debye=debye)
+    source_term_mode = str(config.source_term_mode).strip().lower()
+    if source_term_mode == "primary_secondary":
+        with _timed_stage(config, "forward_primary_secondary_delegate", timing_t0, output_count=int(len(return_times))):
+            return _run_primary_secondary_fetd_forward(
+                msh,
+                facet_tags,
+                spaces,
+                materials,
+                config,
+                debye=debye,
+                times=return_times,
+            )
+    with _timed_stage(config, "forward_assemble_operators", timing_t0):
+        operators = assemble_operators(msh, spaces, materials, facet_tags, config, debye=debye)
     divergence_cleaner = None
     if str(config.divergence_cleaning).strip().lower() == "conductivity":
         if debye is not None:
             raise ValueError("conductivity divergence cleaning is currently implemented for non-polarizable runs only")
-        divergence_cleaner = _build_conductivity_divergence_cleaner(spaces, operators, config)
+        with _timed_stage(config, "forward_divergence_cleaner_setup", timing_t0):
+            divergence_cleaner = _build_conductivity_divergence_cleaner(spaces, operators, config)
     divergence_control = None
     divergence_control_norms = None
     if float(config.divergence_control_weight) > 0.0:
         if debye is not None:
             raise ValueError("conductivity divergence control is currently implemented for non-polarizable runs only")
-        divergence_control = _build_conductivity_divergence_control_matrix(spaces, operators, config)
-        divergence_control_norms = {
-            "mass": _petsc_matrix_norm(operators["M"]),
-            "stiffness": _petsc_matrix_norm(operators["K"]),
-            "control": _petsc_matrix_norm(divergence_control),
-        }
+        with _timed_stage(config, "forward_divergence_control_setup", timing_t0):
+            divergence_control = _build_conductivity_divergence_control_matrix(spaces, operators, config)
+            divergence_control_norms = {
+                "mass": _petsc_matrix_norm(operators["M"]),
+                "stiffness": _petsc_matrix_norm(operators["K"]),
+                "control": _petsc_matrix_norm(divergence_control),
+            }
     V = spaces["V"]
-    E_initial = _solve_initial_dc_field(msh, spaces, materials, facet_tags, config)
-    source["initial_field_diagnostics"] = _initial_field_curl_diagnostics(E_initial, spaces)
-    source_term_mode = str(config.source_term_mode).strip().lower()
+    with _timed_stage(config, "forward_initial_dc_solve", timing_t0):
+        E_initial = _solve_initial_dc_field(msh, spaces, materials, facet_tags, config)
+    with _timed_stage(config, "forward_initial_curl_diagnostics", timing_t0):
+        source["initial_field_diagnostics"] = _initial_field_curl_diagnostics(E_initial, spaces)
     if source_term_mode == "primary_dc":
         E_old = fem.Function(V, name="E_secondary_old")
         E_old.x.array[:] = 0.0
@@ -4841,10 +7539,30 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             "magnetic_receiver_mode must be 'curl', 'biot_current', 'biot_ohmic', or 'faraday_integrated'"
         )
     magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
-    if magnetic_dbdt_mode not in {"curl", "biot_rate"}:
-        raise ValueError("magnetic_dbdt_mode must be 'curl' or 'biot_rate'")
+    if magnetic_dbdt_mode not in {"curl", "biot_rate", "ampere_rate"}:
+        raise ValueError("magnetic_dbdt_mode must be 'curl', 'biot_rate', or 'ampere_rate'")
     if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
+    if magnetic_dbdt_mode == "ampere_rate" and source_term_mode != "primary_secondary":
+        raise ValueError("magnetic_dbdt_mode='ampere_rate' requires source_term_mode='primary_secondary'")
+    magnetic_dbdt_evaluation_mode = str(config.magnetic_dbdt_evaluation_mode).strip().lower()
+    if magnetic_dbdt_evaluation_mode in {"", "same"}:
+        magnetic_dbdt_evaluation_mode = "same"
+    elif magnetic_dbdt_evaluation_mode not in {
+        "first_cell",
+        "mean",
+        "median",
+        "nearest_center",
+        "shallowest",
+        "local_lsq",
+        "local_lsq_earth",
+        "local_lsq_air",
+        "local_lsq_interface",
+    }:
+        raise ValueError(
+            "magnetic_dbdt_evaluation_mode must be 'same', 'first_cell', 'mean', 'median', "
+            "'nearest_center', 'shallowest', 'local_lsq', 'local_lsq_earth', 'local_lsq_air', or 'local_lsq_interface'"
+        )
     H_old_receiver = None
     faraday_receiver_hz = None
     if magnetic_receiver_mode == "biot_current":
@@ -4872,6 +7590,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         faraday_receiver_hz = float(faraday_initial_h[2])
 
     rows = []
+    row_times = []
     receiver_diagnostic_rows = []
     solver_log = []
     components = _forward_components(config)
@@ -4897,10 +7616,18 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             memory.x.array[:] = values
             memory.x.scatter_forward()
         rows = checkpoint["rows"].tolist()
+        if checkpoint.get("row_times") is not None:
+            row_times = np.asarray(checkpoint["row_times"], dtype=float).reshape(-1).tolist()
+        else:
+            row_times = _completed_return_times(return_times, rows).tolist()
         receiver_diagnostic_rows = list(checkpoint["receiver_diagnostic_rows"])
         solver_log = list(checkpoint["solver_log"])
         previous_time = float(checkpoint["previous_time"])
-        start_step = int(checkpoint["completed_step"]) + 1
+        start_step = _resume_start_step_from_time(
+            step_times,
+            previous_time=previous_time,
+            completed_step=int(checkpoint["completed_step"]),
+        )
         if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
             h_old = checkpoint["h_old_receiver"]
             if h_old.shape == (3,) and np.all(np.isfinite(h_old)):
@@ -4936,7 +7663,11 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             and previous_step_dt is not None
         )
         owns_M_eff = debye is not None and bool(debye["terms"])
-        M_eff = operators["M"] if use_bdf2 else _matrix_for_effective_conductivity(operators, debye, dt)
+        M_eff = (
+            operators["M"]
+            if use_bdf2
+            else _matrix_for_effective_conductivity(operators, debye, dt, config.debye_time_scheme)
+        )
         if use_bdf2:
             bdf2_coeffs = _bdf2_step_coefficients(dt, previous_step_dt)
             lhs_mass = bdf2_coeffs["lhs"]
@@ -4945,12 +7676,24 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             coeffs = _theta_step_coefficients(dt, 1.0 if owns_M_eff else time_theta)
             lhs_mass = coeffs["mass_lhs"]
             lhs_stiffness = coeffs["stiffness_lhs"]
-        A = _copy_and_combine_matrix(
-            operators["K"],
-            M_eff,
-            lhs_mass,
-            k_scale=lhs_stiffness,
-        )
+        trace_step = step == start_step
+        if trace_step:
+            _record_timing_event(
+                config,
+                "forward_first_step_start",
+                timing_t0,
+                step=int(step),
+                time=float(t),
+                dt=float(dt),
+                output=bool(step in output_step_indices),
+            )
+        with _timed_stage(config, "forward_first_step_matrix", timing_t0, step=int(step)) if trace_step else nullcontext():
+            A = _copy_and_combine_matrix(
+                operators["K"],
+                M_eff,
+                lhs_mass,
+                k_scale=lhs_stiffness,
+            )
         if str(config.outer_boundary_mode).strip().lower() == "robin":
             B_robin = operators.get("B_robin")
             if B_robin is None:
@@ -4984,32 +7727,50 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             )
             A.assemble()
         _zero_rows_columns(A, operators["bc_global"], diag=1.0)
-        if solver_context is None:
-            solver_context = configure_ams_solver(A, spaces, config)
-        else:
-            solver_context["ksp"].setOperators(A)
+        matrix_signature = (
+            float(dt),
+            float(lhs_mass),
+            float(lhs_stiffness),
+            bool(divergence_control_applied),
+            float(
+                0.0
+                if divergence_control_stats is None
+                else divergence_control_stats["divergence_control_applied_weight"]
+            ),
+            str(config.outer_boundary_mode).strip().lower(),
+        )
+        with _timed_stage(config, "forward_first_step_ksp_setup", timing_t0, step=int(step)) if trace_step else nullcontext():
+            solver_context = _configure_e_step_solver(
+                solver_context,
+                A,
+                spaces,
+                config,
+                matrix_signature=matrix_signature,
+            )
 
-        if use_bdf2:
-            b = E_old.x.petsc_vec.duplicate()
-            operators["M"].mult(E_old.x.petsc_vec, b)
-            b.scale(bdf2_coeffs["old"])
-            older_term = E_old.x.petsc_vec.duplicate()
-            operators["M"].mult(E_older.x.petsc_vec, older_term)
-            b.axpy(bdf2_coeffs["older"], older_term)
-            older_term.destroy()
-        else:
-            b = _assemble_history_rhs(operators, debye, memories, E_old, dt)
-        if not use_bdf2 and not owns_M_eff and coeffs["stiffness_rhs"] != 0.0:
-            k_old = b.duplicate()
-            operators["K"].mult(E_old.x.petsc_vec, k_old)
-            b.axpy(coeffs["stiffness_rhs"], k_old)
-            k_old.destroy()
-        avg_didt = _source_interval_average_didt(previous_time, float(t), config)
-        b.axpy(float(config.source_rhs_sign) * avg_didt, source_time_vector)
-        _zero_rhs_entries(b, operators["bc_global"])
+        with _timed_stage(config, "forward_first_step_rhs", timing_t0, step=int(step)) if trace_step else nullcontext():
+            if use_bdf2:
+                b = E_old.x.petsc_vec.duplicate()
+                operators["M"].mult(E_old.x.petsc_vec, b)
+                b.scale(bdf2_coeffs["old"])
+                older_term = E_old.x.petsc_vec.duplicate()
+                operators["M"].mult(E_older.x.petsc_vec, older_term)
+                b.axpy(bdf2_coeffs["older"], older_term)
+                older_term.destroy()
+            else:
+                b = _assemble_history_rhs(operators, debye, memories, E_old, dt, config.debye_time_scheme)
+            if not use_bdf2 and not owns_M_eff and coeffs["stiffness_rhs"] != 0.0:
+                k_old = b.duplicate()
+                operators["K"].mult(E_old.x.petsc_vec, k_old)
+                b.axpy(coeffs["stiffness_rhs"], k_old)
+                k_old.destroy()
+            avg_didt = _source_interval_average_didt(previous_time, float(t), config)
+            b.axpy(float(config.source_rhs_sign) * avg_didt, source_time_vector)
+            _zero_rhs_entries(b, operators["bc_global"])
 
         E_new.x.array[:] = 0.0
-        solver_context["ksp"].solve(b, E_new.x.petsc_vec)
+        with _timed_stage(config, "forward_first_step_ksp_solve", timing_t0, step=int(step)) if trace_step else nullcontext():
+            solver_context["ksp"].solve(b, E_new.x.petsc_vec)
         E_new.x.scatter_forward()
         its = solver_context["ksp"].getIterationNumber()
         reason = solver_context["ksp"].getConvergedReason()
@@ -5020,7 +7781,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         clean_stats = None
         if divergence_cleaner is not None and _should_apply_divergence_cleaning(float(t), config):
             clean_stats = _apply_conductivity_divergence_cleaning(divergence_cleaner, E_new, operators, config)
-        _update_debye_memories(debye, memories, E_new, dt)
+        _update_debye_memories(debye, memories, E_new, dt, config.debye_time_scheme)
         if magnetic_receiver_mode == "biot_current":
             H_new_receiver = _biot_savart_total_h_at_receiver(
                 E_new,
@@ -5052,31 +7813,35 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
 
         is_output = step in output_step_indices
         if is_output:
-            if magnetic_receiver_mode == "faraday_integrated":
-                dbdt = faraday_step_dbdt
-                rec = dict(faraday_step_record)
-            else:
-                dbdt = compute_dbdt(E_new, spaces)
-                rec = evaluate_receivers(E_new, dbdt, msh, config)
-            rec["dBzdt_curl"] = float(rec.get("dBzdt", np.nan))
-            rec["dBzdt_biot_rate"] = float("nan")
-            if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
-                _assign_biot_receiver_hz(rec, H_new_receiver)
-                biot_rate = float(_biot_receiver_dbdt_from_h(H_new_receiver, H_old_receiver, dt=dt)[2])
-                rec["dBzdt_biot_rate"] = biot_rate
-                if magnetic_dbdt_mode == "biot_rate":
-                    rec["dBzdt"] = biot_rate
-            rows.append([rec[name] for name in components])
-            receiver_diagnostic_rows.extend(
-                _evaluate_receiver_diagnostics(
-                    E_new,
-                    dbdt,
-                    msh,
-                    config,
-                    time_obs=observation_time_by_step[step],
-                    main_record=rec,
+            with _timed_stage(config, "forward_first_output_receivers", timing_t0, step=int(step)) if (
+                len(rows) == initial_rows_count
+            ) else nullcontext():
+                if magnetic_receiver_mode == "faraday_integrated":
+                    dbdt = faraday_step_dbdt
+                    rec = dict(faraday_step_record)
+                else:
+                    dbdt = compute_dbdt(E_new, spaces)
+                    rec = evaluate_receivers(E_new, dbdt, msh, config)
+                rec["dBzdt_curl"] = float(rec.get("dBzdt", np.nan))
+                rec["dBzdt_biot_rate"] = float("nan")
+                if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
+                    _assign_biot_receiver_hz(rec, H_new_receiver)
+                    biot_rate = float(_biot_receiver_dbdt_from_h(H_new_receiver, H_old_receiver, dt=dt)[2])
+                    rec["dBzdt_biot_rate"] = biot_rate
+                    if magnetic_dbdt_mode == "biot_rate":
+                        rec["dBzdt"] = biot_rate
+                rows.append([rec[name] for name in components])
+                row_times.append(float(observation_time_by_step[step]))
+                receiver_diagnostic_rows.extend(
+                    _evaluate_receiver_diagnostics(
+                        E_new,
+                        dbdt,
+                        msh,
+                        config,
+                        time_obs=observation_time_by_step[step],
+                        main_record=rec,
+                    )
                 )
-            )
 
         if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
             H_old_receiver = H_new_receiver
@@ -5092,7 +7857,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             "time_method": "bdf2" if use_bdf2 else "theta",
             "avg_didt": float(avg_didt),
             "divergence_control_applied": bool(divergence_control_applied),
-            "ip_total_field_equation": _debye_total_field_step_metadata(debye, dt),
+            "ip_total_field_equation": _debye_total_field_step_metadata(debye, dt, config.debye_time_scheme),
         }
         if divergence_control_stats is not None:
             log_item.update(divergence_control_stats)
@@ -5106,14 +7871,17 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             log_item["divergence_clean_strength"] = float(clean_stats["strength"])
         solver_log.append(log_item)
         if is_output and msh.comm.rank == 0:
-            _save_forward_partial(
-                config,
-                return_times,
-                rows,
-                components,
-                solver_log,
-                receiver_diagnostic_rows=receiver_diagnostic_rows,
-            )
+            with _timed_stage(config, "forward_first_output_partial_save", timing_t0, step=int(step)) if (
+                len(rows) - initial_rows_count == 1
+            ) else nullcontext():
+                _save_forward_partial(
+                    config,
+                    return_times,
+                    rows,
+                    components,
+                    solver_log,
+                    receiver_diagnostic_rows=receiver_diagnostic_rows,
+                )
         if is_output:
             hz_text = f" Hz={rec['Hz']:.6e}" if "Hz" in rec else ""
             log(
@@ -5147,19 +7915,30 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         E_old.x.array[:] = E_new.x.array
         E_old.x.scatter_forward()
         previous_time = float(t)
-        if is_output and (bool(config.checkpoint_forward) or stop_after_outputs > 0):
-            _save_forward_checkpoint(
-                config,
-                completed_step=step,
-                previous_time=previous_time,
-                E_old=E_old,
-                memories=memories,
-                rows=rows,
-                components=components,
-                solver_log=solver_log,
-                h_old_receiver=H_old_receiver,
-                receiver_diagnostic_rows=receiver_diagnostic_rows,
-            )
+        checkpoint_interval = int(getattr(config, "checkpoint_interval_steps", 0))
+        interval_checkpoint = (
+            bool(config.checkpoint_forward)
+            and checkpoint_interval > 0
+            and (step + 1) % checkpoint_interval == 0
+        )
+        output_checkpoint = is_output and (bool(config.checkpoint_forward) or stop_after_outputs > 0)
+        if output_checkpoint or interval_checkpoint:
+            with _timed_stage(config, "forward_first_checkpoint_save", timing_t0, step=int(step)) if (
+                len(rows) - initial_rows_count <= 1
+            ) else nullcontext():
+                _save_forward_checkpoint(
+                    config,
+                    completed_step=step,
+                    previous_time=previous_time,
+                    E_old=E_old,
+                    memories=memories,
+                    rows=rows,
+                    row_times=row_times,
+                    components=components,
+                    solver_log=solver_log,
+                    h_old_receiver=H_old_receiver,
+                    receiver_diagnostic_rows=receiver_diagnostic_rows,
+                )
         should_stop = is_output and stop_after_outputs > 0 and (len(rows) - initial_rows_count) >= stop_after_outputs
         b.destroy()
         A.destroy()
@@ -5173,7 +7952,8 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             )
             break
 
-    completed_times = _completed_return_times(return_times, rows)
+    _destroy_solver_context(solver_context)
+    completed_times = np.asarray(row_times, dtype=float)
     return {
         "times": completed_times,
         "data": np.asarray(rows),
@@ -5183,7 +7963,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
     }
 
 
-def assemble_h_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], facet_tags):
+def assemble_h_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], facet_tags, config: PipelineConfig):
     """Assemble H-form curl-rho-curl and mu mass matrices."""
 
     import ufl
@@ -5193,7 +7973,7 @@ def assemble_h_operators(msh, spaces: dict[str, Any], materials: dict[str, Any],
     V = spaces["V"]
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    _bc, bc_dofs, bc_global = _make_zero_tangential_bc(msh, spaces, facet_tags)
+    _bc, bc_dofs, bc_global = _make_zero_tangential_bc(msh, spaces, facet_tags, config)
     K_form = fem.form(materials["rho"] * ufl.inner(ufl.curl(u), ufl.curl(v)) * ufl.dx)
     M_form = fem.form(materials["mu"] * ufl.inner(u, v) * ufl.dx)
     K = fem_petsc.assemble_matrix(K_form)
@@ -5220,6 +8000,25 @@ def assemble_h_source_vector(msh, spaces: dict[str, Any], materials: dict[str, A
     return vec
 
 
+def _h_source_inputs(msh, spaces, materials, source, config: PipelineConfig, cell_tags=None):
+    current_density = source.get("current_density")
+    if current_density is None:
+        current_density = _build_regularized_current_density(msh, spaces, config, cell_tags)
+    h_vector = source.get("h_vector")
+    if h_vector is not None:
+        return current_density, h_vector, {"h_source_mode": "preassembled_line"}
+    if (
+        str(config.h_source_mode).strip().lower() == "manual_line"
+        and str(source.get("mode", "")).strip().lower() == "manual_line"
+    ):
+        return current_density, _build_manual_line_h_source_vector(msh, spaces, materials, config), {
+            "h_source_mode": "manual_line"
+        }
+    return current_density, assemble_h_source_vector(msh, spaces, materials, current_density), {
+        "h_source_mode": "regularized_volume"
+    }
+
+
 def _recover_h_electric_field(H, current_density, source_current: float, spaces: dict[str, Any], materials: dict[str, Any]):
     """Recover E = rho * (curl(H) - J_s) as a DG0 vector field."""
 
@@ -5238,22 +8037,305 @@ def _recover_h_electric_field(H, current_density, source_current: float, spaces:
     return E
 
 
-def _evaluate_h_receivers(E, H_new, H_old, dt: float, msh, config: PipelineConfig):
+def _second_order_backward_time_derivative(new, old, older=None, *, dt: float, previous_dt: float | None = None):
+    """Return endpoint time derivative, using a three-point backward formula when possible."""
+
+    import numpy as np
+
+    dt = float(dt)
+    if older is None or previous_dt is None:
+        return (np.asarray(new, dtype=float) - np.asarray(old, dtype=float)) / dt
+    previous_dt = float(previous_dt)
+    if (
+        not math.isfinite(dt)
+        or not math.isfinite(previous_dt)
+        or dt <= 0.0
+        or previous_dt <= 0.0
+    ):
+        return (np.asarray(new, dtype=float) - np.asarray(old, dtype=float)) / dt
+
+    h1 = dt
+    h0 = previous_dt
+    new_arr = np.asarray(new, dtype=float)
+    old_arr = np.asarray(old, dtype=float)
+    older_arr = np.asarray(older, dtype=float)
+    c_new = (2.0 * h1 + h0) / (h1 * (h1 + h0))
+    c_old = -(h1 + h0) / (h1 * h0)
+    c_older = h1 / (h0 * (h1 + h0))
+    return c_new * new_arr + c_old * old_arr + c_older * older_arr
+
+
+def _evaluate_h_receivers(
+    E,
+    H_new,
+    H_old,
+    dt: float,
+    msh,
+    config: PipelineConfig,
+    *,
+    H_older=None,
+    previous_dt: float | None = None,
+):
     """Evaluate Ex/Ey from recovered E plus Hz and dBz/dt from H."""
 
     import numpy as np
     from scipy.constants import mu_0
 
-    cell = _find_cell_for_point(msh, config.receiver)
-    if cell is None:
-        raise RuntimeError(f"receiver {config.receiver} was not found in a local cell")
-    point = np.asarray(config.receiver, dtype=float).reshape(1, 3)
-    cells = np.asarray([cell], dtype=np.int32)
-    e_val = np.asarray(E.eval(point, cells), dtype=float).reshape(-1)
-    h_new = np.asarray(H_new.eval(point, cells), dtype=float).reshape(-1)
-    h_old = np.asarray(H_old.eval(point, cells), dtype=float).reshape(-1)
+    mode = str(config.receiver_evaluation_mode).strip().lower()
+    dbdt_mode = _resolved_magnetic_dbdt_evaluation_mode(config, mode)
+    if not getattr(_evaluate_h_receivers, "_logged_dbdt_mode", False):
+        log(
+            f"[receiver:h] Ex/Ey and Hz use receiver_evaluation_mode={config.receiver_evaluation_mode}; "
+            f"dBz/dt uses magnetic_dbdt_evaluation_mode={config.magnetic_dbdt_evaluation_mode}, "
+            f"resolved_dbdt_evaluation_mode={dbdt_mode}. "
+            "At shared receiver points, colliding cell candidates are combined instead of taking "
+            "the arbitrary first cell.",
+            comm=getattr(msh, "comm", None),
+        )
+        setattr(_evaluate_h_receivers, "_logged_dbdt_mode", True)
+
+    needs_geometry_stats = mode in {
+        "nearest_center",
+        "shallowest",
+        "local_lsq",
+        "local_lsq_earth",
+        "local_lsq_air",
+        "local_lsq_interface",
+    } or dbdt_mode in {
+        "nearest_center",
+        "shallowest",
+        "local_lsq",
+        "local_lsq_earth",
+        "local_lsq_air",
+        "local_lsq_interface",
+    }
+    cell_centers = _cell_centers(msh) if needs_geometry_stats else None
+
+    def sample_cells_for_mode(sample_point, sample_mode: str, *, quantity: str):
+        if sample_mode in {"local_lsq", "local_lsq_earth", "local_lsq_air", "local_lsq_interface"}:
+            cells = _local_lsq_receiver_sample_cells(
+                cell_centers,
+                point=sample_point,
+                radius=_local_lsq_receiver_radius(config, quantity=quantity),
+                max_samples=_local_lsq_receiver_max_samples(config, quantity=quantity),
+            )
+            eval_points = cell_centers[np.asarray(cells, dtype=int)] if len(cells) else np.empty((0, 3), dtype=float)
+        else:
+            cells = _find_cells_for_point(msh, sample_point)
+            eval_points = np.repeat(np.asarray(sample_point, dtype=float).reshape(1, 3), len(cells), axis=0)
+        return np.asarray(cells, dtype=np.int32), np.asarray(eval_points, dtype=float)
+
+    e_samples = []
+    h_samples = []
+    dbdt_samples = []
+    e_center_samples = []
+    h_center_samples = []
+    dbdt_center_samples = []
+    e_point_samples = []
+    h_point_samples = []
+    dbdt_point_samples = []
+    candidate_counts = []
+
+    for sample_point in _receiver_sampling_points(config):
+        e_cells, e_eval_points = sample_cells_for_mode(sample_point, mode, quantity="field")
+        h_cells, h_eval_points = sample_cells_for_mode(sample_point, mode, quantity="field")
+        dbdt_cells, dbdt_eval_points = sample_cells_for_mode(sample_point, dbdt_mode, quantity="dbdt")
+        if len(e_cells) == 0 or len(h_cells) == 0 or len(dbdt_cells) == 0:
+            continue
+        candidate_counts.append(int(len(dbdt_cells)))
+        e_vals = np.asarray(E.eval(e_eval_points, e_cells), dtype=float).reshape(len(e_cells), -1)
+        h_vals = np.asarray(H_new.eval(h_eval_points, h_cells), dtype=float).reshape(len(h_cells), -1)
+        h_new_vals = np.asarray(H_new.eval(dbdt_eval_points, dbdt_cells), dtype=float).reshape(len(dbdt_cells), -1)
+        h_old_vals = np.asarray(H_old.eval(dbdt_eval_points, dbdt_cells), dtype=float).reshape(len(dbdt_cells), -1)
+        if H_older is not None:
+            h_older_vals = np.asarray(H_older.eval(dbdt_eval_points, dbdt_cells), dtype=float).reshape(
+                len(dbdt_cells),
+                -1,
+            )
+        else:
+            h_older_vals = None
+        dbdt_vals = mu_0 * _second_order_backward_time_derivative(
+            h_new_vals,
+            h_old_vals,
+            h_older_vals,
+            dt=float(dt),
+            previous_dt=previous_dt,
+        )
+        e_samples.append(e_vals)
+        h_samples.append(h_vals)
+        dbdt_samples.append(dbdt_vals)
+        e_center_samples.append(cell_centers[np.asarray(e_cells, dtype=int)] if cell_centers is not None else None)
+        h_center_samples.append(cell_centers[np.asarray(h_cells, dtype=int)] if cell_centers is not None else None)
+        dbdt_center_samples.append(cell_centers[np.asarray(dbdt_cells, dtype=int)] if cell_centers is not None else None)
+        e_point_samples.append(np.asarray(sample_point, dtype=float))
+        h_point_samples.append(np.asarray(sample_point, dtype=float))
+        dbdt_point_samples.append(np.asarray(sample_point, dtype=float))
+
+    if not e_samples:
+        raise RuntimeError(
+            f"receiver {config.receiver} was not found in a local cell; run in serial "
+            "for point extraction or add MPI point ownership handling."
+        )
+
+    e_val = _aggregate_receiver_sample_values(
+        e_samples,
+        mode,
+        sample_centers=e_center_samples,
+        sample_points=e_point_samples,
+    )
+    h_val = _aggregate_receiver_sample_values(
+        h_samples,
+        mode,
+        sample_centers=h_center_samples,
+        sample_points=h_point_samples,
+    )
+    dbdt_val, candidate_geometry_stats = _aggregate_receiver_sample_values_with_metadata(
+        dbdt_samples,
+        dbdt_mode,
+        sample_centers=dbdt_center_samples,
+        sample_points=dbdt_point_samples,
+    )
+    rec = {
+        "Ex": float(e_val[0]),
+        "Ey": float(e_val[1]),
+        "Hz": float(h_val[2]),
+        "dBzdt": float(dbdt_val[2]),
+    }
+    rec.update(_receiver_candidate_count_stats(candidate_counts))
+    rec.update(candidate_geometry_stats)
+    rec.update(_receiver_component_candidate_stats(dbdt_samples, 2, "dBzdt"))
+    return rec
+
+
+def _h_receiver_diagnostic_row(config: PipelineConfig, *, time_obs: float, rec: dict[str, Any]) -> dict[str, Any]:
+    row = {
+        "time_obs": float(time_obs),
+        "receiver_type": str(config.receiver_type),
+        "radius": 0.0 if str(config.receiver_type).strip().lower() == "point" else float(config.receiver_average_radius),
+        "Ex": float(rec.get("Ex", math.nan)),
+        "Ey": float(rec.get("Ey", math.nan)),
+        "Hz": float(rec.get("Hz", math.nan)),
+        "dBzdt": float(rec.get("dBzdt", math.nan)),
+        "dBzdt_curl": float(rec.get("dBzdt", math.nan)),
+        "dBzdt_biot_rate": math.nan,
+        "dBzdt_ampere_rate": math.nan,
+    }
+    for key in (
+        "sample_count",
+        "candidate_count_min",
+        "candidate_count_max",
+        "candidate_count_mean",
+        "multi_candidate_sample_count",
+        "candidate_center_distance_min",
+        "candidate_center_distance_max",
+        "candidate_center_distance_mean",
+        "selected_center_distance_mean",
+        "selected_center_distance_max",
+        "candidate_center_z_min",
+        "candidate_center_z_max",
+        "selected_center_z_mean",
+        "local_lsq_sample_count_mean",
+        "local_lsq_earth_sample_count_mean",
+        "local_lsq_air_sample_count_mean",
+        "local_lsq_earth_value_z_mean",
+        "local_lsq_air_value_z_mean",
+        "local_lsq_rank_min",
+        "local_lsq_residual_norm_max",
+        "local_lsq_condition_max",
+    ):
+        if key in rec:
+            row[key] = rec[key]
+    return row
+
+
+def _make_ampere_h_recovery_solver(msh, spaces: dict[str, Any], config: PipelineConfig):
+    """Return a weak-form Ampere recovery solver for secondary H from deltaJ."""
+
+    import numpy as np
+    import ufl
+    from dolfinx import fem
+    from dolfinx.fem import petsc as fem_petsc
+    from petsc4py import PETSc
+
+    V = spaces["V"]
+    h = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+    geometry = np.asarray(msh.geometry.x, dtype=float)
+    if geometry.size:
+        extent = np.ptp(geometry, axis=0)
+        length_scale = max(float(np.max(extent)), 1.0)
+    else:
+        length_scale = 1.0
+    regularization = max(1.0e-18, 1.0e-10 / (length_scale * length_scale))
+    a = fem.form(
+        ufl.inner(ufl.curl(h), ufl.curl(v)) * ufl.dx
+        + float(regularization) * ufl.inner(h, v) * ufl.dx
+    )
+    A = fem_petsc.assemble_matrix(a)
+    A.assemble()
+
+    ksp = PETSc.KSP().create(A.comm)
+    ksp.setOperators(A)
+    ksp.setType("cg")
+    ksp.setTolerances(rtol=float(config.rtol), atol=float(config.atol), max_it=max(int(config.max_it), 1000))
+    pc = ksp.getPC()
+    pc.setType("hypre")
+    try:
+        pc.setHYPREType("boomeramg")
+    except Exception:
+        pass
+    ksp.setFromOptions()
+
+    def solve(deltaJ):
+        rhs_form = fem.form(ufl.inner(deltaJ, ufl.curl(v)) * ufl.dx)
+        b = fem_petsc.assemble_vector(rhs_form)
+        b.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+        H = fem.Function(V, name="H_secondary_ampere")
+        ksp.solve(b, H.x.petsc_vec)
+        H.x.scatter_forward()
+        reason = int(ksp.getConvergedReason())
+        residual = float(ksp.getResidualNorm())
+        iterations = int(ksp.getIterationNumber())
+        b.destroy()
+        if reason < 0:
+            raise RuntimeError(
+                "Ampere H recovery solve failed, "
+                f"reason={reason}, residual={residual:.6e}, iterations={iterations}"
+            )
+        H._ampere_recovery_diagnostics = {
+            "regularization": float(regularization),
+            "ksp_reason": reason,
+            "ksp_residual": residual,
+            "ksp_iterations": iterations,
+        }
+        return H
+
+    solve.matrix = A
+    solve.ksp = ksp
+    solve.regularization = float(regularization)
+    return solve
+
+
+def _evaluate_ampere_h_receiver(H_new, H_old, dt: float, msh, config: PipelineConfig):
+    """Evaluate secondary H and mu0*dH/dt at configured receiver samples."""
+
+    import numpy as np
+    from scipy.constants import mu_0
+
+    h_new_values = []
+    h_old_values = []
+    for point in _receiver_sampling_points(config):
+        cell = _find_cell_for_point(msh, point)
+        if cell is None:
+            raise RuntimeError(f"receiver sample {tuple(point)} was not found in a local cell")
+        point_array = np.asarray(point, dtype=float).reshape(1, 3)
+        cells = np.asarray([cell], dtype=np.int32)
+        h_new_values.append(np.asarray(H_new.eval(point_array, cells), dtype=float).reshape(3))
+        h_old_values.append(np.asarray(H_old.eval(point_array, cells), dtype=float).reshape(3))
+    h_new = np.mean(np.vstack(h_new_values), axis=0)
+    h_old = np.mean(np.vstack(h_old_values), axis=0)
     dbdt = mu_0 * (h_new - h_old) / float(dt)
-    return {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "Hz": float(h_new[2]), "dBzdt": float(dbdt[2])}
+    return {"H": h_new, "dBdt": dbdt}
 
 
 def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config: PipelineConfig, times=None):
@@ -5274,20 +8356,26 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
     if config.polarization != "none":
         raise NotImplementedError("H-formulation is currently implemented for non-polarizable validation only")
 
-    operators = assemble_h_operators(msh, spaces, materials, facet_tags)
-    current_density = source.get("current_density")
-    if current_density is None:
-        current_density = _build_regularized_current_density(msh, spaces, config, cell_tags)
-    source_vec = assemble_h_source_vector(msh, spaces, materials, current_density)
+    operators = assemble_h_operators(msh, spaces, materials, facet_tags, config)
+    current_density, source_vec, h_source_diagnostics = _h_source_inputs(
+        msh,
+        spaces,
+        materials,
+        source,
+        config,
+        cell_tags,
+    )
     _zero_rhs_entries(source_vec, operators["bc_global"])
 
     V = spaces["V"]
     H_old = fem.Function(V, name="H_old")
     H_new = fem.Function(V, name="H_new")
-    static_dt = max(float(config.t_max), float(config.ramp_off_time), 1.0) * 1.0e9
-    A0 = _copy_and_combine_matrix(operators["K"], operators["M"], 1.0 / static_dt)
+    H_older = fem.Function(V, name="H_older")
+    has_h_older = False
+    static_mass_scale = _h_static_initial_mass_scale(config)
+    A0 = _copy_and_combine_matrix(operators["K"], operators["M"], static_mass_scale)
     _zero_rows_columns(A0, operators["bc_global"], diag=1.0)
-    solver_context = configure_lu_solver(A0)
+    solver_context = _configure_h_solver(A0, spaces, config)
     b0 = source_vec.copy()
     b0.scale(float(config.source_current))
     _zero_rhs_entries(b0, operators["bc_global"])
@@ -5303,6 +8391,7 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
     )
     log(
         f"[initial:h] solved static H with KSP its={initial_stats['its']} "
+        f"mass_scale={static_mass_scale:.3e} "
         f"residual={initial_stats['residual']:.3e} "
         f"relative_residual={initial_stats['relative_residual']:.3e} "
         f"reason={initial_stats['reason']}",
@@ -5312,21 +8401,41 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
     A0.destroy()
 
     rows = []
+    receiver_diagnostic_rows = []
     solver_log = []
     components = _forward_components(config)
     previous_time = 0.0
+    previous_dt_for_derivative: float | None = None
     initial_rows_count = len(rows)
     stop_after_outputs = int(config.stop_after_outputs)
     for step, t in enumerate(step_times):
         dt = float(t - previous_time)
         if dt <= 0.0:
             raise RuntimeError("non-positive dt encountered")
-        A = _copy_and_combine_matrix(operators["K"], operators["M"], 1.0 / dt)
+        step_coeffs = _h_time_discretization_coefficients(
+            config,
+            dt=dt,
+            previous_dt=previous_dt_for_derivative,
+            has_older=has_h_older,
+        )
+        lhs_mass = float(step_coeffs["lhs_mass"])
+        lhs_stiffness = float(step_coeffs["lhs_stiffness"])
+        A = _copy_and_combine_matrix(operators["K"], operators["M"], lhs_mass, k_scale=lhs_stiffness)
         _zero_rows_columns(A, operators["bc_global"], diag=1.0)
-        solver_context["ksp"].setOperators(A)
+        solver_context = _configure_h_step_solver(solver_context, A, spaces, config)
         b = H_old.x.petsc_vec.duplicate()
         operators["M"].mult(H_old.x.petsc_vec, b)
-        b.scale(1.0 / dt)
+        b.scale(float(step_coeffs["old_mass"]))
+        if float(step_coeffs["older_mass"]) != 0.0:
+            older_term = H_old.x.petsc_vec.duplicate()
+            operators["M"].mult(H_older.x.petsc_vec, older_term)
+            b.axpy(float(step_coeffs["older_mass"]), older_term)
+            older_term.destroy()
+        if float(step_coeffs["old_stiffness"]) != 0.0:
+            k_old = H_old.x.petsc_vec.duplicate()
+            operators["K"].mult(H_old.x.petsc_vec, k_old)
+            b.axpy(float(step_coeffs["old_stiffness"]), k_old)
+            k_old.destroy()
         b.axpy(_source_current(float(t), config), source_vec)
         _zero_rhs_entries(b, operators["bc_global"])
         rhs_norm = float(b.norm())
@@ -5348,8 +8457,20 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
         is_output = step in output_step_indices
         if is_output:
             E = _recover_h_electric_field(H_new, current_density, _source_current(float(t), config), spaces, materials)
-            rec = _evaluate_h_receivers(E, H_new, H_old, dt, msh, config)
+            rec = _evaluate_h_receivers(
+                E,
+                H_new,
+                H_old,
+                dt,
+                msh,
+                config,
+                H_older=H_older if has_h_older else None,
+                previous_dt=previous_dt_for_derivative,
+            )
             rows.append([rec[name] for name in components])
+            receiver_diagnostic_rows.append(
+                _h_receiver_diagnostic_row(config, time_obs=observation_time_by_step[step], rec=rec)
+            )
         log_item = {
             "step": step,
             "time": float(t),
@@ -5359,12 +8480,21 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
             "relative_residual": float(solver_stats["relative_residual"]),
             "reason": reason,
             "is_output": bool(is_output),
+            "time_method": str(step_coeffs["method"]),
+            "time_theta": lhs_stiffness,
         }
         if is_output:
             log_item["observation_time"] = float(observation_time_by_step[step])
         solver_log.append(log_item)
         if is_output and msh.comm.rank == 0:
-            _save_forward_partial(config, return_times, rows, components, solver_log)
+            _save_forward_partial(
+                config,
+                return_times,
+                rows,
+                components,
+                solver_log,
+                receiver_diagnostic_rows=receiver_diagnostic_rows,
+            )
         if is_output:
             log(
                 f"[time:h] step={step:04d} t_internal={t:.6e} t_obs={observation_time_by_step[step]:.6e} "
@@ -5381,8 +8511,12 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
                 comm=msh.comm,
             )
 
+        H_older.x.array[:] = H_old.x.array
+        H_older.x.scatter_forward()
+        has_h_older = True
         H_old.x.array[:] = H_new.x.array
         H_old.x.scatter_forward()
+        previous_dt_for_derivative = dt
         previous_time = float(t)
         should_stop = is_output and stop_after_outputs > 0 and (len(rows) - initial_rows_count) >= stop_after_outputs
         b.destroy()
@@ -5396,7 +8530,13 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
             break
 
     completed_times = _completed_return_times(return_times, rows)
-    return {"times": completed_times, "data": np.asarray(rows), "components": components, "solver_log": solver_log}
+    return {
+        "times": completed_times,
+        "data": np.asarray(rows),
+        "components": components,
+        "solver_log": solver_log,
+        "receiver_diagnostic_rows": receiver_diagnostic_rows,
+    }
 
 
 def _empymod_rec_mapping(receiver, component: str):
@@ -5596,31 +8736,36 @@ def get_empymod_reference(t_array, config: PipelineConfig, mode: str = "noip", *
     ramp_window = "after_ramp" if str(config.time_origin).strip().lower() == "after_ramp" else "ramp_start"
     dense_times = _reference_ramp_dense_times(times, config.ramp_off_time, window=ramp_window)
     empymod_kwargs = _empymod_call_kwargs(config, srcpts=srcpts)
+    receiver_samples = _receiver_sampling_points(config)
     for component in components:
-        rec, mrec, signal, factor = _empymod_rec_mapping(config.receiver, component)
+        sample_cols = []
         eval_times = dense_times if component in {"Ex", "Ey", "Hz", "dBzdt"} and config.ramp_off_time > 0.0 else times
-        response = empymod.bipole(
-            src=src,
-            rec=rec,
-            depth=depth,
-            res=res,
-            freqtime=eval_times,
-            signal=signal,
-            strength=config.source_current,
-            mrec=mrec,
-            verb=1,
-            **empymod_kwargs,
-        )
-        values = np.asarray(response, dtype=float).reshape(-1) * factor
-        if eval_times is dense_times:
-            values = _ramp_average_from_dense(times, dense_times, values, config.ramp_off_time, window=ramp_window)
-        else:
-            values = _apply_reference_ramp_average(component, times, values, config.ramp_off_time)
-        cols.append(values)
+        for receiver in receiver_samples:
+            rec, mrec, signal, factor = _empymod_rec_mapping(tuple(float(value) for value in receiver), component)
+            response = empymod.bipole(
+                src=src,
+                rec=rec,
+                depth=depth,
+                res=res,
+                freqtime=eval_times,
+                signal=signal,
+                strength=config.source_current,
+                mrec=mrec,
+                verb=1,
+                **empymod_kwargs,
+            )
+            values = np.asarray(response, dtype=float).reshape(-1) * factor
+            if eval_times is dense_times:
+                values = _ramp_average_from_dense(times, dense_times, values, config.ramp_off_time, window=ramp_window)
+            else:
+                values = _apply_reference_ramp_average(component, times, values, config.ramp_off_time)
+            sample_cols.append(values)
+        cols.append(np.mean(np.vstack(sample_cols), axis=0))
     data = np.column_stack(cols)
     print(
         f"[empymod] reference complete; finite source, strength={config.source_current:g} A, "
         f"source z={config.source_start[2]} m, receiver z={config.receiver[2]} m, "
+        f"receiver_samples={len(receiver_samples)}, "
         f"srcpts={empymod_kwargs['srcpts']}, ht={config.empymod_ht}, ft={config.empymod_ft}",
         flush=True,
     )
@@ -5628,7 +8773,7 @@ def get_empymod_reference(t_array, config: PipelineConfig, mode: str = "noip", *
 
 
 def compute_error(fem_data, ref_data, components, floor_factor: float = 1.0e-6):
-    """Compute floor-denominator relative errors per component."""
+    """Compute pointwise relative errors per component."""
 
     import numpy as np
 
@@ -5642,8 +8787,15 @@ def compute_error(fem_data, ref_data, components, floor_factor: float = 1.0e-6):
         diff = fem_arr[:, i] - ref
         ref_max = float(np.max(np.abs(ref)))
         floor = max(_validation_floor(name, ref), floor_factor * ref_max)
-        denom = np.maximum(np.abs(ref), floor)
-        rel = np.abs(diff) / denom
+        abs_diff = np.abs(diff)
+        ref_abs = np.abs(ref)
+        rel = np.divide(
+            abs_diff,
+            ref_abs,
+            out=np.full_like(abs_diff, np.inf, dtype=float),
+            where=ref_abs != 0.0,
+        )
+        rel[(ref_abs == 0.0) & (abs_diff == 0.0)] = 0.0
         max_idx = int(np.argmax(rel))
         result[name] = {
             "floor": float(floor),
@@ -5653,7 +8805,7 @@ def compute_error(fem_data, ref_data, components, floor_factor: float = 1.0e-6):
             "max": float(rel[max_idx]),
             "max_index": max_idx,
             "relative": rel,
-            "absolute": np.abs(diff),
+            "absolute": abs_diff,
             "reference_max": ref_max,
             "reference_too_small": bool(ref_max == 0.0 or np.sum(np.abs(ref) > floor) < max(3, ref.size // 20)),
         }
@@ -5672,6 +8824,138 @@ def _validation_floor(component: str, ref_values) -> float:
     if str(component).startswith(("dB", "B")):
         return max(1.0e-18, 1.0e-6 * max_abs_ref)
     return max(1.0e-300, 1.0e-6 * max_abs_ref)
+
+
+def _ordinary_relative_error(abs_error: float, ref_value: float) -> float:
+    abs_error = float(abs_error)
+    ref_abs = abs(float(ref_value))
+    if ref_abs == 0.0:
+        return 0.0 if abs_error == 0.0 else float("inf")
+    return float(abs_error / ref_abs)
+
+
+def _json_safe_diagnostic(value):
+    import numpy as np
+
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _json_safe_diagnostic(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_diagnostic(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _json_safe_diagnostic(value.tolist())
+    return f"<{value.__class__.__name__}>"
+
+
+def _validation_diagnostics_for_acceptance(solver_diagnostics) -> dict[str, Any]:
+    diagnostics = {}
+    if solver_diagnostics is None:
+        return diagnostics
+    diagnostics.update(_json_safe_diagnostic(dict(solver_diagnostics)))
+    nested = diagnostics.get("primary_secondary_diagnostics")
+    if isinstance(nested, dict):
+        for key in ("primary_secondary_internal_time_grid", "primary_secondary_step_equation"):
+            if key in nested and key not in diagnostics:
+                diagnostics[key] = nested[key]
+    return diagnostics
+
+
+def _solver_internal_log_from_payload(payload) -> list[dict[str, Any]]:
+    import numpy as np
+
+    if "internal_solver_steps" not in payload.files:
+        return []
+    steps = np.asarray(payload["internal_solver_steps"], dtype=int)
+    times = (
+        np.asarray(payload["internal_solver_times"], dtype=float)
+        if "internal_solver_times" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    dts = (
+        np.asarray(payload["internal_solver_dt"], dtype=float)
+        if "internal_solver_dt" in payload.files
+        else np.full(steps.size, np.nan)
+    )
+    is_output = (
+        np.asarray(payload["internal_solver_is_output"], dtype=bool)
+        if "internal_solver_is_output" in payload.files
+        else np.zeros(steps.size, dtype=bool)
+    )
+    return [
+        {
+            "step": int(step),
+            "time": float(times[i]) if i < times.size else float("nan"),
+            "dt": float(dts[i]) if i < dts.size else float("nan"),
+            "is_output": bool(is_output[i]) if i < is_output.size else False,
+        }
+        for i, step in enumerate(steps)
+    ]
+
+
+def _solver_internal_time_grid_summary(solver_log, observation_times, config: PipelineConfig) -> dict[str, Any]:
+    import numpy as np
+
+    times = np.asarray(
+        [float(item.get("time", np.nan)) for item in (solver_log or [])],
+        dtype=float,
+    )
+    times = times[np.isfinite(times)]
+    observation_times = np.asarray(observation_times, dtype=float)
+    ramp_time = float(config.ramp_off_time)
+    time_origin = str(config.time_origin).strip().lower()
+    if time_origin == "after_ramp":
+        expected_outputs = ramp_time + observation_times
+    else:
+        expected_outputs = observation_times
+    output_times = np.asarray(
+        [
+            float(item.get("time", np.nan))
+            for item in (solver_log or [])
+            if bool(item.get("is_output", False))
+        ],
+        dtype=float,
+    )
+    output_times = output_times[np.isfinite(output_times)]
+    contains_expected_outputs = bool(
+        expected_outputs.size == 0
+        or (
+            times.size > 0
+            and all(
+                np.any(np.isclose(times, float(output_time), rtol=1.0e-12, atol=1.0e-30))
+                for output_time in expected_outputs
+            )
+        )
+    )
+    positive_dt = np.asarray(
+        [
+            float(item.get("dt", np.nan))
+            for item in (solver_log or [])
+            if math.isfinite(float(item.get("dt", np.nan))) and float(item.get("dt", np.nan)) > 0.0
+        ],
+        dtype=float,
+    )
+    contains_turnoff_start_step = bool(
+        times.size > 0 and np.any(np.isclose(times, 0.0, rtol=0.0, atol=1.0e-15))
+    )
+    return {
+        "turnoff_grid_points": int(np.count_nonzero(times <= ramp_time + 1.0e-30)),
+        "observation_output_points": int(output_times.size),
+        "total_internal_points": int(times.size),
+        "first_internal_time_s": float(times[0]) if times.size else float("nan"),
+        "last_internal_time_s": float(times[-1]) if times.size else float("nan"),
+        "last_output_internal_time_s": float(np.max(output_times)) if output_times.size else float("nan"),
+        "min_internal_dt_s": float(np.min(positive_dt)) if positive_dt.size else float("nan"),
+        "max_internal_dt_s": float(np.max(positive_dt)) if positive_dt.size else float("nan"),
+        "contains_turnoff_start": bool(contains_turnoff_start_step or times.size > 0),
+        "turnoff_start_source": "transient_grid" if contains_turnoff_start_step else "initial_static_or_dc_state",
+        "contains_turnoff_end": bool(
+            times.size > 0 and np.any(np.isclose(times, ramp_time, rtol=1.0e-12, atol=1.0e-30))
+        ),
+        "contains_all_observation_outputs": contains_expected_outputs,
+    }
 
 
 def _write_component_csv(path: Path, times, data, components) -> None:
@@ -5711,17 +8995,19 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
         pred_col = pred[:, col]
         floor = _validation_floor(component, ref_col)
         max_abs_ref = float(np.max(np.abs(ref_col))) if ref_col.size else 0.0
+        ordinary_values = []
         robust_values = []
         peak_values = []
         for time, pred_value, ref_value in zip(times, pred_col, ref_col):
             abs_error = float(abs(pred_value - ref_value))
-            ordinary = float(abs_error / abs(ref_value)) if ref_value != 0.0 else float("inf")
+            ordinary = _ordinary_relative_error(abs_error, float(ref_value))
             robust = float(abs_error / max(abs(float(ref_value)), floor))
             peak = float(abs_error / max(max_abs_ref, floor))
-            passed = bool(robust <= threshold and peak <= threshold)
+            passed = bool(ordinary <= threshold)
             if not passed:
                 failed_components.add(component)
                 failed_times.add(float(time))
+            ordinary_values.append(ordinary)
             robust_values.append(robust)
             peak_values.append(peak)
             rows.append(
@@ -5737,15 +9023,20 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
                     "pass_5pct": passed,
                 }
             )
-        summary[f"max_error_{component}"] = float(np.max(robust_values))
-        summary[f"rms_error_{component}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
+        ordinary_array = np.asarray(ordinary_values, dtype=float)
+        summary[f"max_error_{component}"] = float(np.max(ordinary_array))
+        summary[f"rms_error_{component}"] = float(np.sqrt(np.mean(ordinary_array**2)))
+        summary[f"max_error_with_floor_{component}"] = float(np.max(robust_values))
+        summary[f"rms_error_with_floor_{component}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{component}"] = float(np.max(peak_values))
         key = component if component in {"Ex", "Ey"} else "Hz_or_dBzdt"
         if component not in {"Ex", "Ey"}:
             magnetic_quantity = component
             magnetic_components.append(component)
-        summary[f"max_error_{key}"] = float(np.max(robust_values))
-        summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
+        summary[f"max_error_{key}"] = float(np.max(ordinary_array))
+        summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(ordinary_array**2)))
+        summary[f"max_error_with_floor_{key}"] = float(np.max(robust_values))
+        summary[f"rms_error_with_floor_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{key}"] = float(np.max(peak_values))
         summary[f"floor_{component}"] = floor
     weak_gate = check_weak_component_error_window(
@@ -5829,14 +9120,14 @@ def _write_validation_plots(workdir: Path, times, pred_data, ref_data, rows, com
     for col, component in enumerate(components):
         ax = axes[0, col]
         component_rows = [row for row in rows if row["component"] == component]
-        robust = np.asarray([row["relative_error_with_floor"] for row in component_rows], dtype=float)
-        peak = np.asarray([row["peak_normalized_error"] for row in component_rows], dtype=float)
-        ax.semilogx(times, robust, "o-", label="relative_error_with_floor")
-        ax.semilogx(times, peak, "s--", label="peak_normalized_error")
+        ordinary = np.asarray([row["ordinary_relative_error"] for row in component_rows], dtype=float)
+        ordinary_plot = ordinary.copy()
+        ordinary_plot[~np.isfinite(ordinary_plot)] = np.nan
+        ax.semilogx(times, ordinary_plot, "o-", label="pointwise_relative_error")
         ax.axhline(0.05, color="black", linestyle=":", linewidth=1.2, label="5%")
         ax.set_title(component)
         ax.set_xlabel("time_obs (s)")
-        ax.set_ylabel("error")
+        ax.set_ylabel("abs(FEM-reference)/abs(reference)")
         ax.grid(True, which="both", alpha=0.3)
         ax.legend()
     fig.tight_layout()
@@ -6343,6 +9634,7 @@ def write_validation_artifacts(
     source_info=None,
     receiver_diagnostic_rows=None,
     solver_log=None,
+    solver_diagnostics=None,
     validation_scope: str = "smoke",
 ) -> dict[str, Any]:
     """Write P2 validation CSV/JSON/plot artifacts for a three-component run."""
@@ -6361,6 +9653,7 @@ def write_validation_artifacts(
     )
     from atem3d.validation_3comp import validation_acceptance_status
 
+    acceptance_diagnostics = _validation_diagnostics_for_acceptance(solver_diagnostics)
     acceptance_status = validation_acceptance_status(
         times,
         components,
@@ -6369,8 +9662,17 @@ def write_validation_artifacts(
         reference_type=str(reference_type),
         threshold=threshold,
         validation_scope=str(validation_scope),
+        required_time_min=float(config.t_min),
+        required_time_max=float(config.t_max),
+        diagnostics=acceptance_diagnostics,
     )
     summary["acceptance_status"] = acceptance_status
+    summary["acceptance_error_metric"] = "ordinary_relative_error"
+    summary["error_definition"] = "pointwise_relative_error = abs(pred - ref) / abs(ref)"
+    summary["acceptance_note"] = (
+        "pass_5pct and final acceptance use ordinary_relative_error at each sample; "
+        "relative_error_with_floor and peak_normalized_error are diagnostics only."
+    )
     summary["full_window_covered"] = bool(acceptance_status["full_window_covered"])
     summary["required_components_present"] = bool(acceptance_status["required_components_present"])
     summary["final_acceptance_passed"] = bool(acceptance_status["final_acceptance_passed"])
@@ -6378,6 +9680,7 @@ def write_validation_artifacts(
     _write_component_csv(workdir / "reference_empymod_or_1d.csv", times, ref_data, components)
     _write_errors_csv(workdir / "errors.csv", rows)
     _write_receiver_diagnostics_csv(config, receiver_diagnostic_rows)
+    _write_secondary_receiver_diagnostics_csv(workdir, solver_diagnostics)
     _plot_receiver_diagnostics(config, receiver_diagnostic_rows)
     receiver_reference_rows = _receiver_reference_error_rows(
         receiver_diagnostic_rows,
@@ -6413,6 +9716,8 @@ def write_validation_artifacts(
     source_line_orientation = _source_line_orientation_diagnostics_from_info(source_info)
     if source_line_orientation is not None:
         diagnostics["source_line_orientation"] = source_line_orientation
+    if solver_diagnostics is not None:
+        diagnostics.update(_json_safe_diagnostic(dict(solver_diagnostics)))
     diagnostics["receiver_sampling"] = _receiver_diagnostic_summary(
         receiver_diagnostic_rows,
         threshold=float(config.error_tolerance),
@@ -6427,7 +9732,10 @@ def write_validation_artifacts(
     diagnostics["magnetic_recovery"] = _magnetic_recovery_summary(times, pred_data, components)
     diagnostics["divergence_cleaning"] = _divergence_cleaning_summary(solver_log)
     diagnostics["divergence_control"] = _divergence_control_summary(solver_log)
-    (workdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
+    (workdir / "diagnostics.json").write_text(
+        json.dumps(_json_safe_diagnostic(diagnostics), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
     _write_validation_plots(workdir, times, pred_data, ref_data, rows, components)
     return summary
@@ -6435,24 +9743,82 @@ def write_validation_artifacts(
 
 def _resolved_config_yaml(config: PipelineConfig) -> str:
     values = {
+        "x_extent": float(config.x_extent),
+        "y_extent": float(config.y_extent),
+        "air_height": float(config.air_height),
+        "earth_depth": float(config.earth_depth),
         "source_start": list(config.source_start),
         "source_end": list(config.source_end),
         "source_current": float(config.source_current),
+        "mesh_source_path": None if config.mesh_source_path is None else str(config.mesh_source_path),
+        "source_mesh_size": float(config.source_mesh_size),
+        "source_refinement_radius": float(config.source_refinement_radius),
+        "source_quadrature_points": int(config.source_quadrature_points),
         "source_projection_mode": str(config.source_projection_mode),
+        "source_rhs_sign": float(config.source_rhs_sign),
+        "source_term_mode": str(config.source_term_mode),
+        "primary_secondary_max_primary_samples": int(config.primary_secondary_max_primary_samples),
+        "primary_secondary_sampling_strategy": str(config.primary_secondary_sampling_strategy),
+        "primary_secondary_background_mode": str(config.primary_secondary_background_mode),
+        "primary_secondary_dc_mode": str(config.primary_secondary_dc_mode),
+        "primary_secondary_dc_conductivity_mode": str(config.primary_secondary_dc_conductivity_mode),
+        "primary_secondary_transient_background_mode": str(config.primary_secondary_transient_background_mode),
+        "primary_secondary_dc_rhs_sign": float(config.primary_secondary_dc_rhs_sign),
+        "primary_secondary_rhs_mass_mode": str(config.primary_secondary_rhs_mass_mode),
+        "primary_secondary_rhs_scale": float(config.primary_secondary_rhs_scale),
+        "primary_secondary_rhs_projection": str(config.primary_secondary_rhs_projection),
+        "primary_secondary_current_correction": str(config.primary_secondary_current_correction),
+        "primary_secondary_current_correction_relaxation": float(
+            config.primary_secondary_current_correction_relaxation
+        ),
+        "primary_secondary_current_correction_relaxation_late": (
+            None
+            if config.primary_secondary_current_correction_relaxation_late is None
+            else float(config.primary_secondary_current_correction_relaxation_late)
+        ),
+        "primary_secondary_current_correction_relaxation_transition_time": float(
+            config.primary_secondary_current_correction_relaxation_transition_time
+        ),
+        "primary_secondary_current_correction_relaxation_transition_width": float(
+            config.primary_secondary_current_correction_relaxation_transition_width
+        ),
         "receiver": list(config.receiver),
+        "receiver_type": str(config.receiver_type),
+        "receiver_average_radius": float(config.receiver_average_radius),
         "receiver_mesh_size": float(config.receiver_mesh_size),
         "receiver_anchor_mesh_size": float(config.receiver_anchor_mesh_size),
         "receiver_refinement_radius": float(config.receiver_refinement_radius),
+        "far_field_mesh_size": float(config.far_field_mesh_size),
+        "diffusion_refinement_top": (
+            None if config.diffusion_refinement_top is None else float(config.diffusion_refinement_top)
+        ),
+        "receiver_evaluation_mode": str(config.receiver_evaluation_mode),
+        "rho_air": float(config.rho_air),
+        "rho_earth": float(config.rho_earth),
+        "layer_depths": list(config.layer_depths),
+        "layer_resistivities": list(config.layer_resistivities),
+        "mu_r_air": float(config.mu_r_air),
+        "mu_r_earth": float(config.mu_r_earth),
+        "nedelec_order": int(config.nedelec_order),
         "ramp_off_time": float(config.ramp_off_time),
         "time_origin": str(config.time_origin),
         "t_min": float(config.t_min),
         "t_max": float(config.t_max),
         "time_growth": float(config.time_growth),
+        "max_internal_dt": float(config.max_internal_dt),
+        "max_internal_dt_fraction": float(config.max_internal_dt_fraction),
+        "max_internal_dt_fraction_until": float(config.max_internal_dt_fraction_until),
+        "explicit_observation_times": list(config.explicit_observation_times),
+        "time_method": str(config.time_method),
+        "time_theta": float(config.time_theta),
+        "ramp_solver_t_min": float(config.ramp_solver_t_min),
         "min_steps_during_turnoff": int(config.min_steps_during_turnoff),
         "min_steps_before_first_observation": int(config.min_steps_before_first_observation),
         "components": "runtime",
         "outer_boundary_mode": str(config.outer_boundary_mode),
         "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
+        "formulation": str(config.formulation),
+        "initial_dc_mode": str(config.initial_dc_mode),
         "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
         "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
         "divergence_cleaning": str(config.divergence_cleaning),
@@ -6462,6 +9828,25 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "divergence_control_t_obs_min": float(config.divergence_control_t_obs_min),
         "divergence_control_scale": str(config.divergence_control_scale),
         "polarization": str(config.polarization),
+        "cole_rho0": float(config.cole_rho0),
+        "cole_m": float(config.cole_m),
+        "cole_tau": float(config.cole_tau),
+        "cole_c": float(config.cole_c),
+        "cole_layer_top": float(config.cole_layer_top),
+        "cole_layer_bottom": float(config.cole_layer_bottom),
+        "cole_n_terms": int(config.cole_n_terms),
+        "cole_f_min": float(config.cole_f_min),
+        "cole_f_max": float(config.cole_f_max),
+        "cole_n_freq": int(config.cole_n_freq),
+        "debye_time_scheme": str(config.debye_time_scheme),
+        "empymod_srcpts": int(config.empymod_srcpts),
+        "empymod_ht": str(config.empymod_ht),
+        "empymod_ft": str(config.empymod_ft),
+        "ksp_type": str(config.ksp_type),
+        "rtol": float(config.rtol),
+        "atol": float(config.atol),
+        "max_it": int(config.max_it),
+        "memory_limit_gb": float(config.memory_limit_gb),
     }
     lines = []
     for key, value in values.items():
@@ -6762,7 +10147,7 @@ def plot_verification(times, fem_data, ref_data, errors, components, config: Pip
         errax.semilogx(times, errors[comp]["relative"], "r-", lw=1)
         errax.axhline(config.error_tolerance, color="k", ls="--", lw=0.8)
         errax.set_xlabel("time (s)")
-        errax.set_ylabel("floor relative error")
+        errax.set_ylabel("pointwise relative error")
         errax.grid(True, which="both", alpha=0.3)
     fig.suptitle("3D FETD air-earth verification against empymod")
     fig.savefig(config.output_png(), dpi=180)
@@ -6907,7 +10292,13 @@ def write_report(
         f"anchor mesh size={_receiver_anchor_mesh_size(config):.6g} m; "
         f"refinement radius={float(config.receiver_refinement_radius):.6g} m"
     )
+    lines.append(f"  far-field mesh size: {_far_field_mesh_size(config):.6g} m")
     lines.append(f"  receiver evaluation mode: {config.receiver_evaluation_mode}")
+    lines.append(
+        f"  receiver local-LSQ radius factor: {float(config.receiver_local_lsq_radius_factor):.6g}"
+        f"; field max samples={_local_lsq_receiver_max_samples(config, quantity='field')}; "
+        f"dB/dt max samples={_local_lsq_receiver_max_samples(config, quantity='dbdt')}"
+    )
     receiver_summary = _receiver_diagnostic_summary(
         fem_result.get("receiver_diagnostic_rows"),
         threshold=float(config.error_tolerance),
@@ -6971,6 +10362,11 @@ def write_report(
         f"min_steps_during_turnoff={config.min_steps_during_turnoff}; "
         f"min_steps_before_first_observation={config.min_steps_before_first_observation}"
     )
+    lines.append(
+        f"  internal dt limits: max_internal_dt={config.max_internal_dt:g} s; "
+        f"max_internal_dt_fraction={config.max_internal_dt_fraction:g}; "
+        f"max_internal_dt_fraction_until={config.max_internal_dt_fraction_until:g} s"
+    )
     lines.append(f"  empymod srcpts: {config.empymod_srcpts}; ht={config.empymod_ht}; ft={config.empymod_ft}")
     if int(config.reference_audit_srcpts) > 0:
         lines.append(f"  reference audit srcpts: {config.reference_audit_srcpts}")
@@ -6993,7 +10389,7 @@ def write_report(
             lines.append(f"  term {i}: A={term.delta_sigma:.6e} S/m, tau={term.tau:.6e} s")
 
     lines.append("")
-    lines.append("error metrics with floor denominator denom=max(abs(F_ref), 1e-6*max(abs(F_ref))):")
+    lines.append("error metrics using pointwise relative error abs(FEM-reference)/abs(reference):")
     max_error = 0.0
     for comp, values in errors.items():
         max_error = max(max_error, float(values["max"]))
@@ -7001,7 +10397,7 @@ def write_report(
         lines.append(
             f"  {comp}: mean={values['mean']:.6e}, median={values['median']:.6e}, "
             f"RMS={values['rms']:.6e}, max={values['max']:.6e} at t={fem_result['times'][idx]:.6e} s, "
-            f"floor={values['floor']:.6e}"
+            f"diagnostic_floor={values['floor']:.6e}"
         )
         if values["reference_too_small"]:
             lines.append(f"    note: {comp} reference is very small over much of the window; max relative error may be unrepresentative.")
@@ -7287,6 +10683,19 @@ def _save_npz(config: PipelineConfig, fem_result, ref_result, errors) -> None:
         "empymod": ref_result["data"],
         "components": np.asarray(fem_result["components"]),
     }
+    secondary_decomposition = fem_result.get("secondary_decomposition")
+    if isinstance(secondary_decomposition, dict):
+        for key in (
+            "noip_ref",
+            "empymod_noip_ref",
+            "solver_primary_ref",
+            "secondary_fem",
+            "secondary_ref",
+            "secondary_fem_vs_empymod_noip",
+            "secondary_ref_vs_empymod_noip",
+        ):
+            if key in secondary_decomposition:
+                payload[key] = np.asarray(secondary_decomposition[key], dtype=float)
     for comp, values in errors.items():
         payload[f"error_relative_{comp}"] = values["relative"]
         payload[f"error_absolute_{comp}"] = values["absolute"]
@@ -7314,6 +10723,57 @@ def _save_npz(config: PipelineConfig, fem_result, ref_result, errors) -> None:
     print(f"[data] saved {config.output_npz()}", flush=True)
 
 
+def _attach_secondary_decomposition(fem_result, ref_result, noip_ref_result) -> None:
+    import numpy as np
+
+    fem = np.asarray(fem_result["data"], dtype=float)
+    ref = np.asarray(ref_result["data"], dtype=float)
+    empymod_noip = np.asarray(noip_ref_result["data"], dtype=float)
+    solver_primary = _solver_primary_receiver_rows_for_decomposition(fem_result, fem.shape)
+    if fem.shape != ref.shape or fem.shape != empymod_noip.shape:
+        raise ValueError("secondary decomposition arrays must have matching shapes")
+    decomposition = {
+        "noip_ref": empymod_noip,
+        "empymod_noip_ref": empymod_noip,
+        "secondary_fem_vs_empymod_noip": fem - empymod_noip,
+        "secondary_ref_vs_empymod_noip": ref - empymod_noip,
+    }
+    if solver_primary is not None:
+        decomposition["solver_primary_ref"] = solver_primary
+        decomposition["secondary_fem"] = fem - solver_primary
+        decomposition["secondary_ref"] = ref - solver_primary
+    else:
+        decomposition["secondary_fem"] = decomposition["secondary_fem_vs_empymod_noip"]
+        decomposition["secondary_ref"] = decomposition["secondary_ref_vs_empymod_noip"]
+    fem_result["secondary_decomposition"] = decomposition
+
+
+def _solver_primary_receiver_rows_for_decomposition(fem_result, expected_shape):
+    import numpy as np
+
+    diagnostics = fem_result.get("primary_secondary_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    rows = diagnostics.get("receiver_decomposition_rows")
+    if not rows:
+        return None
+    components = [str(component) for component in fem_result.get("components", [])]
+    primary_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        row_components = [str(component) for component in row.get("components", [])]
+        if row_components != components:
+            return None
+        if "primary_row" not in row:
+            return None
+        primary_rows.append(np.asarray(row["primary_row"], dtype=float))
+    primary = np.vstack(primary_rows)
+    if primary.shape != tuple(expected_shape):
+        return None
+    return primary
+
+
 def _receiver_diagnostic_payload(receiver_diagnostic_rows):
     import numpy as np
 
@@ -7326,6 +10786,7 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
             "receiver_diagnostic_values": np.empty((0, 4), dtype=float),
             "receiver_diagnostic_dbdt_curl": np.empty(0, dtype=float),
             "receiver_diagnostic_dbdt_biot_rate": np.empty(0, dtype=float),
+            "receiver_diagnostic_dbdt_ampere_rate": np.empty(0, dtype=float),
             "receiver_diagnostic_sample_counts": np.empty(0, dtype=int),
             "receiver_diagnostic_candidate_count_min": np.empty(0, dtype=int),
             "receiver_diagnostic_candidate_count_max": np.empty(0, dtype=int),
@@ -7339,6 +10800,14 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
             "receiver_diagnostic_candidate_center_z_min": np.empty(0, dtype=float),
             "receiver_diagnostic_candidate_center_z_max": np.empty(0, dtype=float),
             "receiver_diagnostic_selected_center_z_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_local_lsq_sample_count_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_local_lsq_earth_sample_count_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_local_lsq_air_sample_count_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_local_lsq_earth_value_z_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_local_lsq_air_value_z_mean": np.empty(0, dtype=float),
+            "receiver_diagnostic_local_lsq_rank_min": np.empty(0, dtype=int),
+            "receiver_diagnostic_local_lsq_residual_norm_max": np.empty(0, dtype=float),
+            "receiver_diagnostic_local_lsq_condition_max": np.empty(0, dtype=float),
         }
     return {
         "receiver_diagnostic_times": np.asarray([float(row["time_obs"]) for row in rows], dtype=float),
@@ -7361,6 +10830,9 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
         ),
         "receiver_diagnostic_dbdt_biot_rate": np.asarray(
             [float(row.get("dBzdt_biot_rate", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_dbdt_ampere_rate": np.asarray(
+            [float(row.get("dBzdt_ampere_rate", np.nan)) for row in rows], dtype=float
         ),
         "receiver_diagnostic_sample_counts": np.asarray(
             [int(row.get("sample_count", 0)) for row in rows], dtype=int
@@ -7401,6 +10873,30 @@ def _receiver_diagnostic_payload(receiver_diagnostic_rows):
         "receiver_diagnostic_selected_center_z_mean": np.asarray(
             [float(row.get("selected_center_z_mean", np.nan)) for row in rows], dtype=float
         ),
+        "receiver_diagnostic_local_lsq_sample_count_mean": np.asarray(
+            [float(row.get("local_lsq_sample_count_mean", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_local_lsq_earth_sample_count_mean": np.asarray(
+            [float(row.get("local_lsq_earth_sample_count_mean", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_local_lsq_air_sample_count_mean": np.asarray(
+            [float(row.get("local_lsq_air_sample_count_mean", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_local_lsq_earth_value_z_mean": np.asarray(
+            [float(row.get("local_lsq_earth_value_z_mean", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_local_lsq_air_value_z_mean": np.asarray(
+            [float(row.get("local_lsq_air_value_z_mean", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_local_lsq_rank_min": np.asarray(
+            [int(row.get("local_lsq_rank_min", 0)) for row in rows], dtype=int
+        ),
+        "receiver_diagnostic_local_lsq_residual_norm_max": np.asarray(
+            [float(row.get("local_lsq_residual_norm_max", np.nan)) for row in rows], dtype=float
+        ),
+        "receiver_diagnostic_local_lsq_condition_max": np.asarray(
+            [float(row.get("local_lsq_condition_max", np.nan)) for row in rows], dtype=float
+        ),
     }
 
 
@@ -7415,6 +10911,7 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
     values = np.asarray(payload["receiver_diagnostic_values"], dtype=float)
     dbdt_curl = np.asarray(payload["receiver_diagnostic_dbdt_curl"], dtype=float) if "receiver_diagnostic_dbdt_curl" in payload.files else np.full(times.size, np.nan, dtype=float)
     dbdt_biot_rate = np.asarray(payload["receiver_diagnostic_dbdt_biot_rate"], dtype=float) if "receiver_diagnostic_dbdt_biot_rate" in payload.files else np.full(times.size, np.nan, dtype=float)
+    dbdt_ampere_rate = np.asarray(payload["receiver_diagnostic_dbdt_ampere_rate"], dtype=float) if "receiver_diagnostic_dbdt_ampere_rate" in payload.files else np.full(times.size, np.nan, dtype=float)
     sample_counts = np.asarray(payload["receiver_diagnostic_sample_counts"], dtype=int) if "receiver_diagnostic_sample_counts" in payload.files else np.zeros(times.size, dtype=int)
     candidate_min = np.asarray(payload["receiver_diagnostic_candidate_count_min"], dtype=int) if "receiver_diagnostic_candidate_count_min" in payload.files else np.zeros(times.size, dtype=int)
     candidate_max = np.asarray(payload["receiver_diagnostic_candidate_count_max"], dtype=int) if "receiver_diagnostic_candidate_count_max" in payload.files else np.zeros(times.size, dtype=int)
@@ -7428,6 +10925,14 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
     center_z_min = np.asarray(payload["receiver_diagnostic_candidate_center_z_min"], dtype=float) if "receiver_diagnostic_candidate_center_z_min" in payload.files else np.full(times.size, np.nan, dtype=float)
     center_z_max = np.asarray(payload["receiver_diagnostic_candidate_center_z_max"], dtype=float) if "receiver_diagnostic_candidate_center_z_max" in payload.files else np.full(times.size, np.nan, dtype=float)
     selected_z_mean = np.asarray(payload["receiver_diagnostic_selected_center_z_mean"], dtype=float) if "receiver_diagnostic_selected_center_z_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    lsq_sample_count = np.asarray(payload["receiver_diagnostic_local_lsq_sample_count_mean"], dtype=float) if "receiver_diagnostic_local_lsq_sample_count_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    lsq_earth_sample_count = np.asarray(payload["receiver_diagnostic_local_lsq_earth_sample_count_mean"], dtype=float) if "receiver_diagnostic_local_lsq_earth_sample_count_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    lsq_air_sample_count = np.asarray(payload["receiver_diagnostic_local_lsq_air_sample_count_mean"], dtype=float) if "receiver_diagnostic_local_lsq_air_sample_count_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    lsq_earth_value_z = np.asarray(payload["receiver_diagnostic_local_lsq_earth_value_z_mean"], dtype=float) if "receiver_diagnostic_local_lsq_earth_value_z_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    lsq_air_value_z = np.asarray(payload["receiver_diagnostic_local_lsq_air_value_z_mean"], dtype=float) if "receiver_diagnostic_local_lsq_air_value_z_mean" in payload.files else np.full(times.size, np.nan, dtype=float)
+    lsq_rank_min = np.asarray(payload["receiver_diagnostic_local_lsq_rank_min"], dtype=int) if "receiver_diagnostic_local_lsq_rank_min" in payload.files else np.zeros(times.size, dtype=int)
+    lsq_residual_max = np.asarray(payload["receiver_diagnostic_local_lsq_residual_norm_max"], dtype=float) if "receiver_diagnostic_local_lsq_residual_norm_max" in payload.files else np.full(times.size, np.nan, dtype=float)
+    lsq_condition_max = np.asarray(payload["receiver_diagnostic_local_lsq_condition_max"], dtype=float) if "receiver_diagnostic_local_lsq_condition_max" in payload.files else np.full(times.size, np.nan, dtype=float)
     rows = []
     for i, time_obs in enumerate(times):
         rows.append(
@@ -7441,6 +10946,7 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
                 "dBzdt": float(values[i, 3]) if i < values.shape[0] else float("nan"),
                 "dBzdt_curl": float(dbdt_curl[i]) if i < dbdt_curl.size else float("nan"),
                 "dBzdt_biot_rate": float(dbdt_biot_rate[i]) if i < dbdt_biot_rate.size else float("nan"),
+                "dBzdt_ampere_rate": float(dbdt_ampere_rate[i]) if i < dbdt_ampere_rate.size else float("nan"),
                 "sample_count": int(sample_counts[i]) if i < sample_counts.size else 0,
                 "candidate_count_min": int(candidate_min[i]) if i < candidate_min.size else 0,
                 "candidate_count_max": int(candidate_max[i]) if i < candidate_max.size else 0,
@@ -7454,6 +10960,22 @@ def _receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
                 "candidate_center_z_min": float(center_z_min[i]) if i < center_z_min.size else float("nan"),
                 "candidate_center_z_max": float(center_z_max[i]) if i < center_z_max.size else float("nan"),
                 "selected_center_z_mean": float(selected_z_mean[i]) if i < selected_z_mean.size else float("nan"),
+                "local_lsq_sample_count_mean": float(lsq_sample_count[i]) if i < lsq_sample_count.size else float("nan"),
+                "local_lsq_earth_sample_count_mean": (
+                    float(lsq_earth_sample_count[i]) if i < lsq_earth_sample_count.size else float("nan")
+                ),
+                "local_lsq_air_sample_count_mean": (
+                    float(lsq_air_sample_count[i]) if i < lsq_air_sample_count.size else float("nan")
+                ),
+                "local_lsq_earth_value_z_mean": (
+                    float(lsq_earth_value_z[i]) if i < lsq_earth_value_z.size else float("nan")
+                ),
+                "local_lsq_air_value_z_mean": (
+                    float(lsq_air_value_z[i]) if i < lsq_air_value_z.size else float("nan")
+                ),
+                "local_lsq_rank_min": int(lsq_rank_min[i]) if i < lsq_rank_min.size else 0,
+                "local_lsq_residual_norm_max": float(lsq_residual_max[i]) if i < lsq_residual_max.size else float("nan"),
+                "local_lsq_condition_max": float(lsq_condition_max[i]) if i < lsq_condition_max.size else float("nan"),
             }
         )
     return rows
@@ -7480,6 +11002,7 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
         "dBzdt",
         "dBzdt_curl",
         "dBzdt_biot_rate",
+        "dBzdt_ampere_rate",
         "sample_count",
         "candidate_count_min",
         "candidate_count_max",
@@ -7493,6 +11016,14 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
         "candidate_center_z_min",
         "candidate_center_z_max",
         "selected_center_z_mean",
+        "local_lsq_sample_count_mean",
+        "local_lsq_earth_sample_count_mean",
+        "local_lsq_air_sample_count_mean",
+        "local_lsq_earth_value_z_mean",
+        "local_lsq_air_value_z_mean",
+        "local_lsq_rank_min",
+        "local_lsq_residual_norm_max",
+        "local_lsq_condition_max",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -7509,6 +11040,7 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
                     "dBzdt": float(row.get("dBzdt", math.nan)),
                     "dBzdt_curl": float(row.get("dBzdt_curl", math.nan)),
                     "dBzdt_biot_rate": float(row.get("dBzdt_biot_rate", math.nan)),
+                    "dBzdt_ampere_rate": float(row.get("dBzdt_ampere_rate", math.nan)),
                     "sample_count": int(row.get("sample_count", 0)),
                     "candidate_count_min": int(row.get("candidate_count_min", 0)),
                     "candidate_count_max": int(row.get("candidate_count_max", 0)),
@@ -7522,6 +11054,78 @@ def _write_receiver_diagnostics_csv(config: PipelineConfig, receiver_diagnostic_
                     "candidate_center_z_min": float(row.get("candidate_center_z_min", math.nan)),
                     "candidate_center_z_max": float(row.get("candidate_center_z_max", math.nan)),
                     "selected_center_z_mean": float(row.get("selected_center_z_mean", math.nan)),
+                    "local_lsq_sample_count_mean": float(row.get("local_lsq_sample_count_mean", math.nan)),
+                    "local_lsq_earth_sample_count_mean": float(
+                        row.get("local_lsq_earth_sample_count_mean", math.nan)
+                    ),
+                    "local_lsq_air_sample_count_mean": float(row.get("local_lsq_air_sample_count_mean", math.nan)),
+                    "local_lsq_earth_value_z_mean": float(row.get("local_lsq_earth_value_z_mean", math.nan)),
+                    "local_lsq_air_value_z_mean": float(row.get("local_lsq_air_value_z_mean", math.nan)),
+                    "local_lsq_rank_min": int(row.get("local_lsq_rank_min", 0)),
+                    "local_lsq_residual_norm_max": float(row.get("local_lsq_residual_norm_max", math.nan)),
+                    "local_lsq_condition_max": float(row.get("local_lsq_condition_max", math.nan)),
+                }
+            )
+
+
+def _secondary_receiver_rows_from_solver_diagnostics(solver_diagnostics) -> list[dict[str, Any]]:
+    if not isinstance(solver_diagnostics, dict):
+        return []
+    nested = solver_diagnostics.get("primary_secondary_diagnostics")
+    if not isinstance(nested, dict):
+        nested = solver_diagnostics
+    rows = nested.get("secondary_receiver_rows")
+    if not isinstance(rows, list):
+        return []
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def _write_secondary_receiver_diagnostics_csv(workdir: Path, solver_diagnostics) -> None:
+    rows = _secondary_receiver_rows_from_solver_diagnostics(solver_diagnostics)
+    path = Path(workdir) / "secondary_receiver_diagnostics.csv"
+    if not rows:
+        if path.exists():
+            path.unlink()
+        return
+    fields = [
+        "time_value",
+        "dt",
+        "Ex",
+        "Ey",
+        "Hz",
+        "dBzdt",
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
+        "dBzdt_ampere_rate",
+        "dBzdt_candidate_count",
+        "dBzdt_candidate_min",
+        "dBzdt_candidate_median",
+        "dBzdt_candidate_mean",
+        "dBzdt_candidate_max",
+        "dBzdt_candidate_std",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "time_value": f"{float(row.get('time_value', math.nan)):.16e}",
+                    "dt": f"{float(row.get('dt', math.nan)):.16e}",
+                    "Ex": f"{float(row.get('Ex', math.nan)):.16e}",
+                    "Ey": f"{float(row.get('Ey', math.nan)):.16e}",
+                    "Hz": f"{float(row.get('Hz', math.nan)):.16e}",
+                    "dBzdt": f"{float(row.get('dBzdt', math.nan)):.16e}",
+                    "dBzdt_curl": f"{float(row.get('dBzdt_curl', math.nan)):.16e}",
+                    "dBzdt_biot_rate": f"{float(row.get('dBzdt_biot_rate', math.nan)):.16e}",
+                    "dBzdt_ampere_rate": f"{float(row.get('dBzdt_ampere_rate', math.nan)):.16e}",
+                    "dBzdt_candidate_count": int(row.get("dBzdt_candidate_count", 0)),
+                    "dBzdt_candidate_min": f"{float(row.get('dBzdt_candidate_min', math.nan)):.16e}",
+                    "dBzdt_candidate_median": f"{float(row.get('dBzdt_candidate_median', math.nan)):.16e}",
+                    "dBzdt_candidate_mean": f"{float(row.get('dBzdt_candidate_mean', math.nan)):.16e}",
+                    "dBzdt_candidate_max": f"{float(row.get('dBzdt_candidate_max', math.nan)):.16e}",
+                    "dBzdt_candidate_std": f"{float(row.get('dBzdt_candidate_std', math.nan)):.16e}",
                 }
             )
 
@@ -7648,6 +11252,13 @@ def _save_forward_partial(config: PipelineConfig, times, rows, components, solve
         "solver_divergence_control_relative_weight": np.asarray(
             [float(item.get("divergence_control_relative_weight", np.nan)) for item in output_logs],
             dtype=float,
+        ),
+        "internal_solver_steps": np.asarray([int(item.get("step", -1)) for item in solver_log], dtype=int),
+        "internal_solver_times": np.asarray([float(item.get("time", np.nan)) for item in solver_log], dtype=float),
+        "internal_solver_dt": np.asarray([float(item.get("dt", np.nan)) for item in solver_log], dtype=float),
+        "internal_solver_is_output": np.asarray(
+            [bool(item.get("is_output", False)) for item in solver_log],
+            dtype=bool,
         ),
     }
     if receiver_diagnostic_rows:
@@ -7881,6 +11492,7 @@ def _save_forward_checkpoint(
     E_old,
     memories,
     rows,
+    row_times,
     components,
     solver_log,
     h_old_receiver=None,
@@ -7895,6 +11507,12 @@ def _save_forward_checkpoint(
         rows_arr = np.empty((0, len(components)), dtype=float)
     else:
         rows_arr = rows_arr.reshape(-1, len(components))
+    row_times_arr = np.asarray(row_times, dtype=float).reshape(-1)
+    if row_times_arr.size != rows_arr.shape[0]:
+        raise ValueError(
+            "forward checkpoint row_times length must match rows: "
+            f"row_times={row_times_arr.size}, rows={rows_arr.shape[0]}"
+        )
     memory_arrays = [np.asarray(memory.x.array, dtype=float).copy() for memory in memories]
     payload = {
         "completed_step": np.asarray(int(completed_step), dtype=int),
@@ -7904,6 +11522,7 @@ def _save_forward_checkpoint(
         if memory_arrays
         else np.empty((0, E_old.x.array.size), dtype=float),
         "rows": rows_arr,
+        "row_times": row_times_arr,
         "components": np.asarray(components),
         "h_old_receiver": np.asarray(h_old_receiver, dtype=float)
         if h_old_receiver is not None
@@ -7935,6 +11554,9 @@ def _load_forward_checkpoint(config: PipelineConfig):
         "e_old": np.asarray(payload["e_old"], dtype=float),
         "memories": np.asarray(payload["memories"], dtype=float),
         "rows": np.asarray(payload["rows"], dtype=float),
+        "row_times": np.asarray(payload["row_times"], dtype=float)
+        if "row_times" in payload.files
+        else None,
         "components": [str(item) for item in np.asarray(payload["components"]).tolist()],
         "solver_log": _solver_log_from_arrays(payload),
         "h_old_receiver": np.asarray(payload["h_old_receiver"], dtype=float)
@@ -8080,6 +11702,7 @@ def _load_forward_partial(config: PipelineConfig):
         "data": data,
         "components": components,
         "solver_log": solver_log,
+        "internal_solver_log": _solver_internal_log_from_payload(payload),
         "receiver_diagnostic_rows": _receiver_diagnostic_rows_from_payload(payload),
     }
 
@@ -8094,6 +11717,8 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
     runtime["setup_seconds"] = runtime.get("setup_seconds", 0.0)
     t_ref = time.perf_counter()
     ref_result = get_empymod_reference(fem_result["times"], config, mode=ref_mode)
+    noip_ref_result = ref_result if ref_mode == "noip" else get_empymod_reference(fem_result["times"], config, mode="noip")
+    _attach_secondary_decomposition(fem_result, ref_result, noip_ref_result)
     errors = compute_error(fem_result["data"], ref_result["data"], fem_result["components"])
     reference_audit_errors = None
     if int(config.reference_audit_srcpts) > 0 and int(config.reference_audit_srcpts) != int(config.empymod_srcpts):
@@ -8119,6 +11744,14 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         source_info={"mode": f"postprocess_partial/{config.source_mode}"},
         receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
         solver_log=fem_result.get("solver_log"),
+        solver_diagnostics={
+            "primary_secondary_internal_time_grid": _solver_internal_time_grid_summary(
+                fem_result.get("internal_solver_log") or fem_result.get("solver_log"),
+                fem_result["times"],
+                config,
+            )
+        },
+        validation_scope="corrected_model_full",
     )
     runtime["postprocess_seconds"] = time.perf_counter() - t_post
     runtime["total_seconds"] = time.perf_counter() - t0
@@ -8168,10 +11801,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workdir", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--force-mesh", action="store_true")
+    parser.add_argument(
+        "--reuse-mesh",
+        type=Path,
+        default=None,
+        help="Copy an existing locked .msh file into workdir/verification_mesh.msh instead of regenerating it.",
+    )
     parser.add_argument("--mesh-only", action="store_true")
     parser.add_argument("--source-only", action="store_true", help="Assemble mesh/materials/source diagnostics and exit before time stepping.")
     parser.add_argument("--postprocess-partial", action="store_true", help="Postprocess workdir/forward_partial.npz without rerunning FEM.")
     parser.add_argument("--checkpoint-forward", action="store_true", help="Save forward_checkpoint.npz at each output time for long-run restart.")
+    parser.add_argument(
+        "--checkpoint-interval-steps",
+        type=int,
+        default=0,
+        help="Also save forward_checkpoint.npz every N internal steps when --checkpoint-forward is set; 0 disables.",
+    )
     parser.add_argument("--resume-forward", action="store_true", help="Resume E-form forward modelling from workdir/forward_checkpoint.npz.")
     parser.add_argument("--stop-after-outputs", type=int, default=0, help="Stop after N newly completed output times and save a forward checkpoint; 0 disables segmented stopping.")
     parser.add_argument("--memory-limit-gb", type=float, default=32.0, help="Configured workstation memory budget for mesh/solver preflight.")
@@ -8186,15 +11831,130 @@ def main(argv: list[str] | None = None) -> int:
         help="Use raw only for diagnostics; charge_conserving enforces endpoint balance.",
     )
     parser.add_argument("--source-rhs-sign", type=float, choices=[-1.0, 1.0], default=-1.0)
-    parser.add_argument("--source-term-mode", choices=["impressed_current", "primary_dc"], default="impressed_current")
+    parser.add_argument(
+        "--source-term-mode",
+        choices=["impressed_current", "primary_dc", "primary_secondary"],
+        default="impressed_current",
+    )
+    parser.add_argument(
+        "--primary-secondary-max-primary-samples",
+        type=int,
+        default=4096,
+        help="Maximum active FEM points sampled by empymod primary per time; 0 disables capping.",
+    )
+    parser.add_argument(
+        "--primary-secondary-sampling-strategy",
+        choices=["weighted_farthest", "priority_hull", "uniform"],
+        default="weighted_farthest",
+        help="Spatial down-sampling strategy for capped primary samples.",
+    )
+    parser.add_argument(
+        "--primary-secondary-background-mode",
+        choices=["layered", "top_halfspace", "layered_ip", "layered_primary_top_current"],
+        default="layered",
+        help=(
+            "Use full 1D no-IP layered empymod primary, top-layer halfspace primary plus DOLFINx secondary "
+            "contrast, full 1D Cole-Cole layered IP primary, or full 1D layered primary with a "
+            "top-layer scalar secondary current background."
+        ),
+    )
+    parser.add_argument(
+        "--primary-secondary-dc-mode",
+        choices=["analytic_halfspace", "empymod_quasistatic"],
+        default="analytic_halfspace",
+        help="DC primary used to initialize primary-secondary memory and ramp history.",
+    )
+    parser.add_argument(
+        "--primary-secondary-dc-conductivity-mode",
+        choices=["sigma_initial", "sigma_infinity"],
+        default="sigma_initial",
+        help=(
+            "Conductivity field used in the DC secondary initialization. "
+            "sigma_initial is the long-on-time DC state; sigma_infinity is a diagnostic "
+            "initialization matching earlier IP secondary experiments."
+        ),
+    )
+    parser.add_argument(
+        "--primary-secondary-transient-background-mode",
+        choices=["same", "scalar_top", "ip_increment"],
+        default="same",
+        help=(
+            "Background current used in transient primary-secondary deltaJ/c_new. "
+            "same uses the configured DG background; scalar_top is a diagnostic "
+            "path matching earlier scalar-background IP secondary experiments; "
+            "ip_increment uses sigma_initial as the background so the secondary "
+            "field carries only the Cole-Cole increment."
+        ),
+    )
+    parser.add_argument(
+        "--primary-secondary-dc-rhs-sign",
+        type=float,
+        choices=[-1.0, 1.0],
+        default=1.0,
+        help="Diagnostic sign multiplier for the primary-secondary DC contrast RHS.",
+    )
+    parser.add_argument(
+        "--primary-secondary-rhs-mass-mode",
+        choices=["sigma", "unit", "effective"],
+        default="unit",
+        help="Mass matrix used to assemble the primary-secondary current-density RHS; unit is the physical default.",
+    )
+    parser.add_argument(
+        "--primary-secondary-rhs-scale",
+        type=float,
+        default=1.0,
+        help="Diagnostic scalar multiplier applied to the primary-secondary transient RHS.",
+    )
+    parser.add_argument(
+        "--primary-secondary-rhs-projection",
+        choices=["none", "conductivity"],
+        default="none",
+        help="Optional scalar-potential projection that removes weak divergence from the transient RHS.",
+    )
+    parser.add_argument(
+        "--primary-secondary-current-correction",
+        choices=["none", "conductivity"],
+        default="none",
+        help="Optional scalar-potential correction enforcing weak div(J-Jb)=0 in primary-secondary steps.",
+    )
+    parser.add_argument(
+        "--primary-secondary-current-correction-relaxation",
+        type=float,
+        default=1.0,
+        help="Relaxation factor for the primary-secondary current-continuity correction.",
+    )
+    parser.add_argument(
+        "--primary-secondary-current-correction-relaxation-late",
+        type=float,
+        default=None,
+        help="Optional late-time relaxation factor; omitted keeps a constant correction relaxation.",
+    )
+    parser.add_argument(
+        "--primary-secondary-current-correction-relaxation-transition-time",
+        type=float,
+        default=0.1,
+        help="Center time in seconds for log-time interpolation to the late correction relaxation.",
+    )
+    parser.add_argument(
+        "--primary-secondary-current-correction-relaxation-transition-width",
+        type=float,
+        default=1.0,
+        help="Log10-time width for interpolation to the late correction relaxation.",
+    )
     parser.add_argument("--formulation", choices=["e", "h"], default="e")
+    parser.add_argument(
+        "--h-source-mode",
+        choices=["regularized_volume", "manual_line"],
+        default="regularized_volume",
+        help="H-form source RHS assembly; manual_line is a diagnostic line-integral path.",
+    )
     parser.add_argument("--initial-dc-mode", choices=["fem", "analytic_halfspace"], default="fem")
     parser.add_argument(
         "--magnetic-receiver-mode",
         choices=["curl", "biot_current", "biot_ohmic", "faraday_integrated"],
         default="curl",
     )
-    parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate"], default="curl")
+    parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate", "ampere_rate"], default="curl")
     parser.add_argument("--outer-boundary-mode", choices=["pec", "natural", "robin"], default="pec")
     parser.add_argument("--outer-boundary-robin-scale", type=float, default=1.0)
     parser.add_argument("--receiver-type", choices=["point", "volume_average", "disk_average"], default="point")
@@ -8206,8 +11966,35 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--receiver-evaluation-mode",
-        choices=["first_cell", "mean", "median", "nearest_center", "shallowest"],
+        choices=[
+            "first_cell",
+            "mean",
+            "median",
+            "nearest_center",
+            "shallowest",
+            "local_lsq",
+            "local_lsq_earth",
+            "local_lsq_air",
+            "local_lsq_interface",
+        ],
         default="median",
+    )
+    parser.add_argument(
+        "--magnetic-dbdt-evaluation-mode",
+        choices=[
+            "same",
+            "first_cell",
+            "mean",
+            "median",
+            "nearest_center",
+            "shallowest",
+            "local_lsq",
+            "local_lsq_earth",
+            "local_lsq_air",
+            "local_lsq_interface",
+        ],
+        default="same",
+        help="Candidate-cell collapse mode for receiver dB/dt; 'same' reuses --receiver-evaluation-mode.",
     )
     parser.add_argument("--divergence-cleaning", choices=["none", "conductivity"], default="none")
     parser.add_argument(
@@ -8256,6 +12043,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cole-f-min", type=float, default=1.0e-2)
     parser.add_argument("--cole-f-max", type=float, default=1.0e5)
     parser.add_argument("--cole-n-freq", type=int, default=96)
+    parser.add_argument(
+        "--debye-time-scheme",
+        choices=["backward_euler", "exponential"],
+        default="backward_euler",
+        help="Time update used for Debye memory variables; exponential uses the exact constant-field memory update.",
+    )
     parser.add_argument("--rho-air", type=float, default=1.0e8)
     parser.add_argument("--rho-earth", type=float, default=100.0)
     parser.add_argument("--source-start-x", type=float, default=-500.0)
@@ -8280,7 +12073,31 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional local receiver anchoring mesh size in metres; 0 reuses --receiver-mesh-size.",
     )
     parser.add_argument("--receiver-refinement-radius", type=float, default=60.0)
+    parser.add_argument(
+        "--receiver-local-lsq-radius-factor",
+        type=float,
+        default=2.0,
+        help="Local-LSQ receiver sample radius as a multiple of --receiver-mesh-size.",
+    )
+    parser.add_argument(
+        "--receiver-local-lsq-max-samples",
+        type=int,
+        default=0,
+        help="Maximum candidate cells used by local-LSQ receiver recovery; 0 selects quantity-specific defaults.",
+    )
+    parser.add_argument(
+        "--far-field-mesh-size",
+        type=float,
+        default=3000.0,
+        help="Coarse mesh size away from source, receiver, and diffusion refinement boxes.",
+    )
     parser.add_argument("--diffusion-refinement-factor", type=float, default=0.0, help="If >0, expand the 80 m late-diffusion refinement box to factor*sqrt(2*rho_max*t_max/mu).")
+    parser.add_argument(
+        "--diffusion-refinement-top",
+        type=float,
+        default=None,
+        help="Optional z-coordinate for the top of the diffusion refinement box; omitted keeps the legacy +200 m top.",
+    )
     parser.add_argument("--diffusion-refinement-mesh-size", type=float, default=80.0)
     parser.add_argument("--sponge-strength", type=float, default=0.0, help="Transient outer-shell conductivity increment in S/m; 0 disables the sponge.")
     parser.add_argument("--sponge-thickness", type=float, default=0.0, help="Outer-shell sponge thickness in metres for the unstructured DOLFINx mesh.")
@@ -8292,6 +12109,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-parallel-offset", type=float, default=500.0)
     parser.add_argument("--wire-radius", type=float, default=2.5)
     parser.add_argument("--time-growth", type=float, default=1.05)
+    parser.add_argument(
+        "--max-internal-dt",
+        type=float,
+        default=0.0,
+        help="Maximum internal time-step in seconds; 0 disables extra substeps between observation outputs.",
+    )
+    parser.add_argument(
+        "--max-internal-dt-fraction",
+        type=float,
+        default=0.0,
+        help="Relative internal step limit; if >0, enforce dt <= fraction * elapsed observation time.",
+    )
+    parser.add_argument(
+        "--max-internal-dt-fraction-until",
+        type=float,
+        default=0.0,
+        help="Observation time through which --max-internal-dt-fraction applies; 0 keeps it active for all times.",
+    )
+    parser.add_argument(
+        "--time-samples",
+        default="",
+        help="Optional comma-separated observation times in seconds; must include --t-min and --t-max.",
+    )
     parser.add_argument("--time-method", choices=["theta", "bdf2"], default="theta")
     parser.add_argument("--time-theta", type=float, default=1.0, help="Theta-method weight for non-polarizable E-form time stepping; 1.0=BE, 0.5=Crank-Nicolson.")
     parser.add_argument("--time-origin", choices=["after_ramp", "ramp_start"], default="after_ramp")
@@ -8299,6 +12139,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--empymod-ht", choices=["dlf", "qwe", "quad"], default="dlf")
     parser.add_argument("--empymod-ft", choices=["dlf", "sin", "cos", "qwe", "fftlog", "fft"], default="dlf")
     parser.add_argument("--reference-audit-srcpts", type=int, default=0)
+    parser.add_argument("--ksp-type", default="gmres", help="PETSc KSP type for transient Nedelec solves.")
     parser.add_argument("--max-it", type=int, default=1000)
     parser.add_argument("--rtol", type=float, default=1.0e-8)
     parser.add_argument("--atol", type=float, default=1.0e-12)
@@ -8330,7 +12171,9 @@ def main(argv: list[str] | None = None) -> int:
     config = PipelineConfig(
         workdir=args.workdir,
         force_mesh=args.force_mesh,
+        mesh_source_path=args.reuse_mesh,
         checkpoint_forward=args.checkpoint_forward,
+        checkpoint_interval_steps=args.checkpoint_interval_steps,
         resume_forward=args.resume_forward,
         stop_after_outputs=args.stop_after_outputs,
         source_only=args.source_only,
@@ -8339,7 +12182,27 @@ def main(argv: list[str] | None = None) -> int:
         source_mode=args.source_mode,
         source_projection_mode=args.source_projection_mode,
         source_rhs_sign=args.source_rhs_sign,
+        h_source_mode=args.h_source_mode,
         source_term_mode=args.source_term_mode,
+        primary_secondary_max_primary_samples=args.primary_secondary_max_primary_samples,
+        primary_secondary_sampling_strategy=args.primary_secondary_sampling_strategy,
+        primary_secondary_background_mode=args.primary_secondary_background_mode,
+        primary_secondary_dc_mode=args.primary_secondary_dc_mode,
+        primary_secondary_dc_conductivity_mode=args.primary_secondary_dc_conductivity_mode,
+        primary_secondary_transient_background_mode=args.primary_secondary_transient_background_mode,
+        primary_secondary_dc_rhs_sign=args.primary_secondary_dc_rhs_sign,
+        primary_secondary_rhs_mass_mode=args.primary_secondary_rhs_mass_mode,
+        primary_secondary_rhs_scale=args.primary_secondary_rhs_scale,
+        primary_secondary_rhs_projection=args.primary_secondary_rhs_projection,
+        primary_secondary_current_correction=args.primary_secondary_current_correction,
+        primary_secondary_current_correction_relaxation=args.primary_secondary_current_correction_relaxation,
+        primary_secondary_current_correction_relaxation_late=args.primary_secondary_current_correction_relaxation_late,
+        primary_secondary_current_correction_relaxation_transition_time=(
+            args.primary_secondary_current_correction_relaxation_transition_time
+        ),
+        primary_secondary_current_correction_relaxation_transition_width=(
+            args.primary_secondary_current_correction_relaxation_transition_width
+        ),
         formulation=args.formulation,
         initial_dc_mode=args.initial_dc_mode,
         magnetic_receiver_mode=args.magnetic_receiver_mode,
@@ -8350,6 +12213,7 @@ def main(argv: list[str] | None = None) -> int:
         receiver_average_radius=args.receiver_average_radius,
         receiver_diagnostic_types=_parse_string_csv(args.receiver_diagnostic_types),
         receiver_evaluation_mode=args.receiver_evaluation_mode,
+        magnetic_dbdt_evaluation_mode=args.magnetic_dbdt_evaluation_mode,
         divergence_cleaning=args.divergence_cleaning,
         divergence_cleaning_strength=args.divergence_cleaning_strength,
         divergence_cleaning_t_obs_min=args.divergence_cleaning_t_obs_min,
@@ -8367,6 +12231,7 @@ def main(argv: list[str] | None = None) -> int:
         cole_f_min=args.cole_f_min,
         cole_f_max=args.cole_f_max,
         cole_n_freq=args.cole_n_freq,
+        debye_time_scheme=args.debye_time_scheme,
         rho_air=args.rho_air,
         rho_earth=args.rho_earth,
         source_start=(args.source_start_x, args.source_start_y, args.source_start_z),
@@ -8380,7 +12245,11 @@ def main(argv: list[str] | None = None) -> int:
         receiver_mesh_size=args.receiver_mesh_size,
         receiver_anchor_mesh_size=args.receiver_anchor_mesh_size,
         receiver_refinement_radius=args.receiver_refinement_radius,
+        receiver_local_lsq_radius_factor=args.receiver_local_lsq_radius_factor,
+        receiver_local_lsq_max_samples=args.receiver_local_lsq_max_samples,
+        far_field_mesh_size=args.far_field_mesh_size,
         diffusion_refinement_factor=args.diffusion_refinement_factor,
+        diffusion_refinement_top=args.diffusion_refinement_top,
         diffusion_refinement_mesh_size=args.diffusion_refinement_mesh_size,
         sponge_strength=args.sponge_strength,
         sponge_thickness=args.sponge_thickness,
@@ -8392,6 +12261,10 @@ def main(argv: list[str] | None = None) -> int:
         expected_parallel_offset=args.expected_parallel_offset,
         wire_radius=args.wire_radius,
         time_growth=args.time_growth,
+        max_internal_dt=args.max_internal_dt,
+        max_internal_dt_fraction=args.max_internal_dt_fraction,
+        max_internal_dt_fraction_until=args.max_internal_dt_fraction_until,
+        explicit_observation_times=_parse_float_csv(args.time_samples, "--time-samples"),
         time_method=args.time_method,
         time_theta=args.time_theta,
         time_origin=args.time_origin,
@@ -8401,6 +12274,7 @@ def main(argv: list[str] | None = None) -> int:
         empymod_ht=args.empymod_ht,
         empymod_ft=args.empymod_ft,
         reference_audit_srcpts=args.reference_audit_srcpts,
+        ksp_type=args.ksp_type,
         max_it=args.max_it,
         rtol=args.rtol,
         atol=args.atol,
@@ -8450,19 +12324,29 @@ def main(argv: list[str] | None = None) -> int:
     if MPI.COMM_WORLD.size != 1:
         raise SystemExit("This verification script currently requires serial execution for point receiver extraction.")
 
+    _record_timing_event(config, "mesh_start", run_t0)
     t0 = time.perf_counter()
     generate_verification_mesh(config)
     runtime["mesh_seconds"] = time.perf_counter() - t0
+    _record_timing_event(config, "mesh_done", run_t0, seconds=runtime["mesh_seconds"])
     if args.mesh_only:
         return 0
+    _record_timing_event(config, "setup_start", run_t0)
     t0 = time.perf_counter()
+    _record_timing_event(config, "load_mesh_start", run_t0)
     msh, cell_tags, facet_tags = load_mesh(config)
+    _record_timing_event(config, "load_mesh_done", run_t0)
+    _record_timing_event(config, "function_spaces_start", run_t0)
     spaces = build_function_spaces(msh, config)
+    _record_timing_event(config, "function_spaces_done", run_t0)
+    _record_timing_event(config, "materials_start", run_t0)
     materials = assign_materials(msh, cell_tags, spaces, config)
+    _record_timing_event(config, "materials_done", run_t0)
 
     debye = None
     ref_mode = "noip"
     if config.polarization == "cole-cole":
+        _record_timing_event(config, "polarization_setup_start", run_t0)
         fit = fit_cole_cole_to_debye(config)
         debye = _build_debye_materials(msh, cell_tags, spaces, fit, config)
         materials["sigma_infinity"].x.array[:] = materials["sigma"].x.array
@@ -8471,14 +12355,20 @@ def main(argv: list[str] | None = None) -> int:
         materials["sigma_infinity_physical"].x.array[:] = materials["sigma_infinity"].x.array
         materials["sigma_infinity_physical"].x.scatter_forward()
         ref_mode = "cole-cole"
+        _record_timing_event(config, "polarization_setup_done", run_t0)
     else:
         print("[polarization] disabled: running non-polarizable air-earth stage-1 validation.", flush=True)
+    _record_timing_event(config, "sponge_start", run_t0)
     apply_transient_sponge(msh, materials, config)
+    _record_timing_event(config, "sponge_done", run_t0)
 
+    _record_timing_event(config, "source_start", run_t0)
     source = build_source(msh, spaces, config, cell_tags)
     if config.formulation == "h":
         source["current_density"] = _build_regularized_current_density(msh, spaces, config, cell_tags)
+    _record_timing_event(config, "source_done", run_t0)
     runtime["setup_seconds"] = time.perf_counter() - t0
+    _record_timing_event(config, "setup_done", run_t0, seconds=runtime["setup_seconds"])
     if config.source_only:
         if msh.comm.rank == 0:
             runtime["total_seconds"] = time.perf_counter() - run_t0
@@ -8491,15 +12381,30 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
     times = generate_time_array(config)
+    _record_timing_event(config, "forward_start", run_t0, output_count=int(len(times)))
     t0 = time.perf_counter()
     if config.formulation == "h":
         fem_result = run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config, times=times)
     else:
-        fem_result = run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, config, debye=debye, times=times)
+        fem_result = run_fetd_forward(
+            msh,
+            cell_tags,
+            facet_tags,
+            spaces,
+            materials,
+            source,
+            config,
+            debye=debye,
+            times=times,
+            timing_start_time=run_t0,
+        )
     runtime["forward_seconds"] = time.perf_counter() - t0
+    _record_timing_event(config, "forward_done", run_t0, seconds=runtime["forward_seconds"])
     completed_times = fem_result["times"]
     t0 = time.perf_counter()
     ref_result = get_empymod_reference(completed_times, config, mode=ref_mode)
+    noip_ref_result = ref_result if ref_mode == "noip" else get_empymod_reference(completed_times, config, mode="noip")
+    _attach_secondary_decomposition(fem_result, ref_result, noip_ref_result)
     errors = compute_error(fem_result["data"], ref_result["data"], fem_result["components"])
     reference_audit_errors = None
     if int(config.reference_audit_srcpts) > 0 and int(config.reference_audit_srcpts) != int(config.empymod_srcpts):
@@ -8525,6 +12430,15 @@ def main(argv: list[str] | None = None) -> int:
             source_info=source,
             receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
             solver_log=fem_result.get("solver_log"),
+            solver_diagnostics={
+                "primary_secondary_internal_time_grid": _solver_internal_time_grid_summary(
+                    fem_result.get("solver_log"),
+                    completed_times,
+                    config,
+                ),
+                "primary_secondary_diagnostics": fem_result.get("primary_secondary_diagnostics", {})
+            },
+            validation_scope="corrected_model_full",
         )
         runtime["postprocess_seconds"] = time.perf_counter() - t0
         runtime["total_seconds"] = time.perf_counter() - run_t0

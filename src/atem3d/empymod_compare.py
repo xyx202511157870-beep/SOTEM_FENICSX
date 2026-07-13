@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -44,27 +45,69 @@ def run_empymod_reference(survey: EmpymodSurvey, backend=None, **kwargs) -> np.n
         import empymod as backend  # noqa: PLC0415
 
     times = np.asarray(survey.times, dtype=float)
-    responses: list[np.ndarray] = []
-    for location, component in _iter_receiver_components(survey):
-        rec, mrec = _receiver_mapping(location, component, survey.coordinate_system)
+    pairs = _iter_receiver_components(survey)
+    responses: list[np.ndarray | None] = [None] * len(pairs)
+    for component in dict.fromkeys(component for _location, component in pairs):
+        indices = [index for index, (_location, item) in enumerate(pairs) if item == component]
+        locations = [pairs[index][0] for index in indices]
+        mapped = [_receiver_mapping(location, component, survey.coordinate_system) for location in locations]
+        rec = _vectorized_receiver_coordinates([item[0] for item in mapped])
+        mrec = mapped[0][1]
+        signal = _component_signal(component, survey.signal)
         response = backend.bipole(
             src=_source_mapping(survey.source_start, survey.source_end, survey.coordinate_system),
             rec=rec,
             depth=list(survey.depths),
             res=_resistivity_model(survey.resistivities),
             freqtime=times,
-            signal=survey.signal,
+            signal=signal,
             strength=survey.strength,
             mrec=mrec,
             verb=0,
             **kwargs,
         )
-        values = np.asarray(response, dtype=float).reshape(-1)
+        values = _as_time_receiver_table(response, time_count=times.size, receiver_count=len(indices))
         if component in {"Bx", "By", "Bz"}:
             values = mu_0 * values
-        values = _component_coordinate_factor(component, survey.coordinate_system) * values
-        responses.append(values)
-    return np.column_stack(responses)
+        values = _component_scale_factor(component, survey.coordinate_system) * values
+        for receiver_column, output_index in enumerate(indices):
+            responses[output_index] = values[:, receiver_column]
+    return np.column_stack([np.asarray(item, dtype=float) for item in responses])
+
+
+def run_empymod_linear_turnoff_reference(
+    survey: EmpymodSurvey,
+    *,
+    turnoff_s: float,
+    nquad: int = 8,
+    backend=None,
+    **kwargs,
+) -> np.ndarray:
+    """Average shifted instantaneous responses over a finite linear turn-off.
+
+    For a linear current ramp from ``I0`` to zero over ``turnoff_s``, the
+    post-ramp response at off-time ``t`` is the average of the corresponding
+    instantaneous response over ``[t, t + turnoff_s]``. Electric-field
+    components keep the survey step-on/off signal, while dB/dt components keep
+    the existing impulse-response mapping in ``_component_signal``.
+    """
+
+    turnoff = float(turnoff_s)
+    if turnoff < 0.0:
+        raise ValueError(f"turnoff_s must be non-negative, got {turnoff}.")
+    if turnoff == 0.0:
+        return run_empymod_reference(survey, backend=backend, **kwargs)
+    if int(nquad) <= 0:
+        raise ValueError(f"nquad must be positive, got {nquad}.")
+
+    times = np.asarray(survey.times, dtype=float)
+    nodes, weights = np.polynomial.legendre.leggauss(int(nquad))
+    offsets = 0.5 * turnoff * (nodes + 1.0)
+    shifted_times = (times[:, None] + offsets[None, :]).reshape((-1,))
+    shifted_survey = replace(survey, times=shifted_times)
+    shifted = run_empymod_reference(shifted_survey, backend=backend, **kwargs)
+    reshaped = shifted.reshape((times.size, int(nquad), shifted.shape[1]))
+    return np.tensordot(0.5 * weights, reshaped, axes=(0, 1))
 
 
 def build_empymod_survey_from_result(
@@ -119,6 +162,46 @@ def build_empymod_survey_from_config(
         coordinate_system=str(config.get("coordinate_system", "depth_down")),
     )
     return survey, names
+
+
+def build_empymod_survey_from_finite_bipole_source(
+    source_spec: dict[str, Any],
+    *,
+    ground_z_m: float,
+    receiver_locations: Sequence[tuple[float, float, float]],
+    components: Sequence[str],
+    times: Sequence[float],
+    depths: Sequence[float],
+    resistivities: Sequence[float] | dict[str, Any],
+    signal: int | None = -1,
+    coordinate_system: str = "z_up",
+) -> EmpymodSurvey:
+    """Build an empymod survey directly from a finite-bipole source spec.
+
+    The source spec's active ``start_xyz_m``/``end_xyz_m`` fields are used. For
+    projected endpoint cases this deliberately ignores ``original_*`` fields so
+    the reference geometry matches the FEniCSx validation source.
+    """
+
+    if source_spec.get("mode") != "finite_bipole_validation":
+        raise ValueError("finite-bipole empymod survey requires mode='finite_bipole_validation'.")
+    ground_z = float(ground_z_m)
+
+    def relative(point: Sequence[float]) -> tuple[float, float, float]:
+        return (float(point[0]), float(point[1]), float(point[2]) - ground_z)
+
+    return EmpymodSurvey(
+        source_start=relative(source_spec["start_xyz_m"]),
+        source_end=relative(source_spec["end_xyz_m"]),
+        receiver_locations=[relative(location) for location in receiver_locations],
+        components=list(components),
+        times=np.asarray(times, dtype=float),
+        depths=list(depths),
+        resistivities=resistivities,
+        strength=float(source_spec["current_amps"]),
+        signal=signal,
+        coordinate_system=coordinate_system,
+    )
 
 
 def make_debye_resistivity_model(
@@ -341,12 +424,40 @@ def _receiver_mapping(
     if component == "Hz" or component == "Bz":
         return [x, y, z, 0.0, magnetic_vertical_dip], True
     if component == "dBxdt":
-        return [x, y, z, 0.0, 0.0], "b"
+        return [x, y, z, 0.0, 0.0], True
     if component == "dBydt":
-        return [x, y, z, 90.0, 0.0], "b"
+        return [x, y, z, 90.0, 0.0], True
     if component == "dBzdt":
-        return [x, y, z, 0.0, magnetic_vertical_dip], "b"
+        return [x, y, z, 0.0, magnetic_vertical_dip], True
     raise ValueError("unsupported receiver component")
+
+
+def _vectorized_receiver_coordinates(receivers: Sequence[Sequence[float]]) -> list[np.ndarray]:
+    values = np.asarray(receivers, dtype=float)
+    if values.ndim != 2 or values.shape[1] != 5:
+        raise ValueError("receiver mappings must have shape (n, 5)")
+    return [values[:, index].copy() for index in range(values.shape[1])]
+
+
+def _as_time_receiver_table(response, *, time_count: int, receiver_count: int) -> np.ndarray:
+    values = np.asarray(response, dtype=float)
+    if values.ndim == 0:
+        values = values.reshape(1, 1)
+    elif values.ndim == 1:
+        if receiver_count == 1 and values.size == time_count:
+            values = values.reshape(time_count, 1)
+        elif time_count == 1 and values.size == receiver_count:
+            values = values.reshape(1, receiver_count)
+        else:
+            values = values.reshape(time_count, receiver_count)
+    if values.shape == (receiver_count, time_count) and values.shape != (time_count, receiver_count):
+        values = values.T
+    if values.shape != (time_count, receiver_count):
+        raise ValueError(
+            "empymod response shape is inconsistent with requested times/receivers: "
+            f"shape={values.shape}, expected=({time_count}, {receiver_count})"
+        )
+    return values
 
 
 def _receiver_depth(z: float, coordinate_system: str) -> float:
@@ -371,6 +482,19 @@ def _component_coordinate_factor(component: str, coordinate_system: str) -> floa
     if component in {"Hx", "Hy", "Bx", "By", "dBxdt", "dBydt"}:
         return -1.0
     return 1.0
+
+
+def _component_signal(component: str, survey_signal: int | None) -> int | None:
+    if component in {"dBxdt", "dBydt", "dBzdt"}:
+        return 0
+    return survey_signal
+
+
+def _component_scale_factor(component: str, coordinate_system: str) -> float:
+    factor = _component_coordinate_factor(component, coordinate_system)
+    if component in {"dBxdt", "dBydt", "dBzdt"}:
+        return -mu_0 * factor
+    return factor
 
 
 def _iter_receiver_components(survey: EmpymodSurvey):

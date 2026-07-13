@@ -57,6 +57,16 @@ def robust_relative_error(pred: float, ref: float, floor: float) -> float:
     return float(abs(float(pred) - float(ref)) / max(abs(float(ref)), floor))
 
 
+def ordinary_relative_error_from_abs(abs_error: float, ref: float) -> float:
+    """Return pointwise ``abs_error / abs(ref)`` with exact zero matches treated as zero."""
+
+    abs_error = float(abs_error)
+    ref_abs = abs(float(ref))
+    if ref_abs == 0.0:
+        return 0.0 if abs_error == 0.0 else float("inf")
+    return float(abs_error / ref_abs)
+
+
 def robust_component_errors(
     times,
     numerical,
@@ -111,29 +121,36 @@ def robust_component_errors(
         num_col = numerical[:, col]
         max_abs_ref = float(np.max(np.abs(ref_col))) if ref_col.size else 0.0
         floor = float(floor_overrides.get(component, _default_component_floor(component, max_abs_ref)))
+        ordinary_values = []
         robust_values = []
         peak_values = []
         for time, pred, ref in zip(times, num_col, ref_col):
             abs_error = float(abs(pred - ref))
-            ordinary = float(abs_error / abs(ref)) if ref != 0.0 else float("inf")
+            ordinary = ordinary_relative_error_from_abs(abs_error, float(ref))
             robust = robust_relative_error(float(pred), float(ref), floor)
             peak = float(abs_error / max(max_abs_ref, floor))
-            passed = bool(robust <= threshold and peak <= threshold)
+            passed = bool(ordinary <= threshold)
             if not passed:
                 failed_components.add(component)
                 failed_times.add(float(time))
+            ordinary_values.append(ordinary)
             robust_values.append(robust)
             peak_values.append(peak)
             rows.append((float(time), component, float(pred), float(ref), abs_error, ordinary, robust, peak, passed))
-        summary[f"max_error_{component}"] = float(np.max(robust_values))
-        summary[f"rms_error_{component}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
+        ordinary_array = np.asarray(ordinary_values, dtype=float)
+        summary[f"max_error_{component}"] = float(np.max(ordinary_array))
+        summary[f"rms_error_{component}"] = float(np.sqrt(np.mean(ordinary_array**2)))
+        summary[f"max_error_with_floor_{component}"] = float(np.max(robust_values))
+        summary[f"rms_error_with_floor_{component}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{component}"] = float(np.max(peak_values))
         key = component if component in {"Ex", "Ey"} else "Hz_or_dBzdt"
         if component not in {"Ex", "Ey"}:
             magnetic_component = component
             magnetic_components.append(component)
-        summary[f"max_error_{key}"] = float(np.max(robust_values))
-        summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
+        summary[f"max_error_{key}"] = float(np.max(ordinary_array))
+        summary[f"rms_error_{key}"] = float(np.sqrt(np.mean(ordinary_array**2)))
+        summary[f"max_error_with_floor_{key}"] = float(np.max(robust_values))
+        summary[f"rms_error_with_floor_{key}"] = float(np.sqrt(np.mean(np.asarray(robust_values) ** 2)))
         summary[f"max_peak_normalized_error_{key}"] = float(np.max(peak_values))
 
     strict_failed_components = sorted(failed_components)

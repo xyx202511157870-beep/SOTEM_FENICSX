@@ -33,7 +33,28 @@ def test_robust_component_errors_report_all_required_columns():
         "pass_5pct",
     }
     assert summary["max_error_Ex"] == pytest.approx(0.1)
-    assert summary["max_error_Ey"] == pytest.approx(0.2)
+    assert summary["max_error_Ey"] == float("inf")
+    assert summary["max_error_with_floor_Ey"] == pytest.approx(0.2)
+    assert summary["pass_all_components"] is False
+
+
+def test_robust_component_errors_gate_uses_pointwise_relative_error_not_floor_error():
+    times = np.array([1.0e-5])
+    pred = np.array([[2.0e-20]])
+    ref = np.array([[1.0e-20]])
+
+    rows, summary = robust_component_errors(
+        times,
+        pred,
+        ref,
+        ["Ex"],
+        threshold=0.05,
+    )
+
+    assert rows[0]["ordinary_relative_error"] == pytest.approx(1.0)
+    assert rows[0]["relative_error_with_floor"] < 0.05
+    assert bool(rows[0]["pass_5pct"]) is False
+    assert summary["max_error_Ex"] == pytest.approx(1.0)
     assert summary["pass_all_components"] is False
 
 

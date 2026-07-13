@@ -1,14 +1,17 @@
 import numpy as np
 import h5py
+import pytest
 import yaml
 from scipy.constants import mu_0
 
 from atem3d.empymod_compare import (
     EmpymodSurvey,
+    build_empymod_survey_from_finite_bipole_source,
     build_empymod_survey_from_config,
     build_empymod_survey_from_result,
     make_debye_resistivity_model,
     make_debye_resistivity_model_from_config,
+    run_empymod_linear_turnoff_reference,
     run_empymod_reference,
 )
 from atem3d.fit import fit_pelton_resistivity_debye
@@ -49,7 +52,38 @@ def test_empymod_reference_maps_finite_wire_and_components_to_bipole_calls():
     assert backend.calls[2]["strength"] == 2.0
 
 
-def test_empymod_reference_maps_db_dt_to_mrec_b():
+def test_build_empymod_survey_from_finite_bipole_source_uses_projected_source_spec_geometry():
+    source_spec = {
+        "mode": "finite_bipole_validation",
+        "source_geometry_policy": "symmetric_inward_line_projection",
+        "start_xyz_m": [0.5, 0.0, 160.0],
+        "end_xyz_m": [9.5, 0.0, 160.0],
+        "original_start_xyz_m": [0.0, 0.0, 160.0],
+        "original_end_xyz_m": [10.0, 0.0, 160.0],
+        "current_amps": 2.0,
+    }
+
+    survey = build_empymod_survey_from_finite_bipole_source(
+        source_spec,
+        ground_z_m=160.1,
+        receiver_locations=[(0.0, 1.0, 160.1)],
+        components=["Ex", "dBzdt"],
+        times=np.array([1.0e-4, 1.0e-3]),
+        depths=[0.0],
+        resistivities=[1.0e8, 100.0],
+        signal=-1,
+        coordinate_system="z_up",
+    )
+
+    assert survey.source_start == (0.5, 0.0, -0.09999999999999432)
+    assert survey.source_end == (9.5, 0.0, -0.09999999999999432)
+    assert survey.receiver_locations == [(0.0, 1.0, 0.0)]
+    assert survey.components == ["Ex", "dBzdt"]
+    assert survey.strength == 2.0
+    assert survey.coordinate_system == "z_up"
+
+
+def test_empymod_reference_maps_db_dt_to_magnetic_impulse_response():
     backend = FakeEmpymod()
     survey = EmpymodSurvey(
         source_start=(-1.0, 0.0, 0.0),
@@ -63,7 +97,109 @@ def test_empymod_reference_maps_db_dt_to_mrec_b():
 
     run_empymod_reference(survey, backend=backend)
 
-    assert backend.calls[0]["mrec"] == "b"
+    assert backend.calls[0]["mrec"] is True
+    assert backend.calls[0]["signal"] == 0
+
+
+def test_empymod_reference_scales_db_dt_from_magnetic_impulse_response():
+    class ConstantMagneticImpulseBackend:
+        def bipole(self, **kwargs):
+            assert kwargs["mrec"] is True
+            assert kwargs["signal"] == 0
+            return np.full(len(kwargs["freqtime"]), 2.0, dtype=float)
+
+    survey = EmpymodSurvey(
+        source_start=(-1.0, 0.0, 0.0),
+        source_end=(1.0, 0.0, 0.0),
+        receiver_locations=[(0.0, 2.0, 0.0)],
+        components=["dBzdt"],
+        times=np.array([1.0e-3, 2.0e-3]),
+        depths=[0.0],
+        resistivities=[1.0e8, 100.0],
+    )
+
+    data = run_empymod_reference(survey, backend=ConstantMagneticImpulseBackend())
+
+    np.testing.assert_allclose(data[:, 0], -2.0 * mu_0)
+
+
+def test_empymod_linear_turnoff_reference_averages_shifted_instantaneous_dbdt():
+    class TimeEchoBackend:
+        def bipole(self, **kwargs):
+            assert kwargs["signal"] == 0
+            return np.asarray(kwargs["freqtime"], dtype=float)
+
+    survey = EmpymodSurvey(
+        source_start=(-1.0, 0.0, 0.0),
+        source_end=(1.0, 0.0, 0.0),
+        receiver_locations=[(0.0, 2.0, 0.0)],
+        components=["dBzdt"],
+        times=np.array([1.0, 3.0]),
+        depths=[0.0],
+        resistivities=[1.0e8, 100.0],
+    )
+
+    data = run_empymod_linear_turnoff_reference(
+        survey,
+        turnoff_s=2.0,
+        nquad=3,
+        backend=TimeEchoBackend(),
+    )
+
+    np.testing.assert_allclose(data[:, 0], -mu_0 * np.array([2.0, 4.0]))
+
+
+def test_empymod_linear_turnoff_reference_averages_shifted_stepoff_electric_field():
+    class TimeEchoBackend:
+        def bipole(self, **kwargs):
+            assert kwargs["signal"] == -1
+            return np.asarray(kwargs["freqtime"], dtype=float)
+
+    survey = EmpymodSurvey(
+        source_start=(-1.0, 0.0, 0.0),
+        source_end=(1.0, 0.0, 0.0),
+        receiver_locations=[(0.0, 2.0, 0.0)],
+        components=["Ex"],
+        times=np.array([1.0, 3.0]),
+        depths=[0.0],
+        resistivities=[1.0e8, 100.0],
+        signal=-1,
+    )
+
+    data = run_empymod_linear_turnoff_reference(
+        survey,
+        turnoff_s=2.0,
+        nquad=3,
+        backend=TimeEchoBackend(),
+    )
+
+    np.testing.assert_allclose(data[:, 0], [2.0, 4.0])
+
+
+def test_empymod_linear_turnoff_reference_preserves_component_specific_signals():
+    class ComponentSignalBackend:
+        def __init__(self):
+            self.signals = []
+
+        def bipole(self, **kwargs):
+            self.signals.append(kwargs["signal"])
+            return np.ones(len(kwargs["freqtime"]), dtype=float)
+
+    backend = ComponentSignalBackend()
+    survey = EmpymodSurvey(
+        source_start=(-1.0, 0.0, 0.0),
+        source_end=(1.0, 0.0, 0.0),
+        receiver_locations=[(0.0, 2.0, 0.0)],
+        components=["Ex", "dBzdt"],
+        times=np.array([1.0e-3]),
+        depths=[0.0],
+        resistivities=[1.0e8, 100.0],
+        signal=-1,
+    )
+
+    run_empymod_linear_turnoff_reference(survey, turnoff_s=1.0e-3, backend=backend)
+
+    assert backend.signals == [-1, 0]
 
 
 def test_empymod_reference_scales_magnetic_flux_density_from_h_field():
@@ -103,6 +239,37 @@ def test_empymod_reference_forwards_source_and_receiver_integration_points():
 
     assert backend.calls[0]["srcpts"] == 7
     assert backend.calls[0]["recpts"] == 5
+
+
+def test_empymod_reference_vectorizes_receiver_locations_by_component():
+    class VectorBackend:
+        def __init__(self):
+            self.calls = []
+
+        def bipole(self, **kwargs):
+            self.calls.append(kwargs)
+            rec = kwargs["rec"]
+            x_values = np.asarray(rec[0], dtype=float).reshape(-1)
+            azimuth = np.asarray(rec[3], dtype=float).reshape(-1)
+            if float(azimuth[0]) == 0.0:
+                return np.asarray([[10.0, 20.0]])
+            return np.asarray([[30.0, 40.0]])
+
+    backend = VectorBackend()
+    survey = EmpymodSurvey(
+        source_start=(-1.0, 0.0, 0.0),
+        source_end=(1.0, 0.0, 0.0),
+        receiver_locations=[(0.0, 2.0, 0.0), (10.0, 2.0, 0.0)],
+        components=["Ex", "Ey"],
+        times=np.array([1.0e-3]),
+        depths=[0.0],
+        resistivities=[1.0e8, 100.0],
+    )
+
+    data = run_empymod_reference(survey, backend=backend)
+
+    assert len(backend.calls) == 2
+    np.testing.assert_allclose(data, [[10.0, 30.0, 20.0, 40.0]])
 
 
 def test_empymod_reference_maps_z_up_coordinates_to_empymod_depth_coordinates():
@@ -147,7 +314,7 @@ def test_empymod_reference_applies_z_up_axial_vector_signs_to_magnetic_component
 
     np.testing.assert_allclose(
         data[0],
-        [-1.0, -1.0, 1.0, -mu_0, -mu_0, mu_0, -1.0, -1.0, 1.0],
+        [-1.0, -1.0, 1.0, -mu_0, -mu_0, mu_0, mu_0, mu_0, -mu_0],
     )
 
 

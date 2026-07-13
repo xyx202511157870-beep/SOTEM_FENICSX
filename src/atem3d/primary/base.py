@@ -23,6 +23,10 @@ class PrimaryFieldProvider(ABC):
         """Return primary electric field at receiver locations."""
 
     @abstractmethod
+    def get_receiver_H(self, t: float, receivers) -> np.ndarray:
+        """Return primary magnetic field strength at receiver locations."""
+
+    @abstractmethod
     def get_receiver_dBdt(self, t: float, receivers) -> np.ndarray:
         """Return primary dB/dt at receiver locations."""
 

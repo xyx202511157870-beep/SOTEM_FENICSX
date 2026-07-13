@@ -50,6 +50,38 @@ def analytic_halfspace_dc_runner(points, *, config: dict[str, Any], **kwargs) ->
     )
 
 
+def empymod_quasistatic_dc_runner(
+    points,
+    *,
+    config: dict[str, Any],
+    frequency: float = 1.0e-9,
+    empymod_kwargs: dict[str, Any] | None = None,
+    **_kwargs,
+) -> np.ndarray:
+    """Return a low-frequency empymod electric field for layered primary DC initialization."""
+
+    from atem3d.empymod_compare import EmpymodSurvey, run_empymod_reference
+
+    pts = as_points(points, "points")
+    freq = float(frequency)
+    if freq <= 0.0:
+        raise ValueError("frequency must be positive")
+    survey = EmpymodSurvey(
+        source_start=tuple(float(value) for value in _source_start(config)),
+        source_end=tuple(float(value) for value in _source_end(config)),
+        receiver_locations=[tuple(float(value) for value in row) for row in pts],
+        components=["Ex", "Ey", "Ez"],
+        times=np.asarray([freq], dtype=float),
+        depths=[float(value) for value in config["depths"]],
+        resistivities=config["resistivities"],
+        strength=float(config.get("strength", config.get("current", 1.0))),
+        signal=None,
+        coordinate_system=str(config.get("coordinate_system", "depth_down")),
+    )
+    values = run_empymod_reference(survey, **(empymod_kwargs or {}))
+    return np.asarray(values, dtype=float).reshape(pts.shape[0], 3)
+
+
 def _source_start(config: dict[str, Any]):
     if "source_start" in config:
         return config["source_start"]

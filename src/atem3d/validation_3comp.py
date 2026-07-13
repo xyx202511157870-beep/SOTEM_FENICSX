@@ -15,6 +15,7 @@ from atem3d.yaml_io import safe_dump_yaml
 
 REQUIRED_TIME_MIN = 1.0e-5
 REQUIRED_TIME_MAX = 1.0
+TIME_WINDOW_RTOL = 1.0e-12
 FINAL_ACCEPTANCE_SCOPE = "corrected_model_full"
 FINAL_ACCEPTANCE_REFERENCE_TYPES = {"empymod", "1d"}
 DIAGNOSTIC_REFERENCE_TYPES = {
@@ -193,8 +194,14 @@ def validation_acceptance_status(
     component_names = [str(name) for name in component_names]
     time_min = float(np.min(times)) if times.size else float("nan")
     time_max = float(np.max(times)) if times.size else float("nan")
+    required_time_min = float(required_time_min)
+    required_time_max = float(required_time_max)
+    min_tol = TIME_WINDOW_RTOL * max(abs(required_time_min), 1.0)
+    max_tol = TIME_WINDOW_RTOL * max(abs(required_time_max), 1.0)
     full_window_covered = bool(
-        times.size > 0 and time_min <= float(required_time_min) and time_max >= float(required_time_max)
+        times.size > 0
+        and time_min <= required_time_min + min_tol
+        and time_max >= required_time_max - max_tol
     )
     electric_present = {"Ex", "Ey"}.issubset(component_names)
     magnetic_present = any(name in component_names for name in ("Hz", "dBzdt"))
@@ -210,6 +217,12 @@ def validation_acceptance_status(
         diagnostics,
         required_time_max=float(required_time_max),
     )
+    ip_solver_evidence_verified = (
+        _ip_primary_secondary_solver_evidence_verified(diagnostics)
+        if case_type == "ip"
+        else True
+    )
+    zero_contrast_primary_reference_used = _zero_contrast_primary_reference_used(diagnostics)
 
     blocking_reasons: list[str] = []
     if not scope_is_final:
@@ -232,6 +245,10 @@ def validation_acceptance_status(
         blocking_reasons.append("physical_error_gate_failed")
     if scope_is_final and not internal_time_grid_verified:
         blocking_reasons.append("internal_time_grid_not_verified")
+    if scope_is_final and case_type == "ip" and not ip_solver_evidence_verified:
+        blocking_reasons.append("missing_primary_secondary_solver_evidence")
+    if scope_is_final and zero_contrast_primary_reference_used:
+        blocking_reasons.append("zero_contrast_primary_reference_not_fenicsx_forward")
 
     final_acceptance_passed = bool(
         scope_is_final
@@ -242,6 +259,8 @@ def validation_acceptance_status(
         and threshold_ok
         and strict_gate_passed
         and internal_time_grid_verified
+        and ip_solver_evidence_verified
+        and not zero_contrast_primary_reference_used
     )
     return {
         "validation_scope": str(validation_scope),
@@ -263,6 +282,8 @@ def validation_acceptance_status(
         "strict_error_gate_passed": strict_gate_passed,
         "physical_error_gate_passed": physical_gate_passed,
         "internal_time_grid_verified": internal_time_grid_verified,
+        "ip_solver_evidence_verified": bool(ip_solver_evidence_verified),
+        "zero_contrast_primary_reference_used": bool(zero_contrast_primary_reference_used),
         "final_acceptance_passed": final_acceptance_passed,
         "blocking_reasons": blocking_reasons,
     }
@@ -292,12 +313,59 @@ def _internal_time_grid_verified(
     return False
 
 
+def _ip_primary_secondary_solver_evidence_verified(diagnostics: dict | None) -> bool:
+    diagnostics = dict(diagnostics or {})
+    candidates = []
+    direct = diagnostics.get("primary_secondary_step_equation")
+    if isinstance(direct, dict):
+        candidates.append(direct)
+    nested = diagnostics.get("primary_secondary_diagnostics")
+    if isinstance(nested, dict):
+        nested_equation = nested.get("primary_secondary_step_equation")
+        if isinstance(nested_equation, dict):
+            candidates.append(nested_equation)
+    for equation in candidates:
+        if (
+            str(equation.get("case_type", "")).strip().lower() == "ip"
+            and str(equation.get("solver_mode", "")).strip().lower() == "primary_secondary"
+        ):
+            return True
+    return False
+
+
+def _zero_contrast_primary_reference_used(diagnostics: dict | None) -> bool:
+    """Return True when outputs are a primary reference shortcut, not a FEM solve."""
+
+    diagnostics = dict(diagnostics or {})
+    candidates = []
+    nested = diagnostics.get("primary_secondary_diagnostics")
+    if isinstance(nested, dict):
+        candidates.append(nested)
+    if "contrast_is_zero" in diagnostics:
+        candidates.append(diagnostics)
+    for candidate in candidates:
+        if not bool(candidate.get("contrast_is_zero", False)):
+            continue
+        mode = str(candidate.get("primary_reference_mode", "")).strip().lower()
+        if mode in {"noip", "cole-cole", "ip", "empymod", "1d"}:
+            return True
+        if bool(candidate.get("secondary_solver_skipped", False)):
+            return True
+    return False
+
+
 def _augment_summary(case: ThreeComponentValidationInput, summary: dict) -> dict:
     values = dict(summary)
     values["case_type"] = case.case_type
     values["reference_type"] = case.reference_type
     values["magnetic_quantity"] = case.magnetic_quantity
     values["validation_scope"] = case.validation_scope
+    values["acceptance_error_metric"] = "ordinary_relative_error"
+    values["error_definition"] = "pointwise_relative_error = abs(pred - ref) / abs(ref)"
+    values["acceptance_note"] = (
+        "pass_5pct and final acceptance use ordinary_relative_error at each sample; "
+        "relative_error_with_floor and peak_normalized_error are diagnostics only."
+    )
     _bind_declared_magnetic_aliases(values, str(case.magnetic_quantity))
     if case.material is not None:
         terms = list(case.material.terms)
@@ -604,7 +672,9 @@ def _plot_errors(
     fig, axis = plt.subplots(figsize=(7, 4))
     for component in component_names:
         mask = rows["component"] == component
-        error_plot = np.maximum(rows["relative_error_with_floor"][mask], np.finfo(float).tiny)
+        error_plot = np.asarray(rows["ordinary_relative_error"][mask], dtype=float)
+        error_plot[~np.isfinite(error_plot)] = np.nan
+        error_plot = np.maximum(error_plot, np.finfo(float).tiny)
         axis.loglog(
             rows["time_obs"][mask],
             error_plot,
@@ -613,7 +683,7 @@ def _plot_errors(
         )
     axis.axhline(threshold, color="k", linestyle=":", linewidth=1.5, label=f"{threshold:g}")
     axis.set_xlabel("time_obs (s)")
-    axis.set_ylabel("relative_error_with_floor")
+    axis.set_ylabel("pointwise_relative_error")
     axis.grid(True, which="both", alpha=0.25)
     axis.legend(loc="best")
     fig.tight_layout()

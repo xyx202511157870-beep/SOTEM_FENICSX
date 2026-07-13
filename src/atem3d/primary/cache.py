@@ -20,6 +20,7 @@ class CachedPrimaryProvider(PrimaryFieldProvider):
     receiver_E: np.ndarray
     receiver_dBdt: np.ndarray
     Ep_dc_on_V: np.ndarray
+    receiver_H: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         times = np.asarray(self.times, dtype=float)
@@ -37,6 +38,16 @@ class CachedPrimaryProvider(PrimaryFieldProvider):
             receivers.shape[0],
             "receiver_E",
         )
+        receiver_H = (
+            np.zeros_like(receiver_E)
+            if self.receiver_H is None
+            else self._validate_field_table(
+                self.receiver_H,
+                times.size,
+                receivers.shape[0],
+                "receiver_H",
+            )
+        )
         receiver_dBdt = self._validate_field_table(
             self.receiver_dBdt,
             times.size,
@@ -52,6 +63,7 @@ class CachedPrimaryProvider(PrimaryFieldProvider):
         object.__setattr__(self, "receivers", receivers)
         object.__setattr__(self, "Ep_on_V", Ep_on_V)
         object.__setattr__(self, "receiver_E", receiver_E)
+        object.__setattr__(self, "receiver_H", receiver_H)
         object.__setattr__(self, "receiver_dBdt", receiver_dBdt)
         object.__setattr__(self, "Ep_dc_on_V", Ep_dc_on_V)
 
@@ -66,6 +78,10 @@ class CachedPrimaryProvider(PrimaryFieldProvider):
     def get_receiver_E(self, t: float, receivers) -> np.ndarray:
         self._require_same_points(receivers, self.receivers, "receivers")
         return self._interpolate(t, self.receiver_E)
+
+    def get_receiver_H(self, t: float, receivers) -> np.ndarray:
+        self._require_same_points(receivers, self.receivers, "receivers")
+        return self._interpolate(t, self.receiver_H)
 
     def get_receiver_dBdt(self, t: float, receivers) -> np.ndarray:
         self._require_same_points(receivers, self.receivers, "receivers")

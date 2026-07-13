@@ -30,6 +30,7 @@ class SecondaryReceiverProjection:
     receiver_locations: np.ndarray
     electric_sampler: SecondaryFieldSampler
     dbdt_sampler: SecondaryFieldSampler
+    magnetic_sampler: SecondaryFieldSampler | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -68,10 +69,27 @@ class SecondaryReceiverProjection:
             "secondary dBdt sampler output",
             self.receiver_locations.shape[0],
         )
+        magnetic = None
+        if any(component in _MAGNETIC_COMPONENTS for component in components):
+            if self.magnetic_sampler is None:
+                raise ValueError("secondary magnetic sampler is required for H receiver components")
+            magnetic = _as_receiver_vectors(
+                self.magnetic_sampler(
+                    state,
+                    np.asarray(Ep_new, dtype=float),
+                    float(time_value),
+                    float(dt),
+                    self.receiver_locations.copy(),
+                ),
+                "secondary magnetic sampler output",
+                self.receiver_locations.shape[0],
+            )
         columns = []
         for component in components:
             if component in _ELECTRIC_COMPONENTS:
                 columns.append(electric[:, _ELECTRIC_COMPONENTS[component]])
+            elif component in _MAGNETIC_COMPONENTS:
+                columns.append(magnetic[:, _MAGNETIC_COMPONENTS[component]])
             elif component in _DBDT_COMPONENTS:
                 columns.append(dbdt[:, _DBDT_COMPONENTS[component]])
             else:
@@ -80,6 +98,7 @@ class SecondaryReceiverProjection:
 
 
 _ELECTRIC_COMPONENTS = {"Ex": 0, "Ey": 1, "Ez": 2}
+_MAGNETIC_COMPONENTS = {"Hx": 0, "Hy": 1, "Hz": 2}
 _DBDT_COMPONENTS = {"dBxdt": 0, "dBydt": 1, "dBzdt": 2}
 
 

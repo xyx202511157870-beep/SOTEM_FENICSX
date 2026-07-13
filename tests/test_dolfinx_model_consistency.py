@@ -118,14 +118,22 @@ def test_model_consistency_rejects_nonpositive_material_parameters(field, value)
     [
         {"source_start": (-50.0, 0.0, 0.0)},
         {"source_end": (50.0, 0.0, 0.1)},
-        {"receiver": (500.0, 50.0, 0.0)},
+        {"receiver": (500.0, 50.0, 0.1)},
     ],
 )
 def test_model_consistency_rejects_air_or_interface_electrodes(kwargs):
     sp = _load_pipeline_module()
 
-    with pytest.raises(ValueError, match="below the z=0 earth surface"):
+    with pytest.raises(ValueError, match="z=0 earth surface"):
         sp.validate_model_consistency(sp.PipelineConfig(**kwargs))
+
+
+def test_model_consistency_allows_surface_receiver_for_survey_line():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(sp.PipelineConfig(receiver=(0.0, -300.0, 0.0)))
+
+    assert diagnostics["receiver_depth"] == 0.0
 
 
 @pytest.mark.parametrize(
@@ -454,6 +462,23 @@ def test_model_consistency_rejects_biot_rate_dbdt_without_biot_h_receiver():
     assert diagnostics["magnetic_dbdt_mode"] == "biot_rate"
 
 
+def test_model_consistency_accepts_primary_secondary_ampere_rate_dbdt():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(
+        sp.PipelineConfig(source_term_mode="primary_secondary", magnetic_dbdt_mode="ampere_rate")
+    )
+
+    assert diagnostics["magnetic_dbdt_mode"] == "ampere_rate"
+
+
+def test_model_consistency_rejects_ampere_rate_outside_primary_secondary():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="ampere_rate"):
+        sp.validate_model_consistency(sp.PipelineConfig(magnetic_dbdt_mode="ampere_rate"))
+
+
 def test_model_consistency_reports_nedelec_order():
     sp = _load_pipeline_module()
 
@@ -478,6 +503,33 @@ def test_bdf2_step_coefficients_reduce_to_constant_step_formula():
     assert coeffs["lhs"] == pytest.approx(0.75)
     assert coeffs["old"] == pytest.approx(1.0)
     assert coeffs["older"] == pytest.approx(-0.25)
+
+
+def test_h_time_discretization_uses_bdf2_after_history_is_available():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(formulation="h", time_method="bdf2", time_theta=1.0)
+
+    first = sp._h_time_discretization_coefficients(
+        config,
+        dt=2.0,
+        previous_dt=None,
+        has_older=False,
+    )
+    second = sp._h_time_discretization_coefficients(
+        config,
+        dt=2.0,
+        previous_dt=2.0,
+        has_older=True,
+    )
+
+    assert first["method"] == "theta"
+    assert first["lhs_mass"] == pytest.approx(0.5)
+    assert first["old_mass"] == pytest.approx(0.5)
+    assert first["older_mass"] == pytest.approx(0.0)
+    assert second["method"] == "bdf2"
+    assert second["lhs_mass"] == pytest.approx(0.75)
+    assert second["old_mass"] == pytest.approx(1.0)
+    assert second["older_mass"] == pytest.approx(-0.25)
 
 
 def test_model_consistency_reports_bdf2_time_method():
@@ -552,6 +604,48 @@ def test_model_consistency_accepts_mean_receiver_evaluation_mode():
     diagnostics = sp.validate_model_consistency(config)
 
     assert diagnostics["receiver_evaluation_mode"] == "mean"
+
+
+def test_model_consistency_accepts_local_lsq_receiver_evaluation_mode():
+    sp = _load_pipeline_module()
+
+    config = sp.PipelineConfig(
+        receiver_evaluation_mode="local_lsq",
+        receiver_local_lsq_radius_factor=1.25,
+        receiver_local_lsq_max_samples=96,
+    )
+    diagnostics = sp.validate_model_consistency(config)
+
+    assert diagnostics["receiver_evaluation_mode"] == "local_lsq"
+    assert diagnostics["receiver_local_lsq_radius_factor"] == 1.25
+    assert diagnostics["receiver_local_lsq_max_samples"] == 96
+
+
+def test_model_consistency_accepts_auto_local_lsq_max_samples():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(
+        sp.PipelineConfig(
+            magnetic_dbdt_evaluation_mode="local_lsq",
+            receiver_local_lsq_max_samples=0,
+        )
+    )
+
+    assert diagnostics["receiver_local_lsq_max_samples"] == 0
+
+
+def test_model_consistency_rejects_nonpositive_local_lsq_radius_factor():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="receiver_local_lsq_radius_factor"):
+        sp.validate_model_consistency(sp.PipelineConfig(receiver_local_lsq_radius_factor=0.0))
+
+
+def test_model_consistency_rejects_negative_local_lsq_max_samples():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="receiver_local_lsq_max_samples"):
+        sp.validate_model_consistency(sp.PipelineConfig(receiver_local_lsq_max_samples=-1))
 
 
 def test_model_consistency_reports_empymod_reference_settings():

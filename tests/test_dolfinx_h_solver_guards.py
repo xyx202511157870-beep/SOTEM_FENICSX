@@ -59,3 +59,62 @@ def test_h_solver_guard_rejects_nonfinite_solution_after_direct_solve():
             rhs_norm=1.0,
             config=sp.PipelineConfig(),
         )
+
+
+def test_h_static_initial_mass_scale_has_nonzero_gauge_floor():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        x_extent=500.0,
+        y_extent=500.0,
+        air_height=300.0,
+        earth_depth=500.0,
+        t_max=1.0e-4,
+        ramp_off_time=1.0e-5,
+        rho_earth=100.0,
+        rho_air=1.0e8,
+    )
+
+    scale = sp._h_static_initial_mass_scale(config)
+
+    assert scale >= 2.0e-3
+    assert scale < 1.0e-2
+
+
+def test_h_solver_configuration_uses_ams_not_lu(monkeypatch):
+    sp = _load_pipeline_module()
+    calls = []
+
+    def fake_ams(A, spaces, config):
+        calls.append(("ams", A, spaces, config))
+        return {"ksp": "ams"}
+
+    def fake_lu(A, *, comm=None):
+        raise AssertionError("H-form production solver should not use LU")
+
+    monkeypatch.setattr(sp, "configure_ams_solver", fake_ams)
+    monkeypatch.setattr(sp, "configure_lu_solver", fake_lu)
+    config = sp.PipelineConfig(formulation="h")
+    spaces = {"V": object(), "S": object()}
+
+    context = sp._configure_h_solver("matrix", spaces, config)
+
+    assert context == {"ksp": "ams"}
+    assert calls == [("ams", "matrix", spaces, config)]
+
+
+def test_h_step_solver_reconfigures_ams_for_new_matrix(monkeypatch):
+    sp = _load_pipeline_module()
+    calls = []
+
+    def fake_ams(A, spaces, config):
+        calls.append((A, spaces, config))
+        return {"ksp": f"ams-{A}"}
+
+    monkeypatch.setattr(sp, "configure_ams_solver", fake_ams)
+    config = sp.PipelineConfig(formulation="h")
+    spaces = {"V": object(), "S": object()}
+
+    context = sp._configure_h_step_solver({"ksp": "old"}, "new-matrix", spaces, config)
+
+    assert context == {"ksp": "ams-new-matrix"}
+    assert calls == [("new-matrix", spaces, config)]

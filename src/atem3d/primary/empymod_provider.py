@@ -43,6 +43,10 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
         points = as_points(receivers, "receivers")
         return self._receiver_components(t, points, ["Ex", "Ey", "Ez"])
 
+    def get_receiver_H(self, t: float, receivers) -> np.ndarray:
+        points = as_points(receivers, "receivers")
+        return self._receiver_components(t, points, ["Hx", "Hy", "Hz"])
+
     def get_receiver_dBdt(self, t: float, receivers) -> np.ndarray:
         points = as_points(receivers, "receivers")
         return self._receiver_components(t, points, ["dBxdt", "dBydt", "dBzdt"])
@@ -57,6 +61,7 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
 
         from atem3d.empymod_compare import EmpymodSurvey
 
+        eval_times, weights = _ramp_average_quadrature(float(t), self.config)
         receiver_tuples = [tuple(float(value) for value in row) for row in receivers]
         flat = [
             (location, component)
@@ -68,7 +73,7 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
             source_end=self._source_end(),
             receiver_locations=receiver_tuples,
             components=components,
-            times=np.array([float(t)], dtype=float),
+            times=eval_times,
             depths=[float(value) for value in self.config["depths"]],
             resistivities=_resistivity_config(self.config["resistivities"]),
             strength=float(self.config.get("strength", self.config.get("current", 1.0))),
@@ -85,9 +90,11 @@ class EmpymodPrimaryProvider(PrimaryFieldProvider):
             )
         else:
             values = np.asarray(runner(survey, **(self.empymod_kwargs or {})), dtype=float)
-        if values.shape != (1, receivers.shape[0] * len(components)):
+        expected_shape = (eval_times.size, receivers.shape[0] * len(components))
+        if values.shape != expected_shape:
             raise ValueError("reference_runner returned an unexpected receiver table shape")
-        return values.reshape(receivers.shape[0], len(components))
+        averaged = np.asarray(weights, dtype=float) @ values
+        return averaged.reshape(receivers.shape[0], len(components))
 
     def _source_start(self) -> tuple[float, float, float]:
         if "source_start" in self.config:
@@ -104,3 +111,26 @@ def _resistivity_config(values):
     if isinstance(values, dict):
         return dict(values)
     return list(values)
+
+
+def _ramp_average_quadrature(t: float, config: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    ramp_time = float(config.get("ramp_off_time", 0.0) or 0.0)
+    if ramp_time <= 0.0:
+        return np.asarray([float(t)], dtype=float), np.asarray([1.0], dtype=float)
+    points = int(config.get("ramp_average_quadrature_points", 9) or 9)
+    points = max(1, points)
+    window = str(config.get("time_origin", "after_ramp")).strip().lower()
+    if window == "after_ramp":
+        a = float(t)
+        b = float(t) + ramp_time
+    elif window == "ramp_start":
+        a = max(np.finfo(float).tiny, float(t) - ramp_time)
+        b = max(a, float(t))
+    else:
+        raise ValueError("time_origin must be 'after_ramp' or 'ramp_start'")
+    if b <= a or points == 1:
+        return np.asarray([float(t)], dtype=float), np.asarray([1.0], dtype=float)
+    nodes, weights = np.polynomial.legendre.leggauss(points)
+    times = 0.5 * (b - a) * nodes + 0.5 * (b + a)
+    normalized_weights = 0.5 * weights
+    return times.astype(float), normalized_weights.astype(float)

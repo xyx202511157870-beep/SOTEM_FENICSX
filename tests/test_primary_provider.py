@@ -12,6 +12,7 @@ from atem3d.primary import (
     ZeroPrimaryProvider,
     analytic_halfspace_dc_runner,
     analytic_halfspace_grounded_wire_dc_electric_field,
+    empymod_quasistatic_dc_runner,
     make_tabulated_vector_assembler,
 )
 
@@ -175,6 +176,21 @@ def test_empymod_primary_provider_get_receiver_dBdt_uses_reference_runner():
     np.testing.assert_allclose(values, [[7.0, 8.0, 9.0]])
 
 
+def test_empymod_primary_provider_get_receiver_H_uses_reference_runner():
+    def fake_runner(survey, **kwargs):
+        assert survey.components == ["Hx", "Hy", "Hz"]
+        return np.array([[4.0, 5.0, 6.0]])
+
+    provider = EmpymodPrimaryProvider(
+        config=_empymod_provider_config(),
+        reference_runner=fake_runner,
+    )
+
+    values = provider.get_receiver_H(1.0e-3, np.array([[0.0, 10.0, -0.5]]))
+
+    np.testing.assert_allclose(values, [[4.0, 5.0, 6.0]])
+
+
 def test_empymod_primary_provider_get_Ep_on_V_uses_reference_runner():
     seen = {}
 
@@ -234,6 +250,34 @@ def test_empymod_primary_provider_get_Ep_dc_on_V_uses_default_halfspace_runner()
     values = provider.get_Ep_dc_on_V(points)
 
     np.testing.assert_allclose(values, analytic_halfspace_dc_runner(points, config=config))
+
+
+def test_empymod_quasistatic_dc_runner_uses_low_frequency_empymod_reference(monkeypatch):
+    from atem3d import empymod_compare
+
+    seen = {}
+
+    def fake_reference(survey, **kwargs):
+        seen["survey"] = survey
+        seen["kwargs"] = kwargs
+        return np.array([[0.1, 0.2, 0.3, 1.0, 2.0, 3.0]])
+
+    monkeypatch.setattr(empymod_compare, "run_empymod_reference", fake_reference)
+    config = _empymod_provider_config()
+    points = np.array([[0.0, 10.0, -0.5], [1.0, 11.0, -0.5]])
+
+    values = empymod_quasistatic_dc_runner(
+        points,
+        config=config,
+        frequency=1.0e-9,
+        empymod_kwargs={"srcpts": 11},
+    )
+
+    np.testing.assert_allclose(values, [[0.1, 0.2, 0.3], [1.0, 2.0, 3.0]])
+    assert seen["survey"].components == ["Ex", "Ey", "Ez"]
+    assert seen["survey"].signal is None
+    np.testing.assert_allclose(seen["survey"].times, [1.0e-9])
+    assert seen["kwargs"] == {"srcpts": 11}
 
 
 def test_analytic_halfspace_grounded_wire_dc_field_matches_endpoint_formula():
