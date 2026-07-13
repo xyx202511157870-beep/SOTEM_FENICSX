@@ -167,6 +167,15 @@ def _set_repeat_table_header(row: Any) -> None:
     marker.set(qn("w:val"), "true")
 
 
+def _set_row_cant_split(row: Any) -> None:
+    tr_pr = row._tr.get_or_add_trPr()
+    marker = tr_pr.find(qn("w:cantSplit"))
+    if marker is None:
+        marker = OxmlElement("w:cantSplit")
+        tr_pr.append(marker)
+    marker.set(qn("w:val"), "true")
+
+
 def _column_widths(column_count: int, weights: Sequence[float] | None = None) -> list[int]:
     if not weights:
         weights = [1.0] * column_count
@@ -209,6 +218,7 @@ def _set_table_geometry(table: Any, widths: Sequence[int]) -> None:
         grid.append(grid_col)
 
     for row in table.rows:
+        _set_row_cant_split(row)
         for index, cell in enumerate(row.cells):
             tc_w = cell._tc.get_or_add_tcPr().get_or_add_tcW()
             tc_w.set(qn("w:w"), str(widths[index]))
@@ -442,7 +452,12 @@ def _add_git_timeline(document: DocumentObject,
         row = table.add_row()
         values = (
             str(event.get("date") or event.get("authored_at") or ""),
-            str(event.get("short_hash") or event.get("hash") or "")[:10],
+            str(
+                event.get("short_hash")
+                or event.get("hash")
+                or event.get("commit")
+                or ""
+            )[:10],
             str(event.get("subject") or event.get("message") or ""),
         )
         for index, value in enumerate(values):
@@ -523,13 +538,15 @@ def _add_contents(document: DocumentObject, chapter_lines: Sequence[str]) -> Non
         if line.startswith("## "):
             paragraph = document.add_paragraph()
             paragraph.paragraph_format.left_indent = Mm(0)
-            paragraph.paragraph_format.space_after = Pt(2)
-            _add_inline_text(paragraph, line[3:].strip(), size=9.5, color=DEEP_ACCENT_COLOR)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = 0.95
+            _add_inline_text(paragraph, line[3:].strip(), size=8.8, color=DEEP_ACCENT_COLOR)
         elif line.startswith("### "):
             paragraph = document.add_paragraph()
             paragraph.paragraph_format.left_indent = Mm(6)
-            paragraph.paragraph_format.space_after = Pt(1)
-            _add_inline_text(paragraph, line[4:].strip(), size=8.5, color=MUTED_COLOR)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = 0.95
+            _add_inline_text(paragraph, line[4:].strip(), size=7.4, color=MUTED_COLOR)
     document.add_page_break()
 
 
@@ -557,7 +574,10 @@ def _render_chapters(document: DocumentObject, lines: Sequence[str],
         elif line.startswith("### "):
             document.add_heading(line[4:].strip(), level=3)
         elif line.startswith("## "):
-            document.add_heading(line[3:].strip(), level=2)
+            heading_text = line[3:].strip()
+            heading = document.add_heading(heading_text, level=2)
+            if re.match(r"附录\s+[ABC]", heading_text):
+                heading.paragraph_format.page_break_before = True
         elif line.startswith("# "):
             document.add_heading(line[2:].strip(), level=1)
         elif line.startswith("- "):

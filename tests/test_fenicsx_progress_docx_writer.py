@@ -118,6 +118,10 @@ def test_markdown_table_has_explicit_geometry_and_repeating_header(
         table_width.get(qn("w:w"))
     )
     assert table.rows[0]._tr.find(qn("w:trPr")).find(qn("w:tblHeader")) is not None
+    assert all(
+        row._tr.find(qn("w:trPr")).find(qn("w:cantSplit")) is not None
+        for row in table.rows
+    )
 
 
 def test_figure_atlas_embeds_appendix_images_four_up(tmp_path: Path) -> None:
@@ -140,3 +144,63 @@ def test_figure_atlas_embeds_appendix_images_four_up(tmp_path: Path) -> None:
     document = Document(output)
     assert len(document.inline_shapes) == 4
     assert any(len(table.rows) == 2 and len(table.columns) == 2 for table in document.tables)
+
+
+def test_major_appendix_heading_starts_on_a_new_page(tmp_path: Path) -> None:
+    output = tmp_path / "appendix.docx"
+
+    build_docx(
+        "# 报告\n## 16. 当前评价\n正文。\n## 附录 B：调试效果图谱",
+        {"figures": []},
+        project_root=tmp_path,
+        output_path=output,
+    )
+
+    document = Document(output)
+    appendix = next(
+        paragraph for paragraph in document.paragraphs
+        if paragraph.text.startswith("附录 B") and paragraph.style.name == "Heading 2"
+    )
+    assert appendix.paragraph_format.page_break_before is True
+
+
+def test_static_contents_uses_zero_spacing_between_entries(tmp_path: Path) -> None:
+    output = tmp_path / "contents.docx"
+
+    build_docx(
+        "# 报告\n## 1. 第一章\n### 1.1 小节\n正文。",
+        {"figures": []},
+        project_root=tmp_path,
+        output_path=output,
+    )
+
+    document = Document(output)
+    contents_index = next(
+        index for index, paragraph in enumerate(document.paragraphs)
+        if paragraph.text == "目录"
+    )
+    entries = document.paragraphs[contents_index + 1:contents_index + 3]
+    assert [paragraph.text for paragraph in entries] == ["1. 第一章", "1.1 小节"]
+    assert all(paragraph.paragraph_format.space_after.pt == 0 for paragraph in entries)
+
+
+def test_git_timeline_renders_commit_field(tmp_path: Path) -> None:
+    output = tmp_path / "timeline.docx"
+
+    build_docx(
+        "# Report\n## Appendix A: Timeline\n[[GIT_TIMELINE]]",
+        {"figures": []},
+        project_root=tmp_path,
+        output_path=output,
+        timeline=[
+            {
+                "commit": "30a54d0d4b8c26273783b880a570d7740b10bb4f",
+                "date": "2026-07-13T13:03:10+08:00",
+                "subject": "docs: plan FEniCSx progress report",
+            }
+        ],
+    )
+
+    document = Document(output)
+    timeline_table = document.tables[0]
+    assert timeline_table.cell(1, 1).text == "30a54d0d4b"
