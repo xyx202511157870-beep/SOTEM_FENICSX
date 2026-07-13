@@ -378,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.study == "paper-baseline"
                 else "layered_resistive_offset100"
             ),
+            resource_contract=memory_contract,
         )
         write_convergence_reports(args.output_root, summary)
         print(f"CONVERGENCE_COMPLETE={summary['complete_axis_count']}")

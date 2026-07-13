@@ -765,6 +765,7 @@ def write_convergence_reports(output_dir: Path, summary: dict) -> None:
         acceptance = {
             "study_id": summary.get("study_id"),
             "coordinate_convention": summary.get("coordinate_convention"),
+            "resource_contract": summary.get("resource_contract"),
             "accepted_for_paper_figures": bool(summary.get("study_passed", False)),
             "candidate_baseline": summary["candidate_baseline"],
             "axis_gates": [
@@ -816,6 +817,13 @@ def write_convergence_reports(output_dir: Path, summary: dict) -> None:
         "| Axis | Comparison | N | Median (%) | RMS (%) | Maximum (%) | Axis pass |",
         "| --- | --- | ---: | ---: | ---: | ---: | --- |",
     ]
+    resource_contract = summary.get("resource_contract")
+    if isinstance(resource_contract, dict):
+        markdown[4:4] = [
+            f"- Total memory contract: {resource_contract['total_memory_gb']:g} GB",
+            f"- Operating-system reserve: {resource_contract['reserve_memory_gb']:g} GB",
+            f"- Solver memory limit: {resource_contract['solver_memory_limit_gb']:g} GB",
+        ]
     for row in rows:
         markdown.append(
             "| {axis} | {comparison_id} | {sample_count} | "
@@ -909,6 +917,7 @@ def evaluate_convergence_study(
     *,
     selected_axes: tuple[str, ...] = ("time", "mesh", "domain"),
     study_id: str = "layered_resistive_offset100",
+    resource_contract: PublicationMemoryContract | None = None,
 ) -> dict:
     axis_summaries: list[dict] = []
     for axis_name in selected_axes:
@@ -1037,6 +1046,8 @@ def evaluate_convergence_study(
         "passed_axis_count": passed_count,
         "axes": axis_summaries,
     }
+    if resource_contract is not None:
+        result["resource_contract"] = resource_contract.as_dict()
     if study_id == "layered_resistive_offset100_stage2":
         baseline = levels["time"][1]
         baseline_dir = resolved_run_dir(baseline)

@@ -111,6 +111,61 @@ def _assert_metrics(label: str, actual: dict, expected: dict) -> None:
             raise AssertionError(f"{label} publication gate mismatch")
 
 
+def _audit_resource_contract(summary: dict, axes: dict[str, dict]) -> dict:
+    contract = summary.get("resource_contract")
+    if not isinstance(contract, dict):
+        raise AssertionError("summary resource contract missing")
+    keys = (
+        "total_memory_gb",
+        "reserve_memory_gb",
+        "solver_memory_limit_gb",
+    )
+    try:
+        expected = {key: float(contract[key]) for key in keys}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AssertionError("summary resource contract invalid") from exc
+    if not all(math.isfinite(value) for value in expected.values()):
+        raise AssertionError("summary resource contract is nonfinite")
+
+    baseline_dir = Path(summary["candidate_baseline"]["run_dir"])
+    large_dir = next(
+        Path(level["run_dir"])
+        for level in axes["domain"]["levels"]
+        if level["level_id"] == "large"
+    )
+    checked: list[str] = []
+    for run_dir in (baseline_dir, large_dir):
+        path = run_dir / "preflight.json"
+        if not path.is_file():
+            raise AssertionError(f"resource preflight missing: {path}")
+        preflight = json.loads(path.read_text(encoding="utf-8"))
+        if preflight.get("passed") is not True:
+            raise AssertionError(f"resource preflight did not pass: {path}")
+        for key, expected_value in expected.items():
+            try:
+                actual_value = float(preflight[key])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AssertionError(
+                    f"resource contract missing or invalid: {path} {key}"
+                ) from exc
+            if actual_value != expected_value:
+                raise AssertionError(f"resource contract mismatch: {path} {key}")
+        estimate = float(preflight.get("estimated_memory_gb", math.nan))
+        solver_limit = expected["solver_memory_limit_gb"]
+        if (
+            not math.isfinite(estimate)
+            or estimate > solver_limit
+            or float(preflight.get("memory_limit_gb", math.nan)) != solver_limit
+        ):
+            raise AssertionError(f"resource estimate exceeds contract: {path}")
+        checked.append(str(path))
+    return {
+        "resource_contract_verified": True,
+        "resource_preflight_count": len(checked),
+        "resource_preflights": checked,
+    }
+
+
 def audit(summary_path: Path) -> dict:
     summary = json.loads(Path(summary_path).read_text(encoding="utf-8"))
     comparison_pairs = {
@@ -129,6 +184,7 @@ def audit(summary_path: Path) -> dict:
     }
     comparisons: list[dict] = []
     axes = {axis["axis"]: axis for axis in summary["axes"]}
+    resource_audit = _audit_resource_contract(summary, axes)
     for axis_name, pairs in comparison_pairs.items():
         axis = axes[axis_name]
         run_dirs = {
@@ -178,6 +234,7 @@ def audit(summary_path: Path) -> dict:
         "comparisons": comparisons,
         "candidate_baseline_external_gate": baseline_actual,
         "domain_large_external_gate": large_actual,
+        **resource_audit,
     }
 
 

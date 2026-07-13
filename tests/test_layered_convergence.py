@@ -768,6 +768,19 @@ def _write_complete_convergence_run(
         '{"event":"forward_done","seconds":60.0}\n',
         encoding="utf-8",
     )
+    (run_dir / "preflight.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "estimated_memory_gb": 1.0,
+                "memory_limit_gb": 14.0,
+                "total_memory_gb": 20.0,
+                "reserve_memory_gb": 6.0,
+                "solver_memory_limit_gb": 14.0,
+            }
+        ),
+        encoding="utf-8",
+    )
     with (run_dir / "errors.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -830,9 +843,15 @@ def test_stage_two_summary_reports_baseline_and_large_empymod_gates(tmp_path):
     summary = layered_convergence.evaluate_convergence_study(
         levels,
         study_id="layered_resistive_offset100_stage2",
+        resource_contract=layered_convergence.PublicationMemoryContract(),
     )
 
     assert summary["study_passed"] is True
+    assert summary["resource_contract"] == {
+        "total_memory_gb": 20.0,
+        "reserve_memory_gb": 6.0,
+        "solver_memory_limit_gb": 14.0,
+    }
     assert summary["candidate_baseline"]["run_id"] == (
         "baseline_12km_dt005_mesh8_6"
     )
@@ -852,6 +871,7 @@ def test_baseline_is_rejected_when_any_stage_two_axis_fails(tmp_path):
     summary = layered_convergence.evaluate_convergence_study(
         levels,
         study_id="layered_resistive_offset100_stage2",
+        resource_contract=layered_convergence.PublicationMemoryContract(),
     )
 
     assert summary["candidate_baseline"]["accepted_for_paper_figures"] is False
@@ -865,6 +885,7 @@ def test_stage_two_report_writes_baseline_acceptance_record(tmp_path):
     summary = layered_convergence.evaluate_convergence_study(
         levels,
         study_id="layered_resistive_offset100_stage2",
+        resource_contract=layered_convergence.PublicationMemoryContract(),
     )
     report_dir = tmp_path / "report"
 
@@ -874,6 +895,7 @@ def test_stage_two_report_writes_baseline_acceptance_record(tmp_path):
         (report_dir / "baseline_acceptance.json").read_text(encoding="utf-8")
     )
     assert acceptance["accepted_for_paper_figures"] is True
+    assert acceptance["resource_contract"]["solver_memory_limit_gb"] == 14.0
     assert acceptance["candidate_baseline"]["mesh_sha256"]
     assert acceptance["candidate_baseline"]["ksp_output_solve_count"] == 25
     assert acceptance["candidate_baseline"]["internal_step_count"] == 100
@@ -890,6 +912,7 @@ def test_independent_audit_recomputes_stage_two_reports_from_disk(tmp_path):
     summary = layered_convergence.evaluate_convergence_study(
         levels,
         study_id="layered_resistive_offset100_stage2",
+        resource_contract=layered_convergence.PublicationMemoryContract(),
     )
     report_dir = tmp_path / "report"
     write_convergence_reports(report_dir, summary)
@@ -915,6 +938,8 @@ def test_independent_audit_recomputes_stage_two_reports_from_disk(tmp_path):
     assert audit["verified"] is True
     assert audit["comparison_count"] == 6
     assert audit["external_gate_count"] == 2
+    assert audit["resource_contract_verified"] is True
+    assert audit["resource_preflight_count"] == 2
 
 
 def _synthetic_report_summary() -> dict:
