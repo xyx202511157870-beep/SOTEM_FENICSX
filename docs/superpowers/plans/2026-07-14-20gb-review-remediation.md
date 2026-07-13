@@ -55,6 +55,75 @@ Expected: all tests pass.
 git commit -m "test: track layered publication benchmark"
 ```
 
+### Task 1A: Track The Solver Baseline Used By The Completed Runs
+
+**Files:**
+- Modify: `dolfinx/sotem_pipeline.py`
+- Modify: `src/atem3d/empymod_compare.py`
+- Modify: `src/atem3d/metrics.py`
+- Modify: `src/atem3d/validation_3comp.py`
+- Modify: `src/atem3d/primary/__init__.py`
+- Modify: `src/atem3d/primary/base.py`
+- Modify: `src/atem3d/primary/cache.py`
+- Modify: `src/atem3d/primary/dc.py`
+- Modify: `src/atem3d/primary/empymod_provider.py`
+- Modify: `src/atem3d/primary/zero.py`
+- Modify: `src/atem3d/solvers/primary_secondary_forward.py`
+- Modify: `src/atem3d/solvers/receiver_projection.py`
+- Test: focused modified pipeline/primary/validation test files
+- Create test: generated layered command to real parser/config contract
+
+- [ ] **Step 1: Freeze the exact source scope from the working main workspace**
+
+Stage only the source files listed above. Do not include `.gitignore`, README,
+`dolfinx/current_task_runs/**`, COMSOL assets, dam-model assets, reports, legacy
+scripts, or unrelated CLI/final-acceptance/polarization changes.
+
+- [ ] **Step 2: Run the existing focused solver baseline tests**
+
+Run the modified tests for schedule construction, E-solver matrix/preconditioner
+refresh, partial/checkpoint resume, primary providers, primary-secondary forward
+operation, receiver projection, empymod comparison, error floors, model
+consistency, mesh controls, and validation artifacts. Fix no unrelated failures;
+if a failure reveals a missing source dependency, add only that dependency with
+an explicit reason.
+
+- [ ] **Step 3: Commit the coherent solver source and tests separately**
+
+```powershell
+git commit -m "feat: track current FEniCSx solver baseline"
+```
+
+Cherry-pick this commit into the isolated remediation worktree before continuing.
+
+- [ ] **Step 4: Write a failing generator-to-parser contract test**
+
+Build the stage-two standard command with
+`build_pipeline_command_arguments()`. Load the real `sotem_pipeline.py`, wrap
+`validate_model_consistency` to capture the resulting `PipelineConfig`, replace
+only `check_environment` with a no-op, and call `main()` with
+`--check-env-only --no-install`. Assert successful parsing and exact propagation
+of far-field mesh size, mesh reuse, all three internal-step controls, KSP type,
+memory limit, and checkpoint interval where applicable.
+
+- [ ] **Step 5: Run the test and verify it fails on the old clean baseline**
+
+Expected before the solver-baseline commit: argparse rejects the generated
+options. Expected after the baseline commit: the parser accepts them and the
+captured configuration matches the generated command.
+
+- [ ] **Step 6: Commit the boundary test**
+
+```powershell
+git commit -m "test: verify layered command pipeline contract"
+```
+
+- [ ] **Step 7: Independently review the solver baseline**
+
+Require a scope/spec review and a code-quality review of the full baseline diff.
+Resolve every Critical or Important finding before returning to the 20 GB resource
+remediation tasks.
+
 ### Task 2: Enforce The Hard Ceiling And One Effective Solver Limit
 
 **Files:**
