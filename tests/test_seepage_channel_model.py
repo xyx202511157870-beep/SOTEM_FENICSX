@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from atem3d.seepage_channel_model import ChannelBox, MODEL
+from atem3d.seepage_channel_model import ChannelBox, MODEL, benchmark_model
 
 
 def test_approved_benchmark_contract() -> None:
@@ -47,3 +47,20 @@ def test_channel_requires_underground_x_parallel_geometry() -> None:
         ChannelBox(center=(0.0, 0.0, 4.0), size=(60.0, 10.0, 10.0))
     with pytest.raises(ValueError, match="parallel"):
         ChannelBox(center=(0.0, 0.0, 20.0), size=(10.0, 60.0, 10.0))
+
+
+def test_thin_60x1x1_benchmark_changes_only_channel_size() -> None:
+    thin = benchmark_model("thin_60x1x1")
+
+    assert thin.channel.center == MODEL.channel.center == (0.0, 0.0, 20.0)
+    assert thin.channel.size == (60.0, 1.0, 1.0)
+    assert thin.channel.bounds == ((-30.0, 30.0), (-0.5, 0.5), (19.5, 20.5))
+    assert thin.channel.to_z_up_bounds() == (
+        (-30.0, 30.0),
+        (-0.5, 0.5),
+        (-20.5, -19.5),
+    )
+    assert thin.channel.volume_m3 == pytest.approx(60.0)
+    assert thin.source_endpoints == MODEL.source_endpoints
+    assert thin.receiver_locations == MODEL.receiver_locations
+    np.testing.assert_allclose(thin.times, MODEL.times)
