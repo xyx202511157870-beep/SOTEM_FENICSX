@@ -81,3 +81,38 @@ def test_overlapping_receiver_refinement_points_share_one_geometry_tag() -> None
     ]
     assert len(referenced) > len(point_sizes)
     assert set(referenced) == set(point_sizes)
+
+
+class _FakeOcc:
+    def __init__(self) -> None:
+        self.boxes = []
+        self.fragments = []
+
+    def addBox(self, *args):
+        self.boxes.append(tuple(float(value) for value in args))
+        return len(self.boxes)
+
+    def fragment(self, objects, tools):
+        self.fragments.append((list(objects), list(tools)))
+
+
+def test_thin_conductivity_box_is_imprinted_into_occ_domain() -> None:
+    module = load_pipeline_module()
+    occ = _FakeOcc()
+    config = module.PipelineConfig(
+        x_extent=3000.0,
+        y_extent=3000.0,
+        air_height=600.0,
+        earth_depth=6000.0,
+        conductivity_box_name="thin_channel",
+        conductivity_box_bounds=((-30.0, 30.0), (-0.5, 0.5), (-20.5, -19.5)),
+        conductivity_box_sigma=1.0,
+        conductivity_box_mesh_size=0.25,
+    )
+
+    module._add_air_earth_domain_with_conductivity_imprint(occ, config)
+
+    assert occ.boxes[-1] == (-30.0, -0.5, -20.5, 60.0, 1.0, 1.0)
+    objects, tools = occ.fragments[-1]
+    assert (3, len(occ.boxes)) in tools
+    assert len(objects) == 2

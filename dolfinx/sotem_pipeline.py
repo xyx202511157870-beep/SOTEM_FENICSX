@@ -1496,6 +1496,54 @@ def _mesh_memory_preflight_for_path(config: PipelineConfig, msh_path: Path) -> d
         return None
 
 
+def _add_air_earth_domain_with_conductivity_imprint(occ, config: PipelineConfig):
+    """Build the layered domain and imprint an enabled conductivity box."""
+
+    x0, y0 = -config.x_extent, -config.y_extent
+    air = occ.addBox(
+        x0,
+        y0,
+        0.0,
+        2.0 * config.x_extent,
+        2.0 * config.y_extent,
+        config.air_height,
+    )
+    layer_depths, _layer_resistivities = _normalise_layer_model(config)
+    earth_depth_breaks = [0.0, *layer_depths, float(config.earth_depth)]
+    earth_boxes = [
+        occ.addBox(
+            x0,
+            y0,
+            -bottom_depth,
+            2.0 * config.x_extent,
+            2.0 * config.y_extent,
+            bottom_depth - top_depth,
+        )
+        for top_depth, bottom_depth in zip(
+            earth_depth_breaks[:-1], earth_depth_breaks[1:]
+        )
+    ]
+
+    conductivity_box_audit = _conductivity_box_config_audit(config)
+    if conductivity_box_audit["enabled"]:
+        bounds = conductivity_box_audit["bounds"]
+        conductivity_box = occ.addBox(
+            bounds[0][0],
+            bounds[1][0],
+            bounds[2][0],
+            bounds[0][1] - bounds[0][0],
+            bounds[1][1] - bounds[1][0],
+            bounds[2][1] - bounds[2][0],
+        )
+        occ.fragment(
+            [(3, air), *((3, earth) for earth in earth_boxes)],
+            [(3, conductivity_box)],
+        )
+    else:
+        occ.fragment([(3, air)], [(3, earth) for earth in earth_boxes])
+    return air, earth_boxes
+
+
 def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
     """Return extra embedded points that keep receiver cells locally small."""
 
@@ -1704,22 +1752,8 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         occ = gmsh.model.occ
         x0, x1 = -config.x_extent, config.x_extent
         y0, y1 = -config.y_extent, config.y_extent
-        air = occ.addBox(x0, y0, 0.0, 2.0 * config.x_extent, 2.0 * config.y_extent, config.air_height)
+        _add_air_earth_domain_with_conductivity_imprint(occ, config)
         layer_depths, _layer_resistivities = _normalise_layer_model(config)
-        earth_depth_breaks = [0.0, *layer_depths, float(config.earth_depth)]
-        earth_boxes: list[int] = []
-        for top_depth, bottom_depth in zip(earth_depth_breaks[:-1], earth_depth_breaks[1:]):
-            earth_boxes.append(
-                occ.addBox(
-                    x0,
-                    y0,
-                    -bottom_depth,
-                    2.0 * config.x_extent,
-                    2.0 * config.y_extent,
-                    bottom_depth - top_depth,
-                )
-            )
-        occ.fragment([(3, air)], [(3, earth) for earth in earth_boxes])
 
         p0 = occ.addPoint(*config.source_start, 5.0)
         p1 = occ.addPoint(*config.source_end, 5.0)
