@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import yaml
 from discretize import TensorMesh
 
 from atem3d.config import _build_ip_model_properties
@@ -59,3 +60,32 @@ def test_box_resolution_fails_closed() -> None:
                 ],
             },
         )
+
+
+def test_thin_channel_configs_align_four_cells_across_one_metre() -> None:
+    paths = (
+        "examples/seepage_channel_100m_5rx_simpeg_thin_background.yaml",
+        "examples/seepage_channel_100m_5rx_simpeg_thin_channel.yaml",
+    )
+    configs = []
+    for path in paths:
+        with open(path, encoding="utf-8") as stream:
+            configs.append(yaml.safe_load(stream))
+    for config in configs:
+        mesh = TensorMesh(
+            [
+                [tuple(item) for item in config["mesh"][axis]]
+                for axis in ("hx", "hy", "hz")
+            ],
+            x0=config["mesh"]["origin"],
+        )
+        for nodes, bounds in (
+            (mesh.nodes_y, (-0.5, 0.5)),
+            (mesh.nodes_z, (-20.5, -19.5)),
+        ):
+            selected = nodes[(nodes >= bounds[0] - 1e-10) & (nodes <= bounds[1] + 1e-10)]
+            np.testing.assert_allclose(selected, np.linspace(*bounds, 5), atol=1e-10)
+        assert mesh.n_cells == 403_200
+    box = configs[1]["model"]["conductivity_boxes"][0]
+    assert box["bounds"] == [[-30.0, 30.0], [-0.5, 0.5], [-20.5, -19.5]]
+    assert box["minimum_cells_per_cross_section"] == 4
