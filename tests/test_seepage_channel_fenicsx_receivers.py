@@ -16,6 +16,16 @@ def load_full_domain_module():
     return module
 
 
+def load_pipeline_module():
+    path = Path("dolfinx/sotem_pipeline.py")
+    spec = importlib.util.spec_from_file_location("seepage_checkpoint_pipeline", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_five_receiver_set_calls_evaluator_five_times() -> None:
     module = load_full_domain_module()
     calls = []
@@ -80,3 +90,11 @@ def test_write_predictions_5rx_uses_long_form_rows(tmp_path) -> None:
     )
     assert len(lines) == 5
     assert all(line.endswith("explicit_full_domain") for line in lines[1:])
+
+
+def test_multi_receiver_checkpoint_rows_preserve_output_axis() -> None:
+    module = load_pipeline_module()
+    rows = np.arange(30, dtype=float).reshape(2, 5, 3)
+    stored = module._checkpoint_rows_array(rows, component_count=3)
+    assert stored.shape == (2, 5, 3)
+    assert module._checkpoint_output_count(stored) == 2

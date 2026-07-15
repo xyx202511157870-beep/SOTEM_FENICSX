@@ -7721,14 +7721,6 @@ def run_fetd_forward(
     }
     receiver_run_configs = _receiver_mesh_configs(config)
     multi_receiver_run = bool(config.receiver_locations)
-    if multi_receiver_run and (
-        bool(config.resume_forward)
-        or bool(config.checkpoint_forward)
-        or int(config.stop_after_outputs) > 0
-    ):
-        raise ValueError(
-            "explicit receiver-set runs do not yet support segmented checkpoints"
-        )
     source_term_mode = str(config.source_term_mode).strip().lower()
     if multi_receiver_run and source_term_mode == "primary_secondary":
         raise ValueError(
@@ -7910,10 +7902,16 @@ def run_fetd_forward(
         )
         if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
             h_old = checkpoint["h_old_receiver"]
-            if h_old.shape == (3,) and np.all(np.isfinite(h_old)):
+            expected_h_shape = (
+                (len(receiver_run_configs), 3) if multi_receiver_run else (3,)
+            )
+            if h_old.shape == expected_h_shape and np.all(np.isfinite(h_old)):
                 H_old_receiver = h_old
             else:
-                raise ValueError("forward checkpoint is missing a finite magnetic receiver state for Biot mode")
+                raise ValueError(
+                    "forward checkpoint is missing a finite magnetic receiver state "
+                    f"for Biot mode; expected {expected_h_shape}, got {h_old.shape}"
+                )
         elif magnetic_receiver_mode == "faraday_integrated" and rows:
             component_names = _forward_components(config)
             if "Hz" in component_names:
@@ -11863,6 +11861,29 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
     return out
 
 
+def _checkpoint_rows_array(rows, *, component_count: int):
+    import numpy as np
+
+    values = np.asarray(rows, dtype=float)
+    if values.size == 0:
+        return np.empty((0, int(component_count)), dtype=float)
+    if values.ndim == 2 and values.shape[1] == int(component_count):
+        return values
+    if values.ndim == 3 and values.shape[2] == int(component_count):
+        return values
+    raise ValueError(
+        "checkpoint rows must have shape (n_time, n_component) or "
+        f"(n_time, n_receiver, n_component); got {values.shape}"
+    )
+
+
+def _checkpoint_output_count(rows) -> int:
+    import numpy as np
+
+    values = np.asarray(rows)
+    return 0 if values.size == 0 else int(values.shape[0])
+
+
 def _save_forward_checkpoint(
     config: PipelineConfig,
     *,
@@ -11881,16 +11902,13 @@ def _save_forward_checkpoint(
 
     path = config.forward_checkpoint_npz()
     path.parent.mkdir(parents=True, exist_ok=True)
-    rows_arr = np.asarray(rows, dtype=float)
-    if rows_arr.size == 0:
-        rows_arr = np.empty((0, len(components)), dtype=float)
-    else:
-        rows_arr = rows_arr.reshape(-1, len(components))
+    rows_arr = _checkpoint_rows_array(rows, component_count=len(components))
     row_times_arr = np.asarray(row_times, dtype=float).reshape(-1)
-    if row_times_arr.size != rows_arr.shape[0]:
+    output_count = _checkpoint_output_count(rows_arr)
+    if row_times_arr.size != output_count:
         raise ValueError(
             "forward checkpoint row_times length must match rows: "
-            f"row_times={row_times_arr.size}, rows={rows_arr.shape[0]}"
+            f"row_times={row_times_arr.size}, outputs={output_count}"
         )
     memory_arrays = [np.asarray(memory.x.array, dtype=float).copy() for memory in memories]
     payload = {
