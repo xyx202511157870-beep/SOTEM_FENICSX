@@ -27,12 +27,33 @@ from atem3d.seepage_channel_validation import (  # noqa: E402
     simpeg_payload_from_h5,
     validate_result_payload,
 )
+from atem3d.seepage_channel_model import benchmark_model  # noqa: E402
 
 
-SIMPEG_CONFIGS = {
-    "background": ROOT / "examples" / "seepage_channel_100m_5rx_simpeg_background.yaml",
-    "channel": ROOT / "examples" / "seepage_channel_100m_5rx_simpeg_channel.yaml",
+VARIANT_CONFIGS = {
+    "baseline_60x10x10": {
+        "simpeg": {
+            "background": ROOT / "examples" / "seepage_channel_100m_5rx_simpeg_background.yaml",
+            "channel": ROOT / "examples" / "seepage_channel_100m_5rx_simpeg_channel.yaml",
+        },
+        "fenicsx": {
+            "background": ROOT / "tools" / "run_fenicsx_seepage_background.sh",
+            "channel": ROOT / "tools" / "run_fenicsx_seepage_channel.sh",
+        },
+    },
+    "thin_60x1x1": {
+        "simpeg": {
+            "background": ROOT / "examples" / "seepage_channel_100m_5rx_simpeg_thin_background.yaml",
+            "channel": ROOT / "examples" / "seepage_channel_100m_5rx_simpeg_thin_channel.yaml",
+        },
+        "fenicsx": {
+            "background": ROOT / "tools" / "run_fenicsx_seepage_thin_background.sh",
+            "channel": ROOT / "tools" / "run_fenicsx_seepage_thin_channel.sh",
+        },
+    },
 }
+SIMPEG_CONFIGS = VARIANT_CONFIGS["baseline_60x10x10"]["simpeg"]
+VARIANT_CHOICES = tuple(VARIANT_CONFIGS)
 
 
 @dataclass(frozen=True)
@@ -49,8 +70,17 @@ def _wsl_project_path() -> str:
     return f"/mnt/{drive}{remainder}"
 
 
-def build_run_plan(output_root: str | Path) -> list[RunJob]:
+def build_run_plan(
+    output_root: str | Path,
+    *,
+    variant: str = "baseline_60x10x10",
+) -> list[RunJob]:
     output = Path(output_root).resolve()
+    if variant not in VARIANT_CONFIGS:
+        raise ValueError(f"unknown benchmark variant: {variant}")
+    variant_config = VARIANT_CONFIGS[variant]
+    simpeg_configs = variant_config["simpeg"]
+    fenicsx_scripts = variant_config["fenicsx"]
     runner = str(Path(__file__).resolve())
     plotter = str(ROOT / "tools" / "plot_seepage_channel_benchmark.py")
     wsl_root = _wsl_project_path()
@@ -71,31 +101,31 @@ def build_run_plan(output_root: str | Path) -> list[RunJob]:
         ),
         python_job(
             "simpeg_background",
-            ["simpeg", "--case", "background", "--output-root", str(output)],
+            ["simpeg", "--case", "background", "--variant", variant, "--output-root", str(output)],
             [output / "simpeg_background.h5", output / "simpeg_background.npz", output / "simpeg_background_provenance.json"],
-            [SIMPEG_CONFIGS["background"]],
+            [simpeg_configs["background"]],
         ),
         python_job(
             "simpeg_channel",
-            ["simpeg", "--case", "channel", "--output-root", str(output)],
+            ["simpeg", "--case", "channel", "--variant", variant, "--output-root", str(output)],
             [output / "simpeg_channel.h5", output / "simpeg_channel.npz", output / "simpeg_channel_provenance.json"],
-            [SIMPEG_CONFIGS["channel"]],
+            [simpeg_configs["channel"]],
         ),
         RunJob(
             name="fenicsx_background",
-            command=("wsl", "-d", "Ubuntu", "--", "bash", "-lc", f"cd '{wsl_root}' && bash tools/run_fenicsx_seepage_background.sh"),
-            required_inputs=(ROOT / "tools" / "run_fenicsx_seepage_background.sh",),
+            command=("wsl", "-d", "Ubuntu", "--", "bash", "-lc", f"cd '{wsl_root}' && bash tools/{fenicsx_scripts['background'].name}"),
+            required_inputs=(fenicsx_scripts["background"],),
             expected_outputs=(output / "fenicsx_background" / "predictions_5rx.csv",),
         ),
         RunJob(
             name="fenicsx_channel",
-            command=("wsl", "-d", "Ubuntu", "--", "bash", "-lc", f"cd '{wsl_root}' && bash tools/run_fenicsx_seepage_channel.sh"),
-            required_inputs=(ROOT / "tools" / "run_fenicsx_seepage_channel.sh",),
+            command=("wsl", "-d", "Ubuntu", "--", "bash", "-lc", f"cd '{wsl_root}' && bash tools/{fenicsx_scripts['channel'].name}"),
+            required_inputs=(fenicsx_scripts["channel"],),
             expected_outputs=(output / "fenicsx_channel" / "predictions_5rx.csv",),
         ),
         python_job(
             "aggregate",
-            ["aggregate", "--output-root", str(output)],
+            ["aggregate", "--variant", variant, "--output-root", str(output)],
             [output / "benchmark_results.npz", output / "benchmark_summary.json"],
             [
                 output / "empymod_background.npz",
@@ -134,7 +164,7 @@ def _job_outputs_valid(job: RunJob) -> bool:
         elif job.name.startswith("simpeg_"):
             validate_result_payload("SimPEG", _load_npz_payload(job.expected_outputs[1]))
             provenance = json.loads(job.expected_outputs[2].read_text(encoding="utf-8"))
-            config = SIMPEG_CONFIGS[provenance["case"]]
+            config = ROOT / provenance["config_path"]
             if provenance["config_sha256"] != sha256_file(config):
                 return False
         elif job.name.startswith("fenicsx_"):
@@ -154,11 +184,16 @@ def _job_outputs_valid(job: RunJob) -> bool:
     return True
 
 
-def execute_run_plan(output_root: str | Path, *, force: bool = False) -> None:
+def execute_run_plan(
+    output_root: str | Path,
+    *,
+    force: bool = False,
+    variant: str = "baseline_60x10x10",
+) -> None:
     output = Path(output_root).resolve()
     output.mkdir(parents=True, exist_ok=True)
     event_path = output / "run_events.jsonl"
-    for job in build_run_plan(output):
+    for job in build_run_plan(output, variant=variant):
         missing_inputs = [path for path in job.required_inputs if not path.exists()]
         if missing_inputs:
             raise FileNotFoundError(f"{job.name} missing inputs: {missing_inputs}")
@@ -199,8 +234,13 @@ def _run_empymod(output_root: Path, *, srcpts: int) -> Path:
     return output
 
 
-def _run_simpeg(output_root: Path, *, case: str) -> Path:
-    config_path = SIMPEG_CONFIGS[case]
+def _run_simpeg(
+    output_root: Path,
+    *,
+    case: str,
+    variant: str = "baseline_60x10x10",
+) -> Path:
+    config_path = VARIANT_CONFIGS[variant]["simpeg"][case]
     output_h5 = output_root / f"simpeg_{case}.h5"
     output_npz = output_root / f"simpeg_{case}.npz"
     output_root.mkdir(parents=True, exist_ok=True)
@@ -223,6 +263,7 @@ def _run_simpeg(output_root: Path, *, case: str) -> Path:
     provenance = {
         "method": "SimPEG",
         "case": case,
+        "variant": variant,
         "config_path": str(config_path.relative_to(ROOT)),
         "config_sha256": sha256_file(config_path),
         "result_h5": output_h5.name,
@@ -248,26 +289,33 @@ def main(argv: list[str] | None = None) -> int:
 
     simpeg_parser = subparsers.add_parser("simpeg")
     simpeg_parser.add_argument("--case", choices=tuple(SIMPEG_CONFIGS), required=True)
+    simpeg_parser.add_argument("--variant", choices=VARIANT_CHOICES, default="baseline_60x10x10")
     simpeg_parser.add_argument("--output-root", type=Path, required=True)
 
     aggregate_parser = subparsers.add_parser("aggregate")
     aggregate_parser.add_argument("--output-root", type=Path, required=True)
+    aggregate_parser.add_argument("--variant", choices=VARIANT_CHOICES, default="baseline_60x10x10")
 
     all_parser = subparsers.add_parser("all")
     all_parser.add_argument("--output-root", type=Path, required=True)
     all_parser.add_argument("--force", action="store_true")
+    all_parser.add_argument("--variant", choices=VARIANT_CHOICES, default="baseline_60x10x10")
 
     args = parser.parse_args(argv)
     output_root = args.output_root.resolve()
     if args.solver == "empymod":
         output = _run_empymod(output_root, srcpts=args.srcpts)
     elif args.solver == "simpeg":
-        output = _run_simpeg(output_root, case=args.case)
+        output = _run_simpeg(output_root, case=args.case, variant=args.variant)
     elif args.solver == "aggregate":
-        aggregate_result_directory(output_root)
+        aggregate_result_directory(
+            output_root,
+            model=benchmark_model(args.variant),
+            variant=args.variant,
+        )
         output = output_root / "benchmark_results.npz"
     else:
-        execute_run_plan(output_root, force=args.force)
+        execute_run_plan(output_root, force=args.force, variant=args.variant)
         output = output_root / "benchmark_manifest.json"
     print(f"wrote {output}")
     return 0

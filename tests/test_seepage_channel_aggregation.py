@@ -1,6 +1,8 @@
 import numpy as np
 from pathlib import Path
+import json
 
+from atem3d.seepage_channel_model import benchmark_model
 from atem3d.seepage_channel_validation import (
     aggregate_payloads,
     channel_delta,
@@ -79,3 +81,33 @@ def test_aggregate_writes_canonical_artifacts_without_channel_empymod_error(
         encoding="utf-8"
     )
     assert "channel" not in background_error_text.lower()
+
+
+def test_aggregate_writes_thin_variant_model_audit(tmp_path: Path) -> None:
+    model = benchmark_model("thin_60x1x1")
+
+    def payload(value: float, *, empymod: bool = False):
+        result = {
+            "times": model.times,
+            "receiver_locations": np.asarray(model.receiver_locations),
+            "components": np.asarray(("Ex", "dBzdt", "Hz")),
+            "values": np.full((5, 31, 3), value),
+        }
+        if empymod:
+            result["background_only_1d"] = True
+        return result
+
+    aggregate_payloads(
+        tmp_path,
+        empymod_background=payload(1.0, empymod=True),
+        simpeg_background=payload(1.1),
+        simpeg_channel=payload(1.2),
+        fenicsx_background=payload(0.9),
+        fenicsx_channel=payload(1.15),
+        model=model,
+        variant="thin_60x1x1",
+    )
+    audit = json.loads((tmp_path / "model_audit.json").read_text(encoding="utf-8"))
+    assert audit["variant"] == "thin_60x1x1"
+    assert audit["channel"]["size_m"] == [60.0, 1.0, 1.0]
+    assert audit["channel"]["theoretical_volume_m3"] == 60.0
