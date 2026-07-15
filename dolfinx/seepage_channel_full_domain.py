@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import csv
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -167,6 +168,46 @@ def write_predictions_5rx(
     return output_path
 
 
+def write_receiver_set_npz(
+    path: str | Path,
+    *,
+    times: ArrayLike,
+    receiver_locations: ArrayLike,
+    components: ArrayLike,
+    data: ArrayLike,
+    receiver_provenance: ArrayLike,
+    material_audit: dict[str, Any],
+) -> Path:
+    output = Path(path)
+    time_values = np.asarray(times, dtype=float).reshape(-1)
+    locations = np.asarray(receiver_locations, dtype=float)
+    component_names = np.asarray(components).astype(str).reshape(-1)
+    values = np.asarray(data, dtype=float)
+    provenance = np.asarray(receiver_provenance).astype(str).reshape(-1)
+    expected_shape = (locations.shape[0], time_values.size, component_names.size)
+    if locations.ndim != 2 or locations.shape[1] != 3:
+        raise ValueError("receiver_locations must have shape (n_rx, 3)")
+    if values.shape != expected_shape:
+        raise ValueError(f"data must have shape {expected_shape}; got {values.shape}")
+    if provenance.shape != (locations.shape[0],):
+        raise ValueError("receiver_provenance must contain one value per receiver")
+    if not np.all(provenance == "explicit_full_domain"):
+        raise ValueError("all receiver provenance must be explicit_full_domain")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("receiver-set data must be finite")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        output,
+        times=time_values,
+        receiver_locations=locations,
+        components=component_names,
+        data=values,
+        receiver_provenance=provenance,
+        material_audit_json=np.asarray(json.dumps(material_audit, sort_keys=True)),
+    )
+    return output
+
+
 __all__ = [
     "ReceiverEvaluationConfig",
     "box_mask",
@@ -174,4 +215,5 @@ __all__ = [
     "receiver_configs",
     "records_to_array",
     "write_predictions_5rx",
+    "write_receiver_set_npz",
 ]

@@ -22,12 +22,12 @@ exec /home/paidaxin/miniconda3/envs/fenicsx/bin/python -u dolfinx/sotem_pipeline
   --rho-air 1e8 --rho-earth 100 \
   --ramp-off-time 1e-8 --time-origin after_ramp \
   --t-min 1e-5 --t-max 1e-2 --time-growth 1.2589254117941673 \
-  --max-internal-dt 2.5e-5 --max-internal-dt-fraction 0.01 \
+  --max-internal-dt 1e-4 --max-internal-dt-fraction 0.05 \
   --max-internal-dt-fraction-until 1e-3 \
-  --min-steps-during-turnoff 10 --min-steps-before-first-observation 100 \
+  --min-steps-during-turnoff 10 --min-steps-before-first-observation 20 \
   --time-method theta --time-theta 1 --outer-boundary-mode natural \
   --formulation e --initial-dc-mode fem \
-  --magnetic-receiver-mode biot_current --magnetic-dbdt-mode biot_rate \
+  --magnetic-receiver-mode biot_current --magnetic-dbdt-mode curl \
   --receiver-evaluation-mode median \
   --ksp-type cg --rtol 1e-7 --atol 1e-12 --max-it 4000 \
   --empymod-srcpts 257 --reference-audit-srcpts 513 \

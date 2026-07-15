@@ -98,3 +98,32 @@ def test_multi_receiver_checkpoint_rows_preserve_output_axis() -> None:
     stored = module._checkpoint_rows_array(rows, component_count=3)
     assert stored.shape == (2, 5, 3)
     assert module._checkpoint_output_count(stored) == 2
+
+
+def test_receiver_set_npz_preserves_three_dimensional_data(tmp_path) -> None:
+    module = load_full_domain_module()
+    path = tmp_path / "fenicsx_result_5rx.npz"
+    values = np.ones((5, 2, 3), dtype=float)
+    module.write_receiver_set_npz(
+        path,
+        times=np.array([1.0e-5, 2.0e-5]),
+        receiver_locations=np.asarray(
+            [(0.0, y, 0.1) for y in (-20, -10, 0, 10, 20)]
+        ),
+        components=np.asarray(("Ex", "dBzdt", "Hz")),
+        data=values,
+        receiver_provenance=np.asarray(["explicit_full_domain"] * 5),
+        material_audit={"global_cell_count": 65},
+    )
+    with np.load(path, allow_pickle=False) as stored:
+        assert stored["data"].shape == (5, 2, 3)
+        assert stored["receiver_provenance"].tolist() == [
+            "explicit_full_domain"
+        ] * 5
+
+
+def test_biot_h_is_only_recomputed_at_outputs_when_dbdt_uses_curl() -> None:
+    module = load_pipeline_module()
+    assert not module._biot_h_required_for_step("curl", is_output=False)
+    assert module._biot_h_required_for_step("curl", is_output=True)
+    assert module._biot_h_required_for_step("biot_rate", is_output=False)

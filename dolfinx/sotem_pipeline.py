@@ -5550,6 +5550,12 @@ def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> N
     receiver_values["Hz"] = float(h_receiver[2])
 
 
+def _biot_h_required_for_step(magnetic_dbdt_mode: str, *, is_output: bool) -> bool:
+    """Biot H is needed every step only for a finite-difference Biot dB/dt."""
+
+    return bool(is_output) or str(magnetic_dbdt_mode).strip().lower() == "biot_rate"
+
+
 def _advance_faraday_receiver_hz(
     *,
     previous_hz: float,
@@ -7841,9 +7847,9 @@ def run_fetd_forward(
 
     H_old_receiver = None
     faraday_receiver_hz = None
-    if magnetic_receiver_mode == "biot_current":
+    if magnetic_receiver_mode == "biot_current" and magnetic_dbdt_mode == "biot_rate":
         H_old_receiver = evaluate_biot_h_set(E_old, _source_current(0.0, config))
-    elif magnetic_receiver_mode == "biot_ohmic":
+    elif magnetic_receiver_mode == "biot_ohmic" and magnetic_dbdt_mode == "biot_rate":
         H_old_receiver = evaluate_biot_h_set(E_old, _source_current(0.0, config))
     elif magnetic_receiver_mode == "faraday_integrated":
         faraday_initial_h = _biot_savart_total_h_at_receiver(
@@ -7900,7 +7906,10 @@ def run_fetd_forward(
             previous_time=previous_time,
             completed_step=int(checkpoint["completed_step"]),
         )
-        if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
+        if (
+            magnetic_receiver_mode in {"biot_current", "biot_ohmic"}
+            and magnetic_dbdt_mode == "biot_rate"
+        ):
             h_old = checkpoint["h_old_receiver"]
             expected_h_shape = (
                 (len(receiver_run_configs), 3) if multi_receiver_run else (3,)
@@ -8060,12 +8069,19 @@ def run_fetd_forward(
         if divergence_cleaner is not None and _should_apply_divergence_cleaning(float(t), config):
             clean_stats = _apply_conductivity_divergence_cleaning(divergence_cleaner, E_new, operators, config)
         _update_debye_memories(debye, memories, E_new, dt, config.debye_time_scheme)
-        if magnetic_receiver_mode == "biot_current":
+        is_output = step in output_step_indices
+        if magnetic_receiver_mode == "biot_current" and _biot_h_required_for_step(
+            magnetic_dbdt_mode,
+            is_output=is_output,
+        ):
             H_new_receiver = evaluate_biot_h_set(
                 E_new,
                 _source_current(float(t), config),
             )
-        elif magnetic_receiver_mode == "biot_ohmic":
+        elif magnetic_receiver_mode == "biot_ohmic" and _biot_h_required_for_step(
+            magnetic_dbdt_mode,
+            is_output=is_output,
+        ):
             H_new_receiver = evaluate_biot_h_set(
                 E_new,
                 _source_current(float(t), config),
@@ -8087,7 +8103,6 @@ def run_fetd_forward(
             )
             faraday_step_record["Hz"] = float(faraday_receiver_hz)
 
-        is_output = step in output_step_indices
         if is_output:
             with _timed_stage(config, "forward_first_output_receivers", timing_t0, step=int(step)) if (
                 len(rows) == initial_rows_count
@@ -8116,15 +8131,15 @@ def run_fetd_forward(
                                 receiver_record,
                                 H_new_receiver[receiver_index],
                             )
-                            biot_rate = float(
-                                _biot_receiver_dbdt_from_h(
-                                    H_new_receiver[receiver_index],
-                                    H_old_receiver[receiver_index],
-                                    dt=dt,
-                                )[2]
-                            )
-                            receiver_record["dBzdt_biot_rate"] = biot_rate
                             if magnetic_dbdt_mode == "biot_rate":
+                                biot_rate = float(
+                                    _biot_receiver_dbdt_from_h(
+                                        H_new_receiver[receiver_index],
+                                        H_old_receiver[receiver_index],
+                                        dt=dt,
+                                    )[2]
+                                )
+                                receiver_record["dBzdt_biot_rate"] = biot_rate
                                 receiver_record["dBzdt"] = biot_rate
                     rows.append(records_to_array(receiver_records, components).tolist())
                     row_times.append(float(observation_time_by_step[step]))
@@ -8163,15 +8178,15 @@ def run_fetd_forward(
                     rec["dBzdt_biot_rate"] = float("nan")
                     if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
                         _assign_biot_receiver_hz(rec, H_new_receiver)
-                        biot_rate = float(
-                            _biot_receiver_dbdt_from_h(
-                                H_new_receiver,
-                                H_old_receiver,
-                                dt=dt,
-                            )[2]
-                        )
-                        rec["dBzdt_biot_rate"] = biot_rate
                         if magnetic_dbdt_mode == "biot_rate":
+                            biot_rate = float(
+                                _biot_receiver_dbdt_from_h(
+                                    H_new_receiver,
+                                    H_old_receiver,
+                                    dt=dt,
+                                )[2]
+                            )
+                            rec["dBzdt_biot_rate"] = biot_rate
                             rec["dBzdt"] = biot_rate
                     rows.append([rec[name] for name in components])
                     row_times.append(float(observation_time_by_step[step]))
@@ -8186,7 +8201,10 @@ def run_fetd_forward(
                         )
                     )
 
-        if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
+        if (
+            magnetic_receiver_mode in {"biot_current", "biot_ohmic"}
+            and magnetic_dbdt_mode == "biot_rate"
+        ):
             H_old_receiver = H_new_receiver
         log_item = {
             "step": step,
@@ -12854,6 +12872,42 @@ def main(argv: list[str] | None = None) -> int:
     runtime["forward_seconds"] = time.perf_counter() - t0
     _record_timing_event(config, "forward_done", run_t0, seconds=runtime["forward_seconds"])
     completed_times = fem_result["times"]
+    if config.receiver_locations:
+        if msh.comm.rank == 0:
+            from seepage_channel_full_domain import write_receiver_set_npz
+
+            runtime["total_seconds"] = time.perf_counter() - run_t0
+            write_receiver_set_npz(
+                config.workdir / "fenicsx_result_5rx.npz",
+                times=fem_result["times"],
+                receiver_locations=fem_result["receiver_locations"],
+                components=fem_result["components"],
+                data=fem_result["data"],
+                receiver_provenance=fem_result["receiver_provenance"],
+                material_audit=materials.get("conductivity_box_audit", {"enabled": False}),
+            )
+            (config.workdir / "fenicsx_run_summary.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "explicit_full_domain_receiver_set",
+                        "receiver_count": int(len(config.receiver_locations)),
+                        "data_shape": list(fem_result["data"].shape),
+                        "components": [str(item) for item in fem_result["components"]],
+                        "receiver_provenance": [
+                            str(item) for item in fem_result["receiver_provenance"]
+                        ],
+                        "material_audit": materials.get(
+                            "conductivity_box_audit", {"enabled": False}
+                        ),
+                        "runtime_seconds": runtime,
+                        "legacy_single_receiver_postprocess_skipped": True,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        return 0
     t0 = time.perf_counter()
     ref_result = get_empymod_reference(completed_times, config, mode=ref_mode)
     noip_ref_result = ref_result if ref_mode == "noip" else get_empymod_reference(completed_times, config, mode="noip")
