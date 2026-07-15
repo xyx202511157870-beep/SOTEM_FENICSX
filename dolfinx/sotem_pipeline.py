@@ -31,6 +31,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_SRC = PROJECT_ROOT / "src"
 if PROJECT_SRC.is_dir() and str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
+PIPELINE_HELPER_DIR = Path(__file__).resolve().parent
+if str(PIPELINE_HELPER_DIR) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_HELPER_DIR))
 
 CORE_MODULES = ("dolfinx", "ufl", "basix", "mpi4py", "petsc4py")
 PIP_MODULES = {
@@ -230,6 +233,55 @@ def _resolved_receiver_locations(
     if len(set(locations)) != len(locations):
         raise ValueError("receiver locations must be unique")
     return locations
+
+
+def _receiver_mesh_configs(config: PipelineConfig) -> tuple[PipelineConfig, ...]:
+    """Return one receiver-specific view while retaining a single full-domain mesh."""
+
+    return tuple(
+        replace(config, receiver=location)
+        for location in _resolved_receiver_locations(config)
+    )
+
+
+def _receiver_refinement_point_specs(
+    config: PipelineConfig,
+) -> tuple[tuple[dict[str, Any], ...], dict[tuple[float, float, float], float]]:
+    """Build receiver point references with one geometry point per coordinate."""
+
+    entries: list[dict[str, Any]] = []
+    point_sizes: dict[tuple[float, float, float], float] = {}
+
+    def register(point: tuple[float, float, float], mesh_size: float):
+        key = tuple(round(float(value), 12) for value in point)
+        point_sizes[key] = min(point_sizes.get(key, mesh_size), mesh_size)
+        return key
+
+    for receiver_config in _receiver_mesh_configs(config):
+        anchor_mesh_size = _receiver_anchor_mesh_size(receiver_config)
+        anchor = register(receiver_config.receiver, anchor_mesh_size)
+        cloud = tuple(
+            dict.fromkeys(
+                register(point, anchor_mesh_size)
+                for point in _receiver_refinement_cloud_points(receiver_config)
+            )
+        )
+        surface_cloud = tuple(
+            dict.fromkeys(
+                register(point, anchor_mesh_size)
+                for point in _receiver_surface_refinement_points(receiver_config)
+            )
+        )
+        entries.append(
+            {
+                "config": receiver_config,
+                "anchor_mesh_size": anchor_mesh_size,
+                "anchor": anchor,
+                "cloud": cloud,
+                "surface_cloud": surface_cloud,
+            }
+        )
+    return tuple(entries), point_sizes
 
 
 def _conductivity_box_config_audit(config: PipelineConfig) -> dict[str, Any]:
@@ -890,8 +942,11 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             raise ValueError(f"{name} must be below the z=0 earth surface for the air-earth empymod comparison")
         if depth >= float(config.earth_depth) - tol:
             raise ValueError(f"{name} depth {depth:.12g} m exceeds the finite FEM earth depth {config.earth_depth:.12g} m")
-    if receiver_depth < -tol:
-        raise ValueError("receiver must not be above the z=0 earth surface for the air-earth empymod comparison")
+    if float(receiver[2]) >= float(config.air_height) - tol:
+        raise ValueError(
+            f"receiver z={float(receiver[2]):.12g} m must lie below the finite FEM air height "
+            f"{float(config.air_height):.12g} m"
+        )
     if receiver_depth >= float(config.earth_depth) - tol:
         raise ValueError(f"receiver depth {receiver_depth:.12g} m exceeds the finite FEM earth depth {config.earth_depth:.12g} m")
     if abs(source_depth_start - source_depth_end) > tol:
@@ -1453,8 +1508,10 @@ def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[floa
     for dx, dy in ((h, 0.0), (-h, 0.0), (0.0, h), (0.0, -h), (h, h), (h, -h), (-h, h), (-h, -h)):
         raw_points.append((x + dx, y + dy, z))
 
+    region = _receiver_volume_region(config)
+    vertical_sign = 1.0 if region == "air" else -1.0
     for layer in range(1, n_layers + 1):
-        zz = z - layer * h
+        zz = z + vertical_sign * layer * h
         raw_points.extend(
             [
                 (x, y, zz),
@@ -1470,7 +1527,8 @@ def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[floa
     receiver = (x, y, z)
     for point in raw_points:
         key = tuple(round(v, 12) for v in point)
-        if key == receiver or key in seen or key[2] >= 0.0:
+        in_receiver_volume = key[2] > 0.0 if region == "air" else key[2] < 0.0
+        if key == receiver or key in seen or not in_receiver_volume:
             continue
         seen.add(key)
         points.append(key)
@@ -1518,6 +1576,18 @@ def _receiver_is_on_surface(config: PipelineConfig) -> bool:
     """Return True when the receiver lies on the z=0 air-earth interface."""
 
     return abs(float(config.receiver[2])) <= float(config.geometry_tolerance)
+
+
+def _receiver_volume_region(config: PipelineConfig) -> str:
+    """Return the material region containing the receiver anchor."""
+
+    z = float(config.receiver[2])
+    tolerance = float(config.geometry_tolerance)
+    if z > tolerance:
+        return "air"
+    if z < -tolerance:
+        return "earth"
+    return "surface"
 
 
 def _far_field_mesh_size(config: PipelineConfig) -> float:
@@ -1655,14 +1725,36 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         p1 = occ.addPoint(*config.source_end, 5.0)
         source_line = occ.addLine(p0, p1)
         source_cloud = [occ.addPoint(*point, config.source_mesh_size) for point in _source_refinement_cloud_points(config)]
-        receiver_anchor_mesh_size = _receiver_anchor_mesh_size(config)
-        rp = occ.addPoint(*config.receiver, receiver_anchor_mesh_size)
-        receiver_cloud = [
-            occ.addPoint(*point, receiver_anchor_mesh_size) for point in _receiver_refinement_cloud_points(config)
+        receiver_specs, receiver_point_sizes = _receiver_refinement_point_specs(config)
+        receiver_point_tags = {
+            point: occ.addPoint(*point, mesh_size)
+            for point, mesh_size in receiver_point_sizes.items()
+        }
+        receiver_entries: list[dict[str, Any]] = [
+            {
+                "config": entry["config"],
+                "anchor_mesh_size": entry["anchor_mesh_size"],
+                "anchor": receiver_point_tags[entry["anchor"]],
+                "cloud": [receiver_point_tags[point] for point in entry["cloud"]],
+                "surface_cloud": [
+                    receiver_point_tags[point] for point in entry["surface_cloud"]
+                ],
+            }
+            for entry in receiver_specs
         ]
-        receiver_surface_cloud = [
-            occ.addPoint(*point, receiver_anchor_mesh_size) for point in _receiver_surface_refinement_points(config)
-        ]
+        receiver_anchor_mesh_size = min(
+            float(entry["anchor_mesh_size"]) for entry in receiver_entries
+        )
+        receiver_anchors = list(
+            dict.fromkeys(int(entry["anchor"]) for entry in receiver_entries)
+        )
+        receiver_surface_cloud = list(
+            dict.fromkeys(
+                int(point)
+                for entry in receiver_entries
+                for point in entry["surface_cloud"]
+            )
+        )
         occ.synchronize()
 
         volumes = gmsh.model.getEntities(3)
@@ -1723,16 +1815,32 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         ]
         if not top_earth_vols:
             raise RuntimeError("failed to identify top earth layer volumes for source and receiver embedding")
-        receiver_on_surface = _receiver_is_on_surface(config)
-        earth_receiver_points = [*source_cloud, *receiver_cloud]
-        if not receiver_on_surface:
-            earth_receiver_points.append(rp)
+        earth_receiver_points = [*source_cloud]
+        air_receiver_points: list[int] = []
         surface_receiver_points = [*receiver_surface_cloud]
-        if receiver_on_surface:
-            surface_receiver_points.append(rp)
+        for entry in receiver_entries:
+            receiver_config = entry["config"]
+            receiver_region = _receiver_volume_region(receiver_config)
+            receiver_cloud = [int(point) for point in entry["cloud"]]
+            receiver_anchor = int(entry["anchor"])
+            if receiver_region in {"earth", "surface"}:
+                earth_receiver_points.extend(receiver_cloud)
+            if receiver_region == "earth":
+                earth_receiver_points.append(receiver_anchor)
+            elif receiver_region == "air":
+                air_receiver_points.extend(receiver_cloud)
+                air_receiver_points.append(receiver_anchor)
+            else:
+                surface_receiver_points.append(receiver_anchor)
+        earth_receiver_points = list(dict.fromkeys(earth_receiver_points))
+        air_receiver_points = list(dict.fromkeys(air_receiver_points))
+        surface_receiver_points = list(dict.fromkeys(surface_receiver_points))
         for earth_vol in top_earth_vols:
             gmsh.model.mesh.embed(1, [source_line], 3, earth_vol)
             gmsh.model.mesh.embed(0, earth_receiver_points, 3, earth_vol)
+        if air_receiver_points:
+            for air_vol in air_vols:
+                gmsh.model.mesh.embed(0, air_receiver_points, 3, air_vol)
         for interface_surf in interface:
             gmsh.model.mesh.embed(0, surface_receiver_points, 2, interface_surf)
 
@@ -1748,7 +1856,11 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.model.mesh.field.setNumber(f_source, "DistMax", _source_refinement_transition_distance(config))
 
         f_point = gmsh.model.mesh.field.add("Distance")
-        gmsh.model.mesh.field.setNumbers(f_point, "PointsList", [rp, *receiver_surface_cloud])
+        gmsh.model.mesh.field.setNumbers(
+            f_point,
+            "PointsList",
+            [*receiver_anchors, *receiver_surface_cloud],
+        )
         f_receiver = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(f_receiver, "InField", f_point)
         gmsh.model.mesh.field.setNumber(f_receiver, "SizeMin", receiver_anchor_mesh_size)
@@ -1756,13 +1868,31 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.model.mesh.field.setNumber(f_receiver, "DistMin", config.receiver_refinement_radius)
         gmsh.model.mesh.field.setNumber(f_receiver, "DistMax", _receiver_refinement_transition_distance(config))
 
-        f_receiver_ball = gmsh.model.mesh.field.add("Ball")
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "XCenter", config.receiver[0])
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "YCenter", config.receiver[1])
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "ZCenter", config.receiver[2])
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "Radius", config.receiver_refinement_radius)
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "VIn", receiver_anchor_mesh_size)
-        gmsh.model.mesh.field.setNumber(f_receiver_ball, "VOut", far_field_mesh_size)
+        receiver_ball_fields: list[int] = []
+        for entry in receiver_entries:
+            receiver_config = entry["config"]
+            f_receiver_ball = gmsh.model.mesh.field.add("Ball")
+            gmsh.model.mesh.field.setNumber(
+                f_receiver_ball, "XCenter", receiver_config.receiver[0]
+            )
+            gmsh.model.mesh.field.setNumber(
+                f_receiver_ball, "YCenter", receiver_config.receiver[1]
+            )
+            gmsh.model.mesh.field.setNumber(
+                f_receiver_ball, "ZCenter", receiver_config.receiver[2]
+            )
+            gmsh.model.mesh.field.setNumber(
+                f_receiver_ball,
+                "Radius",
+                receiver_config.receiver_refinement_radius,
+            )
+            gmsh.model.mesh.field.setNumber(
+                f_receiver_ball, "VIn", float(entry["anchor_mesh_size"])
+            )
+            gmsh.model.mesh.field.setNumber(
+                f_receiver_ball, "VOut", far_field_mesh_size
+            )
+            receiver_ball_fields.append(f_receiver_ball)
 
         diffusion_box = _diffusion_refinement_box(config)
         f_box = _add_box_field(
@@ -1777,10 +1907,33 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
             far_field_mesh_size,
             diffusion_box["radius"],
         )
+        background_fields = [f_source, f_receiver, *receiver_ball_fields, f_box]
+        conductivity_box_audit = _conductivity_box_config_audit(config)
+        mesh_size_candidates = [
+            5.0,
+            float(config.source_mesh_size),
+            receiver_anchor_mesh_size,
+        ]
+        if conductivity_box_audit["enabled"]:
+            bounds = conductivity_box_audit["bounds"]
+            conductivity_box_field = _add_box_field(
+                gmsh,
+                bounds[0][0],
+                bounds[0][1],
+                bounds[1][0],
+                bounds[1][1],
+                bounds[2][0],
+                bounds[2][1],
+                conductivity_box_audit["mesh_size_m"],
+                far_field_mesh_size,
+                2.0 * conductivity_box_audit["mesh_size_m"],
+            )
+            background_fields.append(conductivity_box_field)
+            mesh_size_candidates.append(conductivity_box_audit["mesh_size_m"])
         f_min = gmsh.model.mesh.field.add("Min")
-        gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", [f_source, f_receiver, f_receiver_ball, f_box])
+        gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", background_fields)
         gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
-        gmsh.option.setNumber("Mesh.MeshSizeMin", min(5.0, config.source_mesh_size, receiver_anchor_mesh_size))
+        gmsh.option.setNumber("Mesh.MeshSizeMin", min(mesh_size_candidates))
         gmsh.option.setNumber("Mesh.MeshSizeMax", far_field_mesh_size)
         gmsh.option.setNumber("Mesh.Optimize", 1)
         gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
@@ -2135,6 +2288,46 @@ def assign_materials(msh, cell_tags, spaces: dict[str, Any], config: PipelineCon
         _assign_dg0_by_cell(sigma, earth_cells, sigma_earth)
         _assign_dg0_by_cell(sigma_inf, earth_cells, sigma_earth)
         _assign_dg0_by_cell(rho, earth_cells, layer_resistivities[0])
+
+    conductivity_box_audit = _conductivity_box_config_audit(config)
+    if conductivity_box_audit["enabled"]:
+        from mpi4py import MPI
+        from seepage_channel_full_domain import box_mask
+
+        centers, _radii, volumes = _cell_centers_radii_volumes(msh)
+        mask, local_box_audit = box_mask(
+            centers,
+            volumes,
+            config.conductivity_box_bounds,
+        )
+        earth_mask = np.zeros(mask.shape, dtype=bool)
+        earth_mask[np.asarray(earth_cells, dtype=int)] = True
+        mask &= earth_mask
+        cells = np.flatnonzero(mask).astype(np.int32)
+        local_count = int(cells.size)
+        global_count = int(msh.comm.allreduce(local_count, op=MPI.SUM))
+        if global_count == 0:
+            raise RuntimeError("conductivity box marks no earth cells")
+        local_volume = float(np.sum(volumes[cells]))
+        global_volume = float(msh.comm.allreduce(local_volume, op=MPI.SUM))
+        box_sigma = float(config.conductivity_box_sigma)
+        _assign_dg0_by_cell(sigma, cells, box_sigma)
+        _assign_dg0_by_cell(sigma_inf, cells, box_sigma)
+        _assign_dg0_by_cell(rho, cells, 1.0 / box_sigma)
+        theoretical_volume = float(conductivity_box_audit["theoretical_volume_m3"])
+        conductivity_box_audit.update(
+            {
+                **local_box_audit,
+                "local_cell_count": local_count,
+                "local_discrete_volume_m3": local_volume,
+                "global_cell_count": global_count,
+                "global_discrete_volume_m3": global_volume,
+                "relative_volume_error": abs(global_volume - theoretical_volume)
+                / theoretical_volume,
+                "sigma_min_s_per_m": box_sigma,
+                "sigma_max_s_per_m": box_sigma,
+            }
+        )
     _assign_dg0_by_cell(mu, air_cells, mu_0 * config.mu_r_air)
     _assign_dg0_by_cell(mu, earth_cells, mu_0 * config.mu_r_earth)
     _assign_dg0_by_cell(mu_inv, air_cells, 1.0 / (mu_0 * config.mu_r_air))
@@ -2151,7 +2344,8 @@ def assign_materials(msh, cell_tags, spaces: dict[str, Any], config: PipelineCon
     log(
         "[materials] "
         f"sigma_air={sigma_air:.6e} S/m, earth_layers={_format_float_list(layer_resistivities)} ohm m, "
-        f"air_cells(local)={len(air_cells)}, earth_cells(local)={len(earth_cells)}",
+        f"air_cells(local)={len(air_cells)}, earth_cells(local)={len(earth_cells)}, "
+        f"conductivity_box={json.dumps(conductivity_box_audit, sort_keys=True)}",
         comm=msh.comm,
     )
     return {
@@ -2163,6 +2357,7 @@ def assign_materials(msh, cell_tags, spaces: dict[str, Any], config: PipelineCon
         "rho": rho,
         "mu": mu,
         "mu_inv": mu_inv,
+        "conductivity_box_audit": conductivity_box_audit,
     }
 
 
