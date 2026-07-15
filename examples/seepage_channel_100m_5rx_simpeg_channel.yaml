@@ -1,0 +1,73 @@
+coordinate_system: z_up
+formulation: eb
+initial_magnetic_field: biot_savart_wire
+magnetic_receiver_mode: current_biot
+magnetic_recovery_subdivisions: 1
+
+mesh:
+  hx:
+    - [100.0, 10, -1.3]
+    - [5.0, 40]
+    - [100.0, 10, 1.3]
+  hy:
+    - [100.0, 10, -1.3]
+    - [5.0, 18]
+    - [2.5, 8]
+    - [5.0, 18]
+    - [100.0, 10, 1.3]
+  hz:
+    - [100.0, 11, -1.3]
+    - [20.0, 10]
+    - [5.0, 14]
+    - [2.5, 8]
+    - [1.0, 10]
+    - [1.0, 10]
+    - [5.0, 18]
+    - [20.0, 9, 1.3]
+  origin: [-5640.534646790001, -5640.534646790001, -7632.695040827002]
+
+model:
+  require_layer_boundary_alignment: true
+  layers:
+    - {top: 1000000000.0, bottom: 0.0, sigma_infinity: 1.0e-8}
+    - {top: 0.0, bottom: -1000000000.0, sigma_infinity: 0.01}
+  conductivity_boxes:
+    - name: seepage_channel
+      bounds: [[-30.0, 30.0], [-5.0, 5.0], [-25.0, -15.0]]
+      sigma_infinity: 1.0
+      minimum_cells_per_cross_section: 4
+
+boundary:
+  kind: none
+
+source:
+  start: [-50.0, 0.0, -0.1]
+  end: [50.0, 0.0, -0.1]
+  current: 1.0
+  waveform: {type: step_off, off_time: 0.0, on_value: 1.0}
+
+receivers:
+  - {location: [0.0, -20.0, 0.1], component: Ex}
+  - {location: [0.0, -20.0, 0.1], component: dBzdt}
+  - {location: [0.0, -20.0, 0.1], component: Hz}
+  - {location: [0.0, -10.0, 0.1], component: Ex}
+  - {location: [0.0, -10.0, 0.1], component: dBzdt}
+  - {location: [0.0, -10.0, 0.1], component: Hz}
+  - {location: [0.0, 0.0, 0.1], component: Ex}
+  - {location: [0.0, 0.0, 0.1], component: dBzdt}
+  - {location: [0.0, 0.0, 0.1], component: Hz}
+  - {location: [0.0, 10.0, 0.1], component: Ex}
+  - {location: [0.0, 10.0, 0.1], component: dBzdt}
+  - {location: [0.0, 10.0, 0.1], component: Hz}
+  - {location: [0.0, 20.0, 0.1], component: Ex}
+  - {location: [0.0, 20.0, 0.1], component: dBzdt}
+  - {location: [0.0, 20.0, 0.1], component: Hz}
+
+solver:
+  type: pardiso
+
+time_steps:
+  - [1.0e-7, 100]
+  - [1.0e-6, 90]
+  - [1.0e-5, 90]
+  - [1.0e-4, 90]

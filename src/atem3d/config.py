@@ -442,13 +442,14 @@ def _build_ip_model_properties(mesh: TensorMesh, model_cfg: dict[str, Any]) -> t
     if "layers" not in model_cfg:
         sigma_value, scalar_terms = _layer_debye_model(model_cfg, model_cfg)
         sigma_inf = _cell_property(mesh, sigma_value, "sigma_infinity")
-        terms = [
-            DebyeTerm(
-                delta_sigma=_cell_property(mesh, term.delta_sigma[0], "delta_sigma"),
-                tau=term.tau,
-            )
+        delta_by_tau = {
+            float(term.tau): _cell_property(mesh, term.delta_sigma[0], "delta_sigma")
             for term in scalar_terms
-        ]
+        }
+        sigma_inf, delta_by_tau = _apply_conductivity_boxes(
+            mesh, sigma_inf, delta_by_tau, model_cfg
+        )
+        terms = [DebyeTerm(delta_sigma=values, tau=tau) for tau, values in delta_by_tau.items()]
         return sigma_inf, terms
 
     layers = model_cfg["layers"]
@@ -476,11 +477,56 @@ def _build_ip_model_properties(mesh: TensorMesh, model_cfg: dict[str, Any]) -> t
     if not np.all(assigned):
         raise ValueError("layer definitions must cover every mesh cell center")
 
+    sigma_inf, delta_by_tau = _apply_conductivity_boxes(
+        mesh, sigma_inf, delta_by_tau, model_cfg
+    )
     terms = [
         DebyeTerm(delta_sigma=delta_by_tau[tau], tau=tau)
         for tau in tau_values
     ]
     return sigma_inf, terms
+
+
+def _apply_conductivity_boxes(
+    mesh: TensorMesh,
+    sigma_inf: np.ndarray,
+    delta_by_tau: dict[float, np.ndarray],
+    model_cfg: dict[str, Any],
+) -> tuple[np.ndarray, dict[float, np.ndarray]]:
+    centers = np.asarray(mesh.cell_centers, dtype=float)
+    for box in model_cfg.get("conductivity_boxes", []):
+        bounds = np.asarray(box["bounds"], dtype=float)
+        if bounds.shape != (3, 2) or np.any(bounds[:, 1] <= bounds[:, 0]):
+            raise ValueError(
+                "conductivity box bounds must have shape (3, 2) with upper > lower"
+            )
+        mask = np.logical_and.reduce(
+            [
+                (centers[:, axis] >= bounds[axis, 0])
+                & (centers[:, axis] <= bounds[axis, 1])
+                for axis in range(3)
+            ]
+        )
+        name = str(box.get("name", "<unnamed>"))
+        if not np.any(mask):
+            raise ValueError(f"conductivity box {name} marks no cells")
+        minimum = int(box.get("minimum_cells_per_cross_section", 1))
+        if minimum < 1:
+            raise ValueError("minimum_cells_per_cross_section must be at least 1")
+        for axis in (1, 2):
+            count = np.unique(np.round(centers[mask, axis], decimals=12)).size
+            if count < minimum:
+                raise ValueError(
+                    f"conductivity box {name} requires at least {minimum} cells "
+                    f"across axis {axis}; found {count}"
+                )
+        conductivity = float(box["sigma_infinity"])
+        if not np.isfinite(conductivity) or conductivity <= 0.0:
+            raise ValueError("conductivity box sigma_infinity must be positive and finite")
+        sigma_inf[mask] = conductivity
+        for values in delta_by_tau.values():
+            values[mask] = 0.0
+    return sigma_inf, delta_by_tau
 
 
 def _validate_layer_boundaries(
