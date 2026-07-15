@@ -129,3 +129,5 @@ def test_imprinted_conductivity_box_uses_constrained_delaunay_algorithm() -> Non
 
     assert module._gmsh_algorithm_3d(plain) == 10
     assert module._gmsh_algorithm_3d(imprinted) == 1
+    assert module._gmsh_optimize_netgen(plain) == 1
+    assert module._gmsh_optimize_netgen(imprinted) == 0

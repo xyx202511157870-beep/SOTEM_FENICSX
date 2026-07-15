@@ -1550,6 +1550,12 @@ def _gmsh_algorithm_3d(config: PipelineConfig) -> int:
     return 1 if _conductivity_box_config_audit(config)["enabled"] else 10
 
 
+def _gmsh_optimize_netgen(config: PipelineConfig) -> int:
+    """Avoid Netgen's known thin-volume optimizer crash after imprints."""
+
+    return 0 if _conductivity_box_config_audit(config)["enabled"] else 1
+
+
 def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
     """Return extra embedded points that keep receiver cells locally small."""
 
@@ -1976,7 +1982,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(mesh_size_candidates))
         gmsh.option.setNumber("Mesh.MeshSizeMax", far_field_mesh_size)
         gmsh.option.setNumber("Mesh.Optimize", 1)
-        gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
+        gmsh.option.setNumber("Mesh.OptimizeNetgen", _gmsh_optimize_netgen(config))
 
         gmsh.model.mesh.generate(3)
         msh_path.parent.mkdir(parents=True, exist_ok=True)
