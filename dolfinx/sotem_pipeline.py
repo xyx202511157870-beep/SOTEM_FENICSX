@@ -7719,7 +7719,22 @@ def run_fetd_forward(
     observation_time_by_step = {
         int(step): float(return_times[i]) for i, step in enumerate(schedule["output_step_indices"])
     }
+    receiver_run_configs = _receiver_mesh_configs(config)
+    multi_receiver_run = bool(config.receiver_locations)
+    if multi_receiver_run and (
+        bool(config.resume_forward)
+        or bool(config.checkpoint_forward)
+        or int(config.stop_after_outputs) > 0
+    ):
+        raise ValueError(
+            "explicit receiver-set runs do not yet support segmented checkpoints"
+        )
     source_term_mode = str(config.source_term_mode).strip().lower()
+    if multi_receiver_run and source_term_mode == "primary_secondary":
+        raise ValueError(
+            "explicit receiver sets currently require a shared total-field solve; "
+            "primary_secondary receiver projection is not enabled"
+        )
     if source_term_mode == "primary_secondary":
         with _timed_stage(config, "forward_primary_secondary_delegate", timing_t0, output_count=int(len(return_times))):
             return _run_primary_secondary_fetd_forward(
@@ -7783,6 +7798,11 @@ def run_fetd_forward(
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     if magnetic_dbdt_mode == "ampere_rate" and source_term_mode != "primary_secondary":
         raise ValueError("magnetic_dbdt_mode='ampere_rate' requires source_term_mode='primary_secondary'")
+    if multi_receiver_run and magnetic_receiver_mode == "faraday_integrated":
+        raise ValueError(
+            "explicit receiver sets require receiver-specific magnetic states; "
+            "use magnetic_receiver_mode='biot_current' or 'biot_ohmic'"
+        )
     magnetic_dbdt_evaluation_mode = str(config.magnetic_dbdt_evaluation_mode).strip().lower()
     if magnetic_dbdt_evaluation_mode in {"", "same"}:
         magnetic_dbdt_evaluation_mode = "same"
@@ -7801,20 +7821,38 @@ def run_fetd_forward(
             "magnetic_dbdt_evaluation_mode must be 'same', 'first_cell', 'mean', 'median', "
             "'nearest_center', 'shallowest', 'local_lsq', 'local_lsq_earth', 'local_lsq_air', or 'local_lsq_interface'"
         )
+    def evaluate_biot_h_set(field, source_current_value: float):
+        values = []
+        for receiver_config in receiver_run_configs:
+            if magnetic_receiver_mode == "biot_current":
+                value = _biot_savart_total_h_at_receiver(
+                    field,
+                    msh,
+                    materials,
+                    receiver_config,
+                    source_current_value,
+                    debye=debye,
+                    memories=memories,
+                )
+            elif magnetic_receiver_mode == "biot_ohmic":
+                value = _biot_savart_cell_current_h_at_receiver(
+                    field,
+                    msh,
+                    materials,
+                    receiver_config,
+                )
+            else:
+                raise RuntimeError("Biot receiver-set evaluation requested for a non-Biot mode")
+            values.append(np.asarray(value, dtype=float).reshape(3))
+        result = np.asarray(values, dtype=float)
+        return result if multi_receiver_run else result[0]
+
     H_old_receiver = None
     faraday_receiver_hz = None
     if magnetic_receiver_mode == "biot_current":
-        H_old_receiver = _biot_savart_total_h_at_receiver(
-            E_old,
-            msh,
-            materials,
-            config,
-            _source_current(0.0, config),
-            debye=debye,
-            memories=memories,
-        )
+        H_old_receiver = evaluate_biot_h_set(E_old, _source_current(0.0, config))
     elif magnetic_receiver_mode == "biot_ohmic":
-        H_old_receiver = _biot_savart_cell_current_h_at_receiver(E_old, msh, materials, config)
+        H_old_receiver = evaluate_biot_h_set(E_old, _source_current(0.0, config))
     elif magnetic_receiver_mode == "faraday_integrated":
         faraday_initial_h = _biot_savart_total_h_at_receiver(
             E_old,
@@ -7831,7 +7869,11 @@ def run_fetd_forward(
     row_times = []
     receiver_diagnostic_rows = []
     solver_log = []
-    components = _forward_components(config)
+    components = (
+        ["Ex", "dBzdt", "Hz"]
+        if multi_receiver_run
+        else _forward_components(config)
+    )
     previous_time = 0.0
     start_step = 0
     if bool(config.resume_forward):
@@ -8021,17 +8063,15 @@ def run_fetd_forward(
             clean_stats = _apply_conductivity_divergence_cleaning(divergence_cleaner, E_new, operators, config)
         _update_debye_memories(debye, memories, E_new, dt, config.debye_time_scheme)
         if magnetic_receiver_mode == "biot_current":
-            H_new_receiver = _biot_savart_total_h_at_receiver(
+            H_new_receiver = evaluate_biot_h_set(
                 E_new,
-                msh,
-                materials,
-                config,
                 _source_current(float(t), config),
-                debye=debye,
-                memories=memories,
             )
         elif magnetic_receiver_mode == "biot_ohmic":
-            H_new_receiver = _biot_savart_cell_current_h_at_receiver(E_new, msh, materials, config)
+            H_new_receiver = evaluate_biot_h_set(
+                E_new,
+                _source_current(float(t), config),
+            )
         else:
             H_new_receiver = None
 
@@ -8054,32 +8094,99 @@ def run_fetd_forward(
             with _timed_stage(config, "forward_first_output_receivers", timing_t0, step=int(step)) if (
                 len(rows) == initial_rows_count
             ) else nullcontext():
-                if magnetic_receiver_mode == "faraday_integrated":
+                if multi_receiver_run:
+                    from seepage_channel_full_domain import (
+                        evaluate_receiver_set,
+                        records_to_array,
+                    )
+
+                    dbdt = compute_dbdt(E_new, spaces)
+                    receiver_records = evaluate_receiver_set(
+                        E_new,
+                        dbdt,
+                        msh,
+                        config,
+                        evaluator=evaluate_receivers,
+                    )
+                    for receiver_index, receiver_record in enumerate(receiver_records):
+                        receiver_record["dBzdt_curl"] = float(
+                            receiver_record.get("dBzdt", np.nan)
+                        )
+                        receiver_record["dBzdt_biot_rate"] = float("nan")
+                        if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
+                            _assign_biot_receiver_hz(
+                                receiver_record,
+                                H_new_receiver[receiver_index],
+                            )
+                            biot_rate = float(
+                                _biot_receiver_dbdt_from_h(
+                                    H_new_receiver[receiver_index],
+                                    H_old_receiver[receiver_index],
+                                    dt=dt,
+                                )[2]
+                            )
+                            receiver_record["dBzdt_biot_rate"] = biot_rate
+                            if magnetic_dbdt_mode == "biot_rate":
+                                receiver_record["dBzdt"] = biot_rate
+                    rows.append(records_to_array(receiver_records, components).tolist())
+                    row_times.append(float(observation_time_by_step[step]))
+                    for receiver_record, receiver_config in zip(
+                        receiver_records,
+                        receiver_run_configs,
+                    ):
+                        diagnostic_rows = _evaluate_receiver_diagnostics(
+                            E_new,
+                            dbdt,
+                            msh,
+                            receiver_config,
+                            time_obs=observation_time_by_step[step],
+                            main_record=receiver_record,
+                        )
+                        for diagnostic_row in diagnostic_rows:
+                            diagnostic_row.update(
+                                {
+                                    "receiver_id": receiver_record["receiver_id"],
+                                    "receiver_x_m": receiver_record["receiver_x_m"],
+                                    "receiver_y_m": receiver_record["receiver_y_m"],
+                                    "receiver_z_m": receiver_record["receiver_z_m"],
+                                    "provenance": receiver_record["provenance"],
+                                }
+                            )
+                        receiver_diagnostic_rows.extend(diagnostic_rows)
+                    rec = receiver_records[0]
+                elif magnetic_receiver_mode == "faraday_integrated":
                     dbdt = faraday_step_dbdt
                     rec = dict(faraday_step_record)
                 else:
                     dbdt = compute_dbdt(E_new, spaces)
                     rec = evaluate_receivers(E_new, dbdt, msh, config)
-                rec["dBzdt_curl"] = float(rec.get("dBzdt", np.nan))
-                rec["dBzdt_biot_rate"] = float("nan")
-                if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
-                    _assign_biot_receiver_hz(rec, H_new_receiver)
-                    biot_rate = float(_biot_receiver_dbdt_from_h(H_new_receiver, H_old_receiver, dt=dt)[2])
-                    rec["dBzdt_biot_rate"] = biot_rate
-                    if magnetic_dbdt_mode == "biot_rate":
-                        rec["dBzdt"] = biot_rate
-                rows.append([rec[name] for name in components])
-                row_times.append(float(observation_time_by_step[step]))
-                receiver_diagnostic_rows.extend(
-                    _evaluate_receiver_diagnostics(
-                        E_new,
-                        dbdt,
-                        msh,
-                        config,
-                        time_obs=observation_time_by_step[step],
-                        main_record=rec,
+                if not multi_receiver_run:
+                    rec["dBzdt_curl"] = float(rec.get("dBzdt", np.nan))
+                    rec["dBzdt_biot_rate"] = float("nan")
+                    if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
+                        _assign_biot_receiver_hz(rec, H_new_receiver)
+                        biot_rate = float(
+                            _biot_receiver_dbdt_from_h(
+                                H_new_receiver,
+                                H_old_receiver,
+                                dt=dt,
+                            )[2]
+                        )
+                        rec["dBzdt_biot_rate"] = biot_rate
+                        if magnetic_dbdt_mode == "biot_rate":
+                            rec["dBzdt"] = biot_rate
+                    rows.append([rec[name] for name in components])
+                    row_times.append(float(observation_time_by_step[step]))
+                    receiver_diagnostic_rows.extend(
+                        _evaluate_receiver_diagnostics(
+                            E_new,
+                            dbdt,
+                            msh,
+                            config,
+                            time_obs=observation_time_by_step[step],
+                            main_record=rec,
+                        )
                     )
-                )
 
         if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
             H_old_receiver = H_new_receiver
@@ -8108,7 +8215,7 @@ def run_fetd_forward(
             log_item["divergence_clean_applied_correction_norm"] = float(clean_stats["applied_correction_norm"])
             log_item["divergence_clean_strength"] = float(clean_stats["strength"])
         solver_log.append(log_item)
-        if is_output and msh.comm.rank == 0:
+        if is_output and msh.comm.rank == 0 and not multi_receiver_run:
             with _timed_stage(config, "forward_first_output_partial_save", timing_t0, step=int(step)) if (
                 len(rows) - initial_rows_count == 1
             ) else nullcontext():
@@ -8192,6 +8299,40 @@ def run_fetd_forward(
 
     _destroy_solver_context(solver_context)
     completed_times = np.asarray(row_times, dtype=float)
+    if multi_receiver_run:
+        if rows:
+            receiver_data = np.transpose(np.asarray(rows, dtype=float), (1, 0, 2))
+        else:
+            receiver_data = np.empty(
+                (len(receiver_run_configs), 0, len(components)),
+                dtype=float,
+            )
+        receiver_locations = np.asarray(
+            [receiver_config.receiver for receiver_config in receiver_run_configs],
+            dtype=float,
+        )
+        receiver_provenance = np.asarray(
+            ["explicit_full_domain"] * len(receiver_run_configs)
+        )
+        if msh.comm.rank == 0 and completed_times.size:
+            from seepage_channel_full_domain import write_predictions_5rx
+
+            write_predictions_5rx(
+                config.workdir / "predictions_5rx.csv",
+                times=completed_times,
+                receiver_locations=receiver_locations,
+                data=receiver_data,
+                components=components,
+            )
+        return {
+            "times": completed_times,
+            "receiver_locations": receiver_locations,
+            "components": np.asarray(components),
+            "data": receiver_data,
+            "receiver_provenance": receiver_provenance,
+            "solver_log": solver_log,
+            "receiver_diagnostic_rows": receiver_diagnostic_rows,
+        }
     return {
         "times": completed_times,
         "data": np.asarray(rows),

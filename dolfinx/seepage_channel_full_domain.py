@@ -8,7 +8,10 @@ test-driven implementation tasks are completed.
 
 from __future__ import annotations
 
+import copy
+import csv
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
@@ -66,4 +69,109 @@ def box_mask(
     }
 
 
-__all__ = ["ReceiverEvaluationConfig", "box_mask", "receiver_configs"]
+def evaluate_receiver_set(
+    electric_field: Any,
+    dbdt: Any,
+    mesh: Any,
+    config: Any,
+    *,
+    evaluator: Any,
+) -> list[dict[str, Any]]:
+    raw_locations = getattr(config, "receiver_locations", ()) or (config.receiver,)
+    records: list[dict[str, Any]] = []
+    for receiver in receiver_configs(raw_locations):
+        local_config = copy.copy(config)
+        local_config.receiver = receiver.receiver
+        local_config.receiver_locations = ()
+        record = dict(evaluator(electric_field, dbdt, mesh, local_config))
+        record.update(
+            {
+                "receiver_id": receiver.receiver_id,
+                "receiver_x_m": receiver.receiver[0],
+                "receiver_y_m": receiver.receiver[1],
+                "receiver_z_m": receiver.receiver[2],
+                "provenance": receiver.provenance,
+            }
+        )
+        records.append(record)
+    return records
+
+
+def records_to_array(
+    records: Iterable[dict[str, Any]],
+    components: Iterable[str],
+) -> NDArray[np.float64]:
+    component_names = tuple(components)
+    return np.asarray(
+        [
+            [float(record[component]) for component in component_names]
+            for record in records
+        ],
+        dtype=float,
+    )
+
+
+def write_predictions_5rx(
+    path: str | Path,
+    *,
+    times: ArrayLike,
+    receiver_locations: ArrayLike,
+    data: ArrayLike,
+    components: Iterable[str],
+) -> Path:
+    output_path = Path(path)
+    time_values = np.asarray(times, dtype=float).reshape(-1)
+    locations = np.asarray(receiver_locations, dtype=float)
+    component_names = tuple(str(component) for component in components)
+    values = np.asarray(data, dtype=float)
+    if locations.ndim != 2 or locations.shape[1] != 3:
+        raise ValueError("receiver_locations must have shape (n_rx, 3)")
+    expected_shape = (locations.shape[0], time_values.size, len(component_names))
+    if values.shape != expected_shape:
+        raise ValueError(f"data must have shape {expected_shape}; got {values.shape}")
+    required = ("Ex", "dBzdt", "Hz")
+    if set(component_names) != set(required):
+        raise ValueError("components must contain exactly Ex, dBzdt, and Hz")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("all receiver predictions must be finite")
+    indices = {component: component_names.index(component) for component in required}
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "receiver_id",
+                "receiver_x_m",
+                "receiver_y_m",
+                "receiver_z_m",
+                "time_obs",
+                "Ex",
+                "dBzdt",
+                "Hz",
+                "provenance",
+            ]
+        )
+        for receiver_index, location in enumerate(locations):
+            for time_index, time_obs in enumerate(time_values):
+                writer.writerow(
+                    [
+                        f"Rx{receiver_index + 1}",
+                        *location.tolist(),
+                        float(time_obs),
+                        float(values[receiver_index, time_index, indices["Ex"]]),
+                        float(values[receiver_index, time_index, indices["dBzdt"]]),
+                        float(values[receiver_index, time_index, indices["Hz"]]),
+                        "explicit_full_domain",
+                    ]
+                )
+    return output_path
+
+
+__all__ = [
+    "ReceiverEvaluationConfig",
+    "box_mask",
+    "evaluate_receiver_set",
+    "receiver_configs",
+    "records_to_array",
+    "write_predictions_5rx",
+]

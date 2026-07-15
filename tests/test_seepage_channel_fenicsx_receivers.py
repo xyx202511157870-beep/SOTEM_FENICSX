@@ -1,0 +1,82 @@
+import importlib.util
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import numpy as np
+
+
+def load_full_domain_module():
+    path = Path("dolfinx/seepage_channel_full_domain.py")
+    spec = importlib.util.spec_from_file_location("seepage_receiver_module", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_five_receiver_set_calls_evaluator_five_times() -> None:
+    module = load_full_domain_module()
+    calls = []
+
+    def evaluator(_electric_field, _dbdt, _mesh, config):
+        calls.append(config.receiver)
+        return {
+            "Ex": config.receiver[1],
+            "dBzdt": 2 * config.receiver[1],
+            "Hz": 3 * config.receiver[1],
+        }
+
+    config = SimpleNamespace(
+        receiver_locations=tuple(
+            (0.0, y, 0.1) for y in (-20, -10, 0, 10, 20)
+        ),
+        receiver=(0.0, 0.0, 0.1),
+    )
+    records = module.evaluate_receiver_set(
+        None,
+        None,
+        None,
+        config,
+        evaluator=evaluator,
+    )
+    assert calls == list(config.receiver_locations)
+    assert [row["provenance"] for row in records] == [
+        "explicit_full_domain"
+    ] * 5
+    assert module.records_to_array(
+        records,
+        ("Ex", "dBzdt", "Hz"),
+    ).shape == (5, 3)
+
+
+def test_full_domain_module_has_no_mirror_expansion() -> None:
+    source = Path("dolfinx/seepage_channel_full_domain.py").read_text(
+        encoding="utf-8"
+    )
+    assert "mirror_crossline_values" not in source
+    assert "output[0] = output[4]" not in source
+    assert "explicit_full_domain" in source
+
+
+def test_write_predictions_5rx_uses_long_form_rows(tmp_path) -> None:
+    module = load_full_domain_module()
+    path = tmp_path / "predictions_5rx.csv"
+    times = np.array([1.0e-5, 2.0e-5])
+    locations = np.array([[0.0, -20.0, 0.1], [0.0, 20.0, 0.1]])
+    data = np.arange(12, dtype=float).reshape(2, 2, 3)
+    module.write_predictions_5rx(
+        path,
+        times=times,
+        receiver_locations=locations,
+        data=data,
+        components=("Ex", "dBzdt", "Hz"),
+    )
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == (
+        "receiver_id,receiver_x_m,receiver_y_m,receiver_z_m,time_obs,"
+        "Ex,dBzdt,Hz,provenance"
+    )
+    assert len(lines) == 5
+    assert all(line.endswith("explicit_full_domain") for line in lines[1:])
