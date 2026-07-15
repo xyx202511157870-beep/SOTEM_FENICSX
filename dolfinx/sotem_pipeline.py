@@ -80,6 +80,7 @@ class PipelineConfig:
     source_quadrature_points: int = 0
 
     receiver: tuple[float, float, float] = (0.0, -300.0, -0.1)
+    receiver_locations: tuple[tuple[float, float, float], ...] = ()
     receiver_type: str = "point"  # point, volume_average, disk_average
     receiver_average_radius: float = 2.0
     receiver_diagnostic_types: tuple[str, ...] | str = ()
@@ -105,6 +106,10 @@ class PipelineConfig:
 
     rho_air: float = 1.0e8
     rho_earth: float = 100.0
+    conductivity_box_name: str = ""
+    conductivity_box_bounds: tuple[tuple[float, float], ...] = ()
+    conductivity_box_sigma: float = 0.0
+    conductivity_box_mesh_size: float = 2.5
     layer_depths: tuple[float, ...] = ()
     layer_resistivities: tuple[float, ...] = ()
     mu_r_air: float = 1.0
@@ -213,6 +218,44 @@ class PipelineConfig:
 
     def output_report(self) -> Path:
         return self.workdir / "verification_report.txt"
+
+
+def _resolved_receiver_locations(
+    config: PipelineConfig,
+) -> tuple[tuple[float, float, float], ...]:
+    raw_locations = config.receiver_locations or (config.receiver,)
+    locations = tuple(tuple(float(value) for value in point) for point in raw_locations)
+    if any(len(point) != 3 for point in locations):
+        raise ValueError("each receiver location must contain x, y, z")
+    if len(set(locations)) != len(locations):
+        raise ValueError("receiver locations must be unique")
+    return locations
+
+
+def _conductivity_box_config_audit(config: PipelineConfig) -> dict[str, Any]:
+    import numpy as np
+
+    bounds = np.asarray(config.conductivity_box_bounds, dtype=float)
+    if bounds.size == 0:
+        return {"enabled": False}
+    if bounds.shape != (3, 2) or np.any(bounds[:, 1] <= bounds[:, 0]):
+        raise ValueError("conductivity_box_bounds must have shape (3, 2)")
+    if bounds[2, 1] >= 0.0:
+        raise ValueError("conductivity box must remain below z=0 in z-up coordinates")
+    conductivity = float(config.conductivity_box_sigma)
+    if not np.isfinite(conductivity) or conductivity <= 0.0:
+        raise ValueError("conductivity_box_sigma must be positive and finite")
+    mesh_size = float(config.conductivity_box_mesh_size)
+    if not np.isfinite(mesh_size) or mesh_size <= 0.0:
+        raise ValueError("conductivity_box_mesh_size must be positive and finite")
+    return {
+        "enabled": True,
+        "name": str(config.conductivity_box_name),
+        "bounds": bounds.tolist(),
+        "sigma_s_per_m": conductivity,
+        "mesh_size_m": mesh_size,
+        "theoretical_volume_m3": float(np.prod(bounds[:, 1] - bounds[:, 0])),
+    }
 
 
 def validate_geometry_consistency(config: PipelineConfig) -> dict[str, float]:
@@ -11795,6 +11838,41 @@ def _parse_string_csv(value: str | None) -> tuple[str, ...]:
     return tuple(raw.strip() for raw in str(value).split(",") if raw.strip())
 
 
+def _parse_receiver_locations(
+    values: list[str] | tuple[str, ...] | None,
+) -> tuple[tuple[float, float, float], ...]:
+    locations: list[tuple[float, float, float]] = []
+    for value in values or ():
+        coordinates = _parse_float_csv(value, "--receiver-location")
+        if len(coordinates) != 3:
+            raise argparse.ArgumentTypeError(
+                "--receiver-location must contain exactly x,y,z"
+            )
+        locations.append((coordinates[0], coordinates[1], coordinates[2]))
+    return tuple(locations)
+
+
+def _parse_conductivity_box_bounds(
+    value: str | None,
+) -> tuple[tuple[float, float], ...]:
+    if value is None or str(value).strip() == "":
+        return ()
+    axes = str(value).split(";")
+    if len(axes) != 3:
+        raise argparse.ArgumentTypeError(
+            "--conductivity-box-bounds must contain xmin,xmax;ymin,ymax;zmin,zmax"
+        )
+    bounds: list[tuple[float, float]] = []
+    for axis_values in axes:
+        limits = _parse_float_csv(axis_values, "--conductivity-box-bounds")
+        if len(limits) != 2:
+            raise argparse.ArgumentTypeError(
+                "each conductivity-box axis must contain exactly lower,upper"
+            )
+        bounds.append((limits[0], limits[1]))
+    return tuple(bounds)
+
+
 def main(argv: list[str] | None = None) -> int:
     run_t0 = time.perf_counter()
     runtime: dict[str, float] = {}
@@ -12062,6 +12140,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receiver-x", type=float, default=0.0)
     parser.add_argument("--receiver-y", type=float, default=-300.0)
     parser.add_argument("--receiver-z", type=float, default=-0.1)
+    parser.add_argument(
+        "--receiver-location",
+        action="append",
+        default=[],
+        help="Explicit receiver x,y,z; repeat for a full receiver set.",
+    )
+    parser.add_argument("--conductivity-box-name", default="")
+    parser.add_argument(
+        "--conductivity-box-bounds",
+        default="",
+        help="z-up box bounds formatted xmin,xmax;ymin,ymax;zmin,zmax.",
+    )
+    parser.add_argument("--conductivity-box-sigma", type=float, default=0.0)
+    parser.add_argument("--conductivity-box-mesh-size", type=float, default=2.5)
     parser.add_argument("--source-mesh-size", type=float, default=5.0)
     parser.add_argument("--source-refinement-radius", type=float, default=100.0)
     parser.add_argument("--source-quadrature-points", type=int, default=0, help="Override manual line-source Gauss points; 0 keeps the automatic rule.")
@@ -12239,6 +12331,13 @@ def main(argv: list[str] | None = None) -> int:
         source_current=args.source_current,
         ramp_off_time=args.ramp_off_time,
         receiver=(args.receiver_x, args.receiver_y, args.receiver_z),
+        receiver_locations=_parse_receiver_locations(args.receiver_location),
+        conductivity_box_name=args.conductivity_box_name,
+        conductivity_box_bounds=_parse_conductivity_box_bounds(
+            args.conductivity_box_bounds
+        ),
+        conductivity_box_sigma=args.conductivity_box_sigma,
+        conductivity_box_mesh_size=args.conductivity_box_mesh_size,
         source_mesh_size=args.source_mesh_size,
         source_refinement_radius=args.source_refinement_radius,
         source_quadrature_points=args.source_quadrature_points,
