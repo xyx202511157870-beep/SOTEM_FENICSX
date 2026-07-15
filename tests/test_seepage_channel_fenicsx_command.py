@@ -66,6 +66,10 @@ def test_thin_commands_preserve_five_full_domain_receivers_and_refine_box() -> N
         assert f"--receiver-location {receiver}" in background
         assert f"--receiver-location {receiver}" in channel
     assert '"--conductivity-box-bounds=-30,30;-0.5,0.5;-20.5,-19.5"' in channel
+    assert '"--conductivity-box-bounds=-30,30;-0.5,0.5;-20.5,-19.5"' in background
     assert "--conductivity-box-mesh-size 0.25" in channel
+    assert "--conductivity-box-mesh-size 0.25" in background
+    assert "--conductivity-box-sigma 0.01" in background
+    assert "--conductivity-box-sigma 1.0" in channel
     assert "--workdir output/seepage_channel_100m_5rx_60x1x1/fenicsx_background" in background
     assert "--workdir output/seepage_channel_100m_5rx_60x1x1/fenicsx_channel" in channel

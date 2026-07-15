@@ -19,6 +19,10 @@ exec /home/paidaxin/miniconda3/envs/fenicsx/bin/python -u dolfinx/sotem_pipeline
   --source-mesh-size 5 --source-refinement-radius 40 \
   --receiver-mesh-size 2.5 --receiver-refinement-radius 20 \
   --far-field-mesh-size 750 \
+  --conductivity-box-name seepage_channel_refinement_only \
+  "--conductivity-box-bounds=-30,30;-0.5,0.5;-20.5,-19.5" \
+  --conductivity-box-sigma 0.01 \
+  --conductivity-box-mesh-size 0.25 \
   --rho-air 1e8 --rho-earth 100 \
   --ramp-off-time 1e-8 --time-origin after_ramp \
   --t-min 1e-5 --t-max 1e-2 --time-growth 1.2589254117941673 \
