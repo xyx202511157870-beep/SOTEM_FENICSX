@@ -1544,6 +1544,12 @@ def _add_air_earth_domain_with_conductivity_imprint(occ, config: PipelineConfig)
     return air, earth_boxes
 
 
+def _gmsh_algorithm_3d(config: PipelineConfig) -> int:
+    """Select a volume mesher compatible with imprinted internal faces."""
+
+    return 1 if _conductivity_box_config_audit(config)["enabled"] else 10
+
+
 def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
     """Return extra embedded points that keep receiver cells locally small."""
 
@@ -1746,7 +1752,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
     try:
         gmsh.option.setNumber("General.Terminal", 1)
         gmsh.option.setNumber("Mesh.MshFileVersion", 4.1)
-        gmsh.option.setNumber("Mesh.Algorithm3D", 10)
+        gmsh.option.setNumber("Mesh.Algorithm3D", _gmsh_algorithm_3d(config))
         gmsh.model.add("sotem_air_earth")
 
         occ = gmsh.model.occ

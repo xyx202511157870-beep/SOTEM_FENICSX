@@ -116,3 +116,16 @@ def test_thin_conductivity_box_is_imprinted_into_occ_domain() -> None:
     objects, tools = occ.fragments[-1]
     assert (3, len(occ.boxes)) in tools
     assert len(objects) == 2
+
+
+def test_imprinted_conductivity_box_uses_constrained_delaunay_algorithm() -> None:
+    module = load_pipeline_module()
+    plain = module.PipelineConfig()
+    imprinted = module.PipelineConfig(
+        conductivity_box_name="thin_channel",
+        conductivity_box_bounds=((-30.0, 30.0), (-0.5, 0.5), (-20.5, -19.5)),
+        conductivity_box_sigma=1.0,
+    )
+
+    assert module._gmsh_algorithm_3d(plain) == 10
+    assert module._gmsh_algorithm_3d(imprinted) == 1
