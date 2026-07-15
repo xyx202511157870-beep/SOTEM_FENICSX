@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .four_way_validation import load_simpeg_values, run_empymod_reference
+from .seepage_reference import load_simpeg_values, run_empymod_reference
 from .seepage_channel_model import MODEL
 
 
