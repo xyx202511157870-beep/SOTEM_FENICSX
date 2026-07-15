@@ -118,7 +118,7 @@ def test_thin_conductivity_box_is_imprinted_into_occ_domain() -> None:
     assert len(objects) == 2
 
 
-def test_imprinted_conductivity_box_uses_constrained_delaunay_algorithm() -> None:
+def test_imprinted_conductivity_box_uses_frontal_algorithm() -> None:
     module = load_pipeline_module()
     plain = module.PipelineConfig()
     imprinted = module.PipelineConfig(
@@ -128,6 +128,6 @@ def test_imprinted_conductivity_box_uses_constrained_delaunay_algorithm() -> Non
     )
 
     assert module._gmsh_algorithm_3d(plain) == 10
-    assert module._gmsh_algorithm_3d(imprinted) == 1
+    assert module._gmsh_algorithm_3d(imprinted) == 4
     assert module._gmsh_optimize_netgen(plain) == 1
     assert module._gmsh_optimize_netgen(imprinted) == 0

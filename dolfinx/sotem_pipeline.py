@@ -1547,7 +1547,7 @@ def _add_air_earth_domain_with_conductivity_imprint(occ, config: PipelineConfig)
 def _gmsh_algorithm_3d(config: PipelineConfig) -> int:
     """Select a volume mesher compatible with imprinted internal faces."""
 
-    return 1 if _conductivity_box_config_audit(config)["enabled"] else 10
+    return 4 if _conductivity_box_config_audit(config)["enabled"] else 10
 
 
 def _gmsh_optimize_netgen(config: PipelineConfig) -> int:
