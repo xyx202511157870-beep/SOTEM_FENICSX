@@ -18,6 +18,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from atem3d.seepage_channel_validation import (  # noqa: E402
+    aggregate_result_directory,
     save_empymod_background,
     sha256_file,
     simpeg_payload_from_h5,
@@ -90,12 +91,18 @@ def main(argv: list[str] | None = None) -> int:
     simpeg_parser.add_argument("--case", choices=tuple(SIMPEG_CONFIGS), required=True)
     simpeg_parser.add_argument("--output-root", type=Path, required=True)
 
+    aggregate_parser = subparsers.add_parser("aggregate")
+    aggregate_parser.add_argument("--output-root", type=Path, required=True)
+
     args = parser.parse_args(argv)
     output_root = args.output_root.resolve()
     if args.solver == "empymod":
         output = _run_empymod(output_root, srcpts=args.srcpts)
-    else:
+    elif args.solver == "simpeg":
         output = _run_simpeg(output_root, case=args.case)
+    else:
+        aggregate_result_directory(output_root)
+        output = output_root / "benchmark_results.npz"
     print(f"wrote {output}")
     return 0
 
