@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import importlib.metadata
+import json
 import os
 from pathlib import Path
+import platform
 import sys
+from typing import Any
 
 
 def _add_native_dll_directories() -> list[object]:
@@ -34,6 +38,50 @@ def _preflight_pardiso() -> None:
         raise RuntimeError("PARDISO preflight returned an incorrect solution")
 
 
+def runtime_audit_path(arguments: list[str]) -> Path | None:
+    if "--output" not in arguments:
+        return None
+    index = arguments.index("--output")
+    if index + 1 >= len(arguments):
+        raise ValueError("--output requires a path")
+    return Path(arguments[index + 1]).parent / "runtime_environment.json"
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _write_runtime_audit(arguments: list[str]) -> Path | None:
+    path = runtime_audit_path(arguments)
+    if path is None:
+        return None
+    from pydiso.mkl_solver import get_mkl_version
+
+    packages = {}
+    for name in ("atem3d", "numpy", "scipy", "discretize", "simpeg", "pymatsolver", "pydiso"):
+        packages[name] = importlib.metadata.version(name)
+    payload = {
+        "python_executable": sys.executable,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "packages": packages,
+        "mkl": _json_safe(get_mkl_version()),
+        "native_dll_directories": [
+            item for item in os.environ.get("ATEM3D_DLL_DIRS", "").split(os.pathsep) if item
+        ],
+        "pardiso_preflight": "passed",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     _dll_handles = _add_native_dll_directories()
     _preflight_pardiso()
@@ -41,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     if arguments == ["--preflight-pardiso"]:
         print("PARDISO preflight passed")
         return 0
+    _write_runtime_audit(arguments)
     from atem3d.cli import main as atem3d_main
 
     return int(atem3d_main(arguments))
