@@ -215,7 +215,9 @@ def add_cover(document: Document) -> None:
     document.add_paragraph()
     note = document.add_paragraph()
     note.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = note.add_run("正式计算产物：5 个接收点 x 31 个时刻 x 3 个分量")
+    run = note.add_run(
+        "正式报告视图：4 个接收点 x 31 个时刻 x 3 个分量；原始计算产物保留 5 点"
+    )
     _set_run_font(run, 10.5, color=MUTED)
     document.add_page_break()
 
@@ -327,7 +329,7 @@ def add_methods(document: Document, result_dir: Path, fenics_background: dict, f
             ("求解形式", "EB，PARDISO"),
             ("源初始磁场", "Biot-Savart 有限导线"),
             ("内部时间步", "1e-7 x 100，1e-6 x 90，1e-5 x 90，1e-4 x 90"),
-            ("结果形状", "5 x 31 x 3，背景和通道各 465 值"),
+            ("结果形状", "原始 5 x 31 x 3；正式曲线展示 4 个接收点"),
         ],
     )
     add_heading(document, "3.2 FEniCSx 参数", level=2)
@@ -344,7 +346,7 @@ def add_methods(document: Document, result_dir: Path, fenics_background: dict, f
             ("时间内步数", "224", "224"),
             ("线性求解器", "CG + hypre/AMS", "CG + hypre/AMS"),
             ("计算总时间", f"{fenics_background['runtime_seconds']['total_seconds'] / 60:.1f} min", f"{fenics_channel['runtime_seconds']['total_seconds'] / 60:.1f} min"),
-            ("输出模式", "5 点全域直接求值", "5 点全域直接求值"),
+            ("输出模式", "原始 5 点全域求值；报告 4 点", "原始 5 点全域求值；报告 4 点"),
         ],
     )
     add_body(
@@ -385,8 +387,14 @@ def add_quality_and_reproducibility(document: Document, result_dir: Path, audit:
         document,
         ["检查项", "结果"],
         [
-            ("数据完整性", "SimPEG 背景/通道和 FEniCSx 背景/通道均为 5 x 31 x 3，全部有限"),
-            ("FEniCSx 接收点来源", "5/5 为 explicit_full_domain，无单侧对称镜像"),
+            (
+                "数据完整性",
+                "原始 SimPEG/FEniCSx 数组均为 5 x 31 x 3 且全部有限；正式报告展示 4 点",
+            ),
+            (
+                "FEniCSx 接收点来源",
+                "原始 5/5 为 explicit_full_domain；正式四点无单侧对称镜像",
+            ),
             ("通道网格体积", "5727.3 m3 / 6000 m3，相对误差 4.55%"),
             ("比较边界", "empymod 只参与背景比较，禁止将通道差分与一维参考直接比较"),
             ("空间/时间收敛扫描", "本次未执行独立加密算例；convergence_summary.json 显式记录 available=false"),

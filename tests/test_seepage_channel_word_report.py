@@ -60,6 +60,8 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
         encoding="utf-8"
     )
     assert 'add_heading(document, "4. 结果对比")' in report_source
+    assert "正式报告视图：4 个接收点" in report_source
+    assert "原始计算产物保留 5 点" in report_source
     paragraph_text = [paragraph.text for paragraph in document.paragraphs]
     table_text = [
         cell.text
