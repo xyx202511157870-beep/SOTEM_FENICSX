@@ -103,7 +103,7 @@ def load_geometry_contract(result_dir: str | Path) -> dict[str, Any]:
 
 def plot_model_geometry(output_root: Path) -> None:
     contract = load_geometry_contract(output_root)
-    fig = plt.figure(figsize=(12, 4.2))
+    fig = plt.figure(figsize=(14, 4.4))
     axis_3d = fig.add_subplot(131, projection="3d")
     source = np.asarray(contract["source_endpoints_m"], dtype=float)
     receivers = np.asarray(contract["receiver_locations_m"], dtype=float)
@@ -111,7 +111,8 @@ def plot_model_geometry(output_root: Path) -> None:
     axis_3d.plot(source[:, 0], source[:, 1], source[:, 2], color="crimson", lw=3, label="100 m wire")
     axis_3d.scatter(receivers[:, 0], receivers[:, 1], receivers[:, 2], color="navy", s=28, label="Rx1-Rx5")
     _draw_box_edges(axis_3d, channel_bounds, color="teal", lw=1.5)
-    axis_3d.set(xlabel="x (m)", ylabel="y (m)", zlabel="physical z-down (m)")
+    axis_3d.set(xlabel="x (m)", ylabel="y (m)", zlabel="z-down (m)")
+    axis_3d.zaxis.labelpad = 5
     axis_3d.legend(fontsize=7)
     axis_3d.set_title("Full 3D geometry")
 
@@ -120,7 +121,7 @@ def plot_model_geometry(output_root: Path) -> None:
     (xmin, xmax), (_ymin, _ymax), (zmin, zmax) = channel_bounds
     axis_xz.add_patch(plt.Rectangle((xmin, zmin), xmax - xmin, zmax - zmin, color="teal", alpha=0.3))
     axis_xz.axhline(0.0, color="black", lw=0.8)
-    axis_xz.set(xlabel="x (m)", ylabel="physical z-down (m)", title="x-z section")
+    axis_xz.set(xlabel="x (m)", ylabel="z-down (m)", title="x-z section")
     axis_xz.invert_yaxis()
 
     axis_yz = fig.add_subplot(133)
@@ -128,7 +129,7 @@ def plot_model_geometry(output_root: Path) -> None:
     (_xmin, _xmax), (ymin, ymax), (zmin, zmax) = channel_bounds
     axis_yz.add_patch(plt.Rectangle((ymin, zmin), ymax - ymin, zmax - zmin, color="teal", alpha=0.3))
     axis_yz.axhline(0.0, color="black", lw=0.8)
-    axis_yz.set(xlabel="y (m)", ylabel="physical z-down (m)", title="y-z section")
+    axis_yz.set(xlabel="y (m)", ylabel="z-down (m)", title="y-z section")
     axis_yz.invert_yaxis()
     _save_figure(fig, output_root, "model_geometry")
 
