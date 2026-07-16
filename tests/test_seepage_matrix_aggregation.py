@@ -106,6 +106,16 @@ def test_matrix_aggregation_builds_all_open_solver_gates(tmp_path: Path) -> None
                 _write_case(tmp_path, f"{solver}-temporal-{role}-dt-{slug}", values)
     _write_magnetic_diagnostics(tmp_path, "background", background)
     _write_magnetic_diagnostics(tmp_path, "channel", background + _symmetric(1.0))
+    base_case = next(
+        item
+        for item in build_case_matrix()
+        if item.case_id == "simpeg-conductivity-background-reference"
+    )
+    np.savez_compressed(
+        tmp_path / "verification_empymod_background.npz",
+        values=background,
+        model_fingerprint=np.asarray(base_case.model_fingerprint),
+    )
 
     gates = aggregate_matrix_gates(tmp_path)
 
@@ -119,6 +129,7 @@ def test_matrix_aggregation_builds_all_open_solver_gates(tmp_path: Path) -> None
         "cross_solver",
         "discrete_volume",
         "fenicsx_magnetic_operator",
+        "background_empymod",
     }
     assert expected <= gates.keys()
     assert all(gates[name]["available"] and gates[name]["pass"] for name in expected)

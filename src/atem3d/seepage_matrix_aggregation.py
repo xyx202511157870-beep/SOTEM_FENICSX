@@ -32,6 +32,7 @@ OPEN3D_REQUIRED_GATES = tuple(
         *(f"spatial_convergence_{solver}" for solver in ("simpeg", "fenicsx")),
         *(f"temporal_convergence_{solver}" for solver in ("simpeg", "fenicsx")),
         *(f"parity_{solver}" for solver in ("simpeg", "fenicsx")),
+        "background_empymod",
         "fenicsx_magnetic_operator",
         "discrete_volume",
         "cross_solver",
@@ -172,6 +173,33 @@ def _magnetic_operator_gate(results: _MatrixResults) -> dict[str, Any]:
     }
 
 
+def _background_empymod_gate(results: _MatrixResults) -> dict[str, Any]:
+    path = results.output_root / "verification_empymod_background.npz"
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with np.load(path, allow_pickle=False) as stored:
+        reference = np.asarray(stored["values"], dtype=float)
+        fingerprint = str(np.asarray(stored["model_fingerprint"]).item())
+    expected = next(iter(results.cases.values())).model_fingerprint
+    if fingerprint != expected or reference.shape != (5, 31, 3):
+        raise ValueError("empymod background model contract mismatch")
+    comparisons = {
+        solver: cross_solver_agreement(
+            results.values(f"{solver}-conductivity-background-reference"),
+            reference,
+            median_threshold=0.20,
+            p95_threshold=0.35,
+        )
+        for solver in ("simpeg", "fenicsx")
+    }
+    return {
+        "available": True,
+        "pass": bool(all(item["pass"] for item in comparisons.values())),
+        "reference": "empymod_uniform_halfspace_only",
+        "comparisons": comparisons,
+    }
+
+
 def _solver_gates(results: _MatrixResults, solver: str) -> dict[str, dict[str, Any]]:
     prefix = f"{solver}-conductivity"
     background_id = f"{prefix}-background-reference"
@@ -280,6 +308,9 @@ def aggregate_matrix_gates(output_root: str | Path) -> dict[str, dict[str, Any]]
     )
     gates["fenicsx_magnetic_operator"] = _capture(
         lambda: _magnetic_operator_gate(results)
+    )
+    gates["background_empymod"] = _capture(
+        lambda: _background_empymod_gate(results)
     )
     return gates
 

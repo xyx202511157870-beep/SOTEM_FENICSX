@@ -30,9 +30,11 @@ from atem3d.seepage_case_matrix import (  # noqa: E402
     write_case_manifest,
 )
 from atem3d.seepage_channel_validation import (  # noqa: E402
+    empymod_background_payload,
     fenicsx_payload_from_csv,
     simpeg_payload_from_h5,
 )
+from atem3d.seepage_channel_model import model_for_variant  # noqa: E402
 from atem3d.seepage_verification import (  # noqa: E402
     verify_fenicsx_run_contract,
     verify_simpeg_config_contract,
@@ -398,6 +400,16 @@ def _selected_cases(solver: str | None, case_ids: list[str]) -> list[Verificatio
     return cases
 
 
+def write_empymod_verification_reference(output_root: str | Path) -> Path:
+    """Write the canonical uniform-background reference used by formal gates."""
+
+    model = model_for_variant("thin_60x1x1")
+    payload = empymod_background_payload(model=model)
+    path = Path(output_root) / "verification_empymod_background.npz"
+    np.savez_compressed(path, **payload)
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("manifest", "prepare", "run"))
@@ -417,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
             command = build_case_command(case, args.output_root)
             print(case.case_id + "\t" + " ".join(command))
         return 0
+    if args.solver in (None, "simpeg"):
+        print(write_empymod_verification_reference(args.output_root).resolve(), flush=True)
     for case in cases:
         print(run_case(case, args.output_root, force=args.force).resolve(), flush=True)
     return 0
