@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from atem3d.seepage_channel_model import ChannelBox, MODEL
+from atem3d.seepage_channel_model import ChannelBox, MODEL, model_for_variant
 
 
 def test_approved_benchmark_contract() -> None:
@@ -19,6 +19,20 @@ def test_approved_benchmark_contract() -> None:
     assert channel.bounds == ((-30.0, 30.0), (-5.0, 5.0), (15.0, 25.0))
     assert channel.conductivity == pytest.approx(1.0)
     assert channel.volume_m3 == pytest.approx(6000.0)
+
+
+def test_thin_variant_has_the_approved_60x1x1_contract() -> None:
+    model = model_for_variant("thin_60x1x1")
+
+    assert model.channel.center == (0.0, 0.0, 20.0)
+    assert model.channel.size == (60.0, 1.0, 1.0)
+    assert model.channel.bounds == ((-30.0, 30.0), (-0.5, 0.5), (19.5, 20.5))
+    assert model.channel.to_z_up_bounds() == (
+        (-30.0, 30.0),
+        (-0.5, 0.5),
+        (-20.5, -19.5),
+    )
+    assert model.channel.volume_m3 == pytest.approx(60.0)
 
 
 def test_channel_mask_and_z_up_conversion() -> None:

@@ -13,6 +13,21 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
     result_dir = tmp_path / "results"
     magnetic_dir = result_dir / "magnetic_receiver_stability"
     magnetic_dir.mkdir(parents=True)
+    (result_dir / "model_audit.json").write_text(
+        json.dumps(
+            {
+                "coordinate_convention": "z_down",
+                "channel": {
+                    "center_m": [0.0, 0.0, 20.0],
+                    "size_m": [60.0, 1.0, 1.0],
+                    "bounds_m": [[-30.0, 30.0], [-0.5, 0.5], [19.5, 20.5]],
+                    "conductivity_s_per_m": 1.0,
+                    "theoretical_volume_m3": 60.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     (magnetic_dir / "magnetic_symmetry_metrics.json").write_text(
         json.dumps(
             {
@@ -82,7 +97,8 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
     assert "正式报告仅展示四个非中心接收点" in text
     assert "原始五点" in text
     assert "Rx3" not in text
-    assert "60 x 10 x 10 m" in text
+    assert "60 x 1 x 1 m" in text
+    assert "60 x 10 x 10 m" not in text
     assert "Faraday 有限线圈" in text
     assert "候选诊断" in text
     assert "Biot-Savart Hz 时间差分（biot_rate）" in text

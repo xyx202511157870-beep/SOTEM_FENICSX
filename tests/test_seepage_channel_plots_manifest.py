@@ -1,4 +1,5 @@
 import ast
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -182,6 +183,27 @@ def test_report_geometry_draws_four_receivers_with_depth_down(
         captured["stem"] = stem
 
     monkeypatch.setattr(plots, "_save_figure", capture_figure)
+    (tmp_path / "model_audit.json").write_text(
+        json.dumps(
+            {
+                "coordinate_convention": "z_down",
+                "source_endpoints_m": [[-50.0, 0.0, 0.1], [50.0, 0.0, 0.1]],
+                "receiver_locations_m": [
+                    [0.0, -20.0, -0.1],
+                    [0.0, -10.0, -0.1],
+                    [0.0, 0.0, -0.1],
+                    [0.0, 10.0, -0.1],
+                    [0.0, 20.0, -0.1],
+                ],
+                "channel": {
+                    "bounds_m": [[-30.0, 30.0], [-0.5, 0.5], [19.5, 20.5]],
+                    "size_m": [60.0, 1.0, 1.0],
+                    "conductivity_s_per_m": 1.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     plots.plot_model_geometry(tmp_path)
 
     fig = captured["fig"]
@@ -192,6 +214,11 @@ def test_report_geometry_draws_four_receivers_with_depth_down(
         assert axis_yz.yaxis_inverted()
         assert len(axis_3d.collections[0]._offsets3d[0]) == 4
         assert len(axis_yz.collections[0].get_offsets()) == 4
+        channel_patch_xz = axis_xz.patches[0]
+        channel_patch_yz = axis_yz.patches[0]
+        assert channel_patch_xz.get_height() == 1.0
+        assert channel_patch_yz.get_width() == 1.0
+        assert channel_patch_yz.get_height() == 1.0
         assert captured["stem"] == "model_geometry"
         fig.tight_layout()
         fig.canvas.draw()
