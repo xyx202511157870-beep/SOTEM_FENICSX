@@ -203,6 +203,82 @@ def plot_convergence(output_root: Path) -> None:
     _save_figure(fig, output_root, "convergence")
 
 
+def plot_magnetic_receiver_comparison(method_table, output_path: Path) -> None:
+    """Overlay signed dBz/dt methods at the four nonzero-y receivers."""
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
+    try:
+        times = np.asarray(method_table["times"], dtype=float)
+        selected = str(method_table.get("selected", "not_selected"))
+        methods = method_table["methods"]
+        for axis, receiver_index in zip(axes.flat, (0, 1, 3, 4)):
+            for name, values in sorted(methods.items()):
+                array = np.asarray(values, dtype=float)
+                axis.plot(times, array[receiver_index, :, 1], label=name)
+            axis.set_xscale("log")
+            axis.set_yscale("symlog", linthresh=1.0e-20)
+            axis.set_title(f"Rx{receiver_index + 1}")
+            axis.grid(True, which="both", alpha=0.25)
+        axes[0, 0].legend(fontsize=7)
+        fig.suptitle(f"Magnetic receiver methods; selected={selected}")
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=200)
+    finally:
+        plt.close(fig)
+
+
+def plot_rx3_absolute_residual(method_table, metrics, output_path: Path) -> None:
+    """Plot signed and absolute Rx3 values without percent error at a zero point."""
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    try:
+        times = np.asarray(method_table["times"], dtype=float)
+        for name, values in sorted(method_table["methods"].items()):
+            rx3 = np.asarray(values, dtype=float)[2, :, 1]
+            axes[0].plot(times, rx3, label=name)
+            axes[1].plot(times, np.abs(rx3), label=name)
+        axes[0].set(title="Rx3 signed magnetic value", xscale="log", yscale="symlog")
+        axes[1].set(title="Rx3 absolute residual", xscale="log", yscale="log")
+        axes[1].axhline(
+            float(metrics.get("absolute_floor", 1.0e-20)),
+            color="crimson",
+            linestyle="--",
+            label="numerical floor",
+        )
+        for axis in axes:
+            axis.grid(True, which="both", alpha=0.25)
+        axes[0].legend(fontsize=7)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=200)
+    finally:
+        plt.close(fig)
+
+
+def plot_magnetic_symmetry_convergence(convergence, output_path: Path) -> None:
+    """Plot R0 and odd-pair residuals with the R0=0.01 acceptance line."""
+
+    fig, axis = plt.subplots(figsize=(8, 4.5))
+    try:
+        names = list(convergence)
+        x = np.arange(len(names))
+        for key, label in (
+            ("rx3_zero_ratio", "R0"),
+            ("pair_24_residual", "Rodd24"),
+            ("pair_15_residual", "Rodd15"),
+        ):
+            axis.plot(x, [convergence[name].get(key, np.nan) for name in names], marker="o", label=label)
+        axis.axhline(0.01, color="crimson", linestyle="--", label="R0=0.01")
+        axis.set_xticks(x, names, rotation=25, ha="right")
+        axis.set_yscale("log")
+        axis.set_ylabel("normalized absolute residual")
+        axis.legend()
+        axis.grid(True, which="both", alpha=0.25)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=200)
+    finally:
+        plt.close(fig)
+
+
 def generate_plots(result_dir: str | Path) -> list[Path]:
     output_root = Path(result_dir)
     with np.load(output_root / "benchmark_results.npz", allow_pickle=False) as data:
@@ -247,6 +323,24 @@ def generate_plots(result_dir: str | Path) -> list[Path]:
         title="Channel-delta error: SimPEG relative to FEniCSx",
     )
     plot_convergence(output_root)
+    magnetic_root = output_root / "magnetic_receiver_stability"
+    payload_path = magnetic_root / "magnetic_method_payload.npz"
+    metrics_path = magnetic_root / "magnetic_symmetry_metrics.json"
+    convergence_path = magnetic_root / "magnetic_convergence_summary.json"
+    if payload_path.exists() and metrics_path.exists() and convergence_path.exists():
+        with np.load(payload_path, allow_pickle=False) as payload:
+            methods = {
+                key.split("__", 1)[1]: np.asarray(payload[key])
+                for key in payload.files
+                if key.startswith("channel__")
+            }
+            method_table = {"times": np.asarray(payload["times"]), "methods": methods}
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        convergence = json.loads(convergence_path.read_text(encoding="utf-8"))
+        method_table["selected"] = convergence.get("selected")
+        plot_magnetic_receiver_comparison(method_table, output_root / "magnetic_receiver_comparison.png")
+        plot_rx3_absolute_residual(method_table, metrics, output_root / "rx3_absolute_residual.png")
+        plot_magnetic_symmetry_convergence(metrics, output_root / "magnetic_symmetry_convergence.png")
     return [output_root / f"{stem}.{suffix}" for stem in FIGURE_STEMS for suffix in ("png", "pdf")]
 
 

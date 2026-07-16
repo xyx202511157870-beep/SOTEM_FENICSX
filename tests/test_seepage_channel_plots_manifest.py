@@ -21,5 +21,10 @@ def test_plot_source_contains_required_panels() -> None:
         "channel_response",
         "channel_delta",
         "convergence",
+        "magnetic_receiver_comparison",
+        "rx3_absolute_residual",
+        "magnetic_symmetry_convergence",
     ):
         assert name in source
+    assert "R0=0.01" in source
+    assert "Rx3 absolute residual" in source

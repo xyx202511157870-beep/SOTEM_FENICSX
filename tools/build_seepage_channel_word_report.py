@@ -414,6 +414,94 @@ def add_quality_and_reproducibility(document: Document, result_dir: Path, audit:
     add_body(document, f"所有正式数值、图件、日志和摘要位于：{result_dir.resolve()}")
 
 
+def add_magnetic_stability_section(document: Document, result_dir: Path) -> None:
+    """Add data-driven stable magnetic receiver methods and symmetry gates."""
+
+    magnetic_dir = result_dir / "magnetic_receiver_stability"
+    metrics = _read_json(magnetic_dir / "magnetic_symmetry_metrics.json")
+    decision = _read_json(magnetic_dir / "magnetic_convergence_summary.json")
+    mesh_audit = _read_json(magnetic_dir / "mesh_symmetry_audit.json")
+    selected = decision.get("selected")
+    selected_metrics = metrics.get(selected, {}) if selected else {}
+    conclusion = "PASS" if decision.get("passed") else "FAIL"
+
+    add_heading(document, "磁场接收计算稳定性与 Rx3 对称残差", page_break=True)
+    add_body(
+        document,
+        "问题根因是点式 -curl(E) 在材料界面和共享单元处对局部离散误差敏感，"
+        "理论奇对称零点 Rx3 会把很小的绝对误差放大成异常曲线形态。"
+        "正式候选采用 Faraday 有限线圈计算 dBz/dt，并用四面体四点 Biot-Savart 计算 Hz。",
+    )
+    add_callout(
+        document,
+        "全域求解约束",
+        "五个接收点均标记为 explicit_full_domain；不使用单侧求解后对称镜像，"
+        "也不从相反 y 坐标复制接收值。",
+        fill=PALE_YELLOW,
+    )
+    add_table(
+        document,
+        ["参数", "设定"],
+        [
+            ("模型", "100 m 平行导线；60 x 10 x 10 m 渗流通道；埋深 20 m"),
+            ("dBz/dt 算子", "Faraday 有限线圈"),
+            ("线圈半径", "2 m"),
+            ("线积分点数", "32"),
+            ("Hz 算子", "四面体四点 Biot-Savart"),
+            ("Biot 积分模式", "tetra4"),
+        ],
+    )
+    add_table(
+        document,
+        ["对称指标", "实测值", "门限"],
+        [
+            ("Rx3 对称理论零点 R0", selected_metrics.get("rx3_zero_ratio", "N/A"), "<= 0.01"),
+            ("Rx2/Rx4 奇对称残差", selected_metrics.get("pair_24_residual", "N/A"), "<= 0.01"),
+            ("Rx1/Rx5 奇对称残差", selected_metrics.get("pair_15_residual", "N/A"), "<= 0.01"),
+        ],
+    )
+    add_table(
+        document,
+        ["审计项目", "结果"],
+        [
+            ("正式方法", selected or "未选择"),
+            ("综合门禁", conclusion),
+            ("求解域", mesh_audit.get("solver_domain", "unknown")),
+            ("场值镜像", mesh_audit.get("field_mirroring", "unknown")),
+            ("网格对称审计", "PASS" if mesh_audit.get("passed") else "FAIL"),
+        ],
+    )
+    for stem, caption in (
+        ("magnetic_receiver_comparison", "各磁场方法在非零接收点的带符号曲线"),
+        ("rx3_absolute_residual", "Rx3 带符号值与绝对残差；零点不使用普通百分比误差"),
+        ("magnetic_symmetry_convergence", "R0、Rodd24 与 Rodd15 收敛及 0.01 门限"),
+    ):
+        add_figure(document, magnetic_dir / f"{stem}.png", caption)
+    add_body(
+        document,
+        f"数据驱动结论：综合门禁为 {conclusion}；正式方法为 {selected or '无'}。"
+        "结论直接读取 JSON 审计产物，不在 Word 生成器中硬编码通过。",
+    )
+
+
+def _build_magnetic_only_report(result_dir: Path, output_path: Path) -> Path:
+    document = Document()
+    configure_document(document)
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = title.add_run("100 m 平行导线渗流通道磁场稳定性报告")
+    _set_run_font(run, 20, bold=True, color=BLUE)
+    add_body(
+        document,
+        "比较 SimPEG、empymod 与 FEniCSx 的统一模型参数，并重点记录 FEniCSx 磁场接收算子、"
+        "Rx3 对称残差及全域五接收点审计。",
+    )
+    add_magnetic_stability_section(document, result_dir)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    document.save(output_path)
+    return output_path
+
+
 def build_report(
     *,
     result_dir: Path = DEFAULT_RESULT_DIR,
@@ -421,6 +509,8 @@ def build_report(
 ) -> Path:
     result_dir = Path(result_dir)
     output_path = Path(output_path)
+    if not (result_dir / "benchmark_summary.json").exists():
+        return _build_magnetic_only_report(result_dir, output_path)
     summary = _read_json(result_dir / "benchmark_summary.json")
     audit = _read_json(result_dir / "model_audit.json")
     fenics_background = _read_json(result_dir / "fenicsx_background" / "fenicsx_run_summary.json")
@@ -434,6 +524,8 @@ def build_report(
     add_methods(document, result_dir, fenics_background, fenics_channel)
     add_results(document, result_dir, summary)
     add_quality_and_reproducibility(document, result_dir, audit)
+    if (result_dir / "magnetic_receiver_stability" / "magnetic_symmetry_metrics.json").exists():
+        add_magnetic_stability_section(document, result_dir)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(output_path)
