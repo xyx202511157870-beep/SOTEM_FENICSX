@@ -114,3 +114,46 @@ def test_report_response_and_error_grids_omit_center_receiver(
     finally:
         for _stem, fig in figures:
             plt.close(fig)
+
+
+def test_background_response_uses_absolute_log_decay(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import tools.plot_seepage_channel_benchmark as plots
+
+    captured = {}
+
+    def capture_figure(fig, output_root, stem) -> None:
+        captured["fig"] = fig
+
+    monkeypatch.setattr(plots, "_save_figure", capture_figure)
+    times = np.asarray([1.0e-5, 1.0e-4, 1.0e-3])
+    signed_trace = np.asarray(
+        [
+            [1.0e-3, -1.0e-4, -1.0e-5],
+            [1.0e-4, -1.0e-5, -1.0e-6],
+            [1.0e-5, -1.0e-6, -1.0e-7],
+        ]
+    )
+    values = np.repeat(signed_trace[None, :, :], 5, axis=0)
+    original = values.copy()
+
+    plots._plot_response_grid(
+        tmp_path,
+        "background_response",
+        times,
+        {"FEniCSx": values},
+        title="background",
+        magnitude_decay=True,
+    )
+
+    fig = captured["fig"]
+    try:
+        for axis in fig.axes:
+            assert axis.get_yscale() == "log"
+            assert axis.get_ylabel().startswith("|")
+            for line in axis.lines:
+                assert np.all(np.asarray(line.get_ydata()) > 0.0)
+        np.testing.assert_array_equal(values, original)
+    finally:
+        plt.close(fig)

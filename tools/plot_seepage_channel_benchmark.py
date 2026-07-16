@@ -138,6 +138,7 @@ def _plot_response_grid(
     series: dict[str, np.ndarray],
     *,
     title: str,
+    magnitude_decay: bool = False,
 ) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.4), sharex=True)
     colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(REPORT_RECEIVER_INDICES)))
@@ -145,20 +146,28 @@ def _plot_response_grid(
     for component_index, (axis, component) in enumerate(zip(axes, COMPONENTS)):
         for method, values in series.items():
             for color_index, receiver_index in enumerate(REPORT_RECEIVER_INDICES):
+                receiver_values = values[receiver_index, :, component_index]
+                plotted_values = (
+                    np.abs(receiver_values) if magnitude_decay else receiver_values
+                )
                 axis.plot(
                     times,
-                    values[receiver_index, :, component_index],
+                    plotted_values,
                     color=colors[color_index],
                     ls={"empymod": ":", "SimPEG": "--", "FEniCSx": "-"}.get(method, "-"),
                     lw=1.1,
                     label=f"{method} Rx{receiver_index + 1}" if component_index == 0 else None,
                 )
         axis.set_xscale("log")
-        axis.set_yscale("symlog", linthresh=linthresh)
+        if magnitude_decay:
+            axis.set_yscale("log")
+        else:
+            axis.set_yscale("symlog", linthresh=linthresh)
         axis.grid(True, which="both", alpha=0.25)
         axis.set_title(component)
         axis.set_xlabel("time (s)")
-        axis.set_ylabel({"Ex": "V/m", "dBzdt": "T/s", "Hz": "A/m"}[component])
+        unit = {"Ex": "V/m", "dBzdt": "T/s", "Hz": "A/m"}[component]
+        axis.set_ylabel(f"|{component}| ({unit})" if magnitude_decay else unit)
     axes[0].legend(fontsize=6, ncol=2)
     fig.suptitle(title)
     _save_figure(fig, output_root, stem)
@@ -301,6 +310,7 @@ def generate_plots(result_dir: str | Path) -> list[Path]:
         times,
         {"empymod": arrays["empymod_background"], "SimPEG": arrays["simpeg_background"], "FEniCSx": arrays["fenicsx_background"]},
         title="Background response: three algorithms",
+        magnitude_decay=True,
     )
     _plot_response_grid(
         output_root,
