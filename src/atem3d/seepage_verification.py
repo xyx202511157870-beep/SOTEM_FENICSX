@@ -547,6 +547,35 @@ def cross_solver_agreement(
     }
 
 
+def comsol_multi_solver_agreement(
+    comsol_values: Any,
+    open_solver_values: Mapping[str, Any],
+    *,
+    median_threshold: float,
+    p95_threshold: float,
+) -> dict[str, Any]:
+    """Require an independent COMSOL anomaly to agree with every open solver."""
+
+    if not open_solver_values:
+        raise ValueError("COMSOL agreement requires at least one open solver")
+    comparisons = {
+        str(name): cross_solver_agreement(
+            comsol_values,
+            values,
+            median_threshold=median_threshold,
+            p95_threshold=p95_threshold,
+        )
+        for name, values in open_solver_values.items()
+    }
+    return {
+        "available": True,
+        "pass": bool(all(item["pass"] for item in comparisons.values())),
+        "median_threshold": float(median_threshold),
+        "p95_threshold": float(p95_threshold),
+        "comparisons": comparisons,
+    }
+
+
 def discrete_volume_metrics(
     relative_errors: Mapping[str, list[float] | tuple[float, ...]],
     *,
@@ -619,6 +648,7 @@ __all__ = [
     "build_verification_summary",
     "canonical_model_contract",
     "canonical_model_json",
+    "comsol_multi_solver_agreement",
     "model_fingerprint",
     "odd_parity_metrics",
     "parity_metrics",
