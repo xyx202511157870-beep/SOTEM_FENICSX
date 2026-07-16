@@ -135,6 +135,14 @@ def test_fenicsx_case_command_overrides_geometry_time_and_stable_magnetic_mode(
     assert "--biot-current-integration tetra4" in command
     assert "--conductivity-box-sigma 1" in command
 
+    base = _case("fenicsx-conductivity-channel-sigma-1")
+    base_command = " ".join(build_case_command(base, tmp_path))
+    assert (
+        "--magnetic-diagnostic-methods curl,biot_center,biot_tetra4,faraday_loop"
+        in base_command
+    )
+    assert "--magnetic-diagnostic-methods" not in command
+
 
 def test_duplicate_execution_reuses_normalized_arrays_with_new_case_provenance(
     tmp_path: Path,

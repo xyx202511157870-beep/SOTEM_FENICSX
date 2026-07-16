@@ -485,6 +485,35 @@ def parity_metrics(
     }
 
 
+def odd_parity_metrics(
+    values: Any,
+    *,
+    pair_threshold: float,
+    center_threshold: float,
+) -> dict[str, Any]:
+    """Evaluate odd receiver parity for one magnetic component."""
+
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 2 or array.shape[0] != 5 or not np.all(np.isfinite(array)):
+        raise ValueError("magnetic values must have finite shape (5, n_times)")
+    peak = max(float(np.max(np.abs(array))), np.finfo(float).tiny)
+    pair_15 = float(np.max(np.abs(array[0] + array[4])) / peak)
+    pair_24 = float(np.max(np.abs(array[1] + array[3])) / peak)
+    center = float(np.max(np.abs(array[2])) / peak)
+    return {
+        "available": True,
+        "pass": bool(
+            max(pair_15, pair_24) <= pair_threshold
+            and center <= center_threshold
+        ),
+        "pair_15_residual": pair_15,
+        "pair_24_residual": pair_24,
+        "center_ratio": center,
+        "pair_threshold": float(pair_threshold),
+        "center_threshold": float(center_threshold),
+    }
+
+
 def cross_solver_agreement(
     first: Any,
     second: Any,
@@ -591,6 +620,7 @@ __all__ = [
     "canonical_model_contract",
     "canonical_model_json",
     "model_fingerprint",
+    "odd_parity_metrics",
     "parity_metrics",
     "require_consistent_fingerprints",
     "three_level_convergence",

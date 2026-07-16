@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +39,44 @@ def _symmetric(scale: float) -> np.ndarray:
     return values
 
 
+def _write_magnetic_diagnostics(root: Path, role: str, values: np.ndarray) -> None:
+    case_id = (
+        "fenicsx-conductivity-background-reference"
+        if role == "background"
+        else "fenicsx-conductivity-channel-sigma-1"
+    )
+    path = root / "verification_runs" / "fenicsx" / case_id / "magnetic_receiver_diagnostics.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "receiver_id",
+        "time_obs",
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
+        "dBzdt_faraday_loop",
+        "Hz_biot_center",
+        "Hz_biot_tetra4",
+        "provenance",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for receiver in range(5):
+            for time_index, time in enumerate(np.geomspace(1e-5, 1e-2, 31)):
+                selected = values[receiver, time_index, 1]
+                writer.writerow(
+                    {
+                        "receiver_id": f"Rx{receiver + 1}",
+                        "time_obs": time,
+                        "dBzdt_curl": selected * 1.01,
+                        "dBzdt_biot_rate": selected,
+                        "dBzdt_faraday_loop": selected * 0.99,
+                        "Hz_biot_center": values[receiver, time_index, 2] * 1.01,
+                        "Hz_biot_tetra4": values[receiver, time_index, 2],
+                        "provenance": "explicit_full_domain",
+                    }
+                )
+
+
 def test_matrix_aggregation_builds_all_open_solver_gates(tmp_path: Path) -> None:
     background = np.ones((5, 31, 3), dtype=float)
     for solver in ("simpeg", "fenicsx"):
@@ -65,6 +104,8 @@ def test_matrix_aggregation_builds_all_open_solver_gates(tmp_path: Path) -> None
             for role in ("background", "channel"):
                 values = background if role == "background" else background + _symmetric(1.0 + error)
                 _write_case(tmp_path, f"{solver}-temporal-{role}-dt-{slug}", values)
+    _write_magnetic_diagnostics(tmp_path, "background", background)
+    _write_magnetic_diagnostics(tmp_path, "channel", background + _symmetric(1.0))
 
     gates = aggregate_matrix_gates(tmp_path)
 
@@ -77,6 +118,7 @@ def test_matrix_aggregation_builds_all_open_solver_gates(tmp_path: Path) -> None
         *(f"parity_{solver}" for solver in ("simpeg", "fenicsx")),
         "cross_solver",
         "discrete_volume",
+        "fenicsx_magnetic_operator",
     }
     assert expected <= gates.keys()
     assert all(gates[name]["available"] and gates[name]["pass"] for name in expected)

@@ -17,6 +17,7 @@ from atem3d.seepage_verification import (
     cross_solver_agreement,
     discrete_volume_metrics,
     model_fingerprint,
+    odd_parity_metrics,
     parity_metrics,
     require_consistent_fingerprints,
     three_level_convergence,
@@ -198,6 +199,16 @@ def test_parity_metrics_apply_even_ex_and_odd_magnetic_contracts() -> None:
     assert summary["pass"] is True
     assert summary["components"]["dBzdt"]["parity"] == "odd"
     assert summary["components"]["Hz"]["center_ratio"] == 0.0
+
+
+def test_odd_parity_metric_rejects_a_nonzero_center_trace() -> None:
+    values = np.asarray([2.0, 1.0, 0.0, -1.0, -2.0])[:, None] * np.ones((1, 4))
+    passed = odd_parity_metrics(values, pair_threshold=0.05, center_threshold=0.02)
+    values[2] = 0.5
+    failed = odd_parity_metrics(values, pair_threshold=0.05, center_threshold=0.02)
+
+    assert passed["pass"] is True
+    assert failed["pass"] is False
 
 
 def test_cross_solver_agreement_uses_formal_strong_signal_percentiles() -> None:

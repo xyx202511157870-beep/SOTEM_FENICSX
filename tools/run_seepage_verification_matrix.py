@@ -158,6 +158,15 @@ def build_case_command(
         "--biot-current-integration",
         "tetra4",
     ]
+    if case.study == "conductivity" and (
+        case.role == "background" or np.isclose(case.conductivity_s_per_m, 1.0)
+    ):
+        overrides.extend(
+            [
+                "--magnetic-diagnostic-methods",
+                "curl,biot_center,biot_tetra4,faraday_loop",
+            ]
+        )
     shell_command = (
         f"cd {shlex.quote(_windows_to_wsl(ROOT))} && bash {shlex.quote(script)} "
         + " ".join(shlex.quote(item) for item in overrides)

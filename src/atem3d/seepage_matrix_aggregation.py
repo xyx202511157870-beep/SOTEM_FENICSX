@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from .seepage_verification import (
     discrete_volume_metrics,
     parity_metrics,
     model_fingerprint,
+    odd_parity_metrics,
     three_level_convergence,
     zero_contrast_metrics,
 )
@@ -30,6 +32,7 @@ OPEN3D_REQUIRED_GATES = tuple(
         *(f"spatial_convergence_{solver}" for solver in ("simpeg", "fenicsx")),
         *(f"temporal_convergence_{solver}" for solver in ("simpeg", "fenicsx")),
         *(f"parity_{solver}" for solver in ("simpeg", "fenicsx")),
+        "fenicsx_magnetic_operator",
         "discrete_volume",
         "cross_solver",
     ]
@@ -85,6 +88,88 @@ def _capture(function: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         return function()
     except (FileNotFoundError, KeyError, OSError, ValueError) as exc:
         return _unavailable(str(exc))
+
+
+def _load_magnetic_diagnostics(path: Path) -> dict[str, np.ndarray]:
+    fields = (
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
+        "dBzdt_faraday_loop",
+        "Hz_biot_center",
+        "Hz_biot_tetra4",
+    )
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    model_times = np.geomspace(1.0e-5, 1.0e-2, 31)
+    arrays = {field: np.full((5, 31), np.nan, dtype=float) for field in fields}
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    if len(rows) != 155:
+        raise ValueError(f"{path}: expected 155 magnetic diagnostic rows")
+    for row in rows:
+        receiver = int(row["receiver_id"].removeprefix("Rx")) - 1
+        time = float(row["time_obs"])
+        time_index = int(np.argmin(np.abs(model_times - time)))
+        if not 0 <= receiver < 5 or not np.isclose(
+            time, model_times[time_index], rtol=1.0e-12, atol=0.0
+        ):
+            raise ValueError(f"{path}: diagnostic receiver/time contract mismatch")
+        if row.get("provenance") != "explicit_full_domain":
+            raise ValueError(f"{path}: magnetic diagnostic is not full-domain data")
+        for field in fields:
+            arrays[field][receiver, time_index] = float(row[field])
+    if any(not np.all(np.isfinite(values)) for values in arrays.values()):
+        raise ValueError(f"{path}: incomplete or nonfinite magnetic diagnostics")
+    return arrays
+
+
+def _magnetic_operator_gate(results: _MatrixResults) -> dict[str, Any]:
+    base = results.output_root / "verification_runs" / "fenicsx"
+    background_id = "fenicsx-conductivity-background-reference"
+    channel_id = "fenicsx-conductivity-channel-sigma-1"
+    background = _load_magnetic_diagnostics(
+        base / background_id / "magnetic_receiver_diagnostics.csv"
+    )
+    channel = _load_magnetic_diagnostics(
+        base / channel_id / "magnetic_receiver_diagnostics.csv"
+    )
+    methods: dict[str, Any] = {}
+    for field in background:
+        methods[field] = odd_parity_metrics(
+            channel[field] - background[field],
+            pair_threshold=0.05,
+            center_threshold=0.02,
+        )
+
+    selected_background = results.values(background_id)
+    selected_channel = results.values(channel_id)
+    selected_dbdt_error = float(
+        np.max(np.abs(background["dBzdt_biot_rate"] - selected_background[:, :, 1]))
+        + np.max(np.abs(channel["dBzdt_biot_rate"] - selected_channel[:, :, 1]))
+    )
+    selected_hz_error = float(
+        np.max(np.abs(background["Hz_biot_tetra4"] - selected_background[:, :, 2]))
+        + np.max(np.abs(channel["Hz_biot_tetra4"] - selected_channel[:, :, 2]))
+    )
+    scale = max(
+        float(np.max(np.abs(selected_background[:, :, 1:]))),
+        float(np.max(np.abs(selected_channel[:, :, 1:]))),
+        np.finfo(float).tiny,
+    )
+    consistency = max(selected_dbdt_error, selected_hz_error) / scale
+    selected_pass = (
+        methods["dBzdt_biot_rate"]["pass"]
+        and methods["Hz_biot_tetra4"]["pass"]
+        and consistency <= 1.0e-12
+    )
+    return {
+        "available": True,
+        "pass": bool(selected_pass),
+        "selected": {"dBzdt": "biot_rate", "Hz": "biot_tetra4"},
+        "selected_consistency_relative_error": float(consistency),
+        "selected_consistency_threshold": 1.0e-12,
+        "methods": methods,
+    }
 
 
 def _solver_gates(results: _MatrixResults, solver: str) -> dict[str, dict[str, Any]]:
@@ -192,6 +277,9 @@ def aggregate_matrix_gates(output_root: str | Path) -> dict[str, dict[str, Any]]
             },
             threshold=0.02,
         )
+    )
+    gates["fenicsx_magnetic_operator"] = _capture(
+        lambda: _magnetic_operator_gate(results)
     )
     return gates
 
