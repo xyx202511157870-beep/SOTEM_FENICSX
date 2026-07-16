@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import date
 from pathlib import Path
 from typing import Iterable
+
+import yaml
 
 from docx import Document
 from docx.enum.section import WD_SECTION
@@ -34,6 +37,62 @@ LATIN_FONT = "Calibri"
 def _read_json(path: Path) -> dict:
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _report_profile(audit: dict) -> dict:
+    channel = audit["channel"]
+    size = tuple(float(value) for value in channel["size_m"])
+    bounds = channel["bounds_m"]
+    return {
+        "size_m": size,
+        "size_text": " x ".join(f"{value:g}" for value in size) + " m",
+        "depth_text": f"{float(bounds[2][0]):g}-{float(bounds[2][1]):g} m",
+        "theoretical_volume_m3": float(channel["theoretical_volume_m3"]),
+        "variant": str(audit.get("variant", "baseline_60x10x10")),
+    }
+
+
+def _summary_conclusion(summary: dict) -> str:
+    failed = []
+    for method, components in summary["background"].items():
+        for component in ("Ex", "dBzdt", "Hz"):
+            item = components[component]
+            if not item["pass"]:
+                failed.append(f"{method}背景/{component}")
+    for component in ("Ex", "dBzdt", "Hz"):
+        item = summary["channel_delta"][component]
+        if not item["pass"]:
+            failed.append(f"SimPEG/FEniCSx通道差分/{component}")
+    if failed:
+        return "20%强信号中位相对误差目标中，以下项未通过：" + "、".join(failed) + "。"
+    return (
+        "SimPEG与FEniCSx的Ex、dBz/dt和Hz通道差分均通过20%强信号"
+        "中位相对误差目标，两个三维背景也通过empymod一维基准检验。"
+    )
+
+
+def _simpeg_mesh_cell_count(result_dir: Path) -> int:
+    provenance = _read_json(result_dir / "simpeg_background_provenance.json")
+    config_path = ROOT / provenance["config_path"]
+    with config_path.open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    counts = [
+        sum(int(segment[1]) for segment in config["mesh"][axis])
+        for axis in ("hx", "hy", "hz")
+    ]
+    return counts[0] * counts[1] * counts[2]
+
+
+def _fenics_mesh_stats(result_dir: Path, case: str) -> dict[str, int]:
+    log_path = result_dir / f"fenicsx_{case}" / "run_console.log"
+    raw = log_path.read_bytes()
+    encoding = "utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8"
+    text = raw.decode(encoding, errors="replace")
+    cells = re.findall(r"global cells=(\d+)", text)
+    dofs = re.findall(r"N1curl\(1\) dofs global=(\d+)", text)
+    if not cells or not dofs:
+        raise ValueError(f"FEniCSx mesh statistics missing from {log_path}")
+    return {"cells": int(cells[-1]), "dofs": int(dofs[-1])}
 
 
 def _set_run_font(run, size: float = 10.5, *, bold: bool = False, color: str = INK) -> None:
@@ -161,7 +220,7 @@ def _append_page_field(paragraph) -> None:
     run._r.extend([begin, instruction, end])
 
 
-def configure_document(document: Document) -> None:
+def configure_document(document: Document, profile: dict) -> None:
     section = document.sections[0]
     section.top_margin = Inches(0.72)
     section.bottom_margin = Inches(0.68)
@@ -181,17 +240,17 @@ def configure_document(document: Document) -> None:
         style.font.bold = True
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = footer.add_run("100 m 长导线渗流通道三算法对比  |  ")
+    run = footer.add_run(f"100 m 长导线 {profile['size_text']} 渗流通道三算法对比  |  ")
     _set_run_font(run, 8.5, color=MUTED)
     _append_page_field(footer)
 
 
-def add_cover(document: Document) -> None:
+def add_cover(document: Document, profile: dict) -> None:
     for _ in range(3):
         document.add_paragraph()
     title = document.add_paragraph(style="Title")
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.add_run("100 m 长导线渗流通道三算法正演对比报告")
+    title.add_run(f"100 m 长导线 {profile['size_text']} 渗流通道三算法正演对比报告")
     subtitle = document.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
     subtitle.paragraph_format.space_before = Pt(18)
@@ -202,7 +261,7 @@ def add_cover(document: Document) -> None:
     meta.alignment = WD_TABLE_ALIGNMENT.CENTER
     meta_rows = [
         ("研究目标", "平行长导线下方 20 m 高导渗流通道响应"),
-        ("模型版本", "最新工作区模型基线"),
+        ("模型版本", profile["variant"]),
         ("坐标约定", "z=0 地表，z>0 地下，z<0 空气"),
         ("生成日期", date.today().isoformat()),
     ]
@@ -228,7 +287,7 @@ def add_summary(document: Document, summary: dict) -> None:
     add_callout(
         document,
         "结论",
-        "SimPEG 与 FEniCSx 对渗流通道异常的 Ex、dBz/dt 和 Hz 三分量对比均通过 20% 强信号中位相对误差目标；两个三维算法的均匀背景也通过 empymod 一维基准检验。",
+        _summary_conclusion(summary),
     )
     rows = []
     for method, components in summary["background"].items():
@@ -263,7 +322,7 @@ def add_summary(document: Document, summary: dict) -> None:
     )
 
 
-def add_model(document: Document, result_dir: Path, audit: dict) -> None:
+def add_model(document: Document, result_dir: Path, audit: dict, profile: dict) -> None:
     add_heading(document, "2. 物理模型与观测系统", page_break=True)
     add_figure(document, result_dir / "model_geometry.png", "图 1  发射导线、五个接收点与渗流通道的完整三维几何")
     channel = audit["channel"]
@@ -275,8 +334,8 @@ def add_model(document: Document, result_dir: Path, audit: dict) -> None:
             ("长导线", "(-50,0,0.1) m -> (50,0,0.1) m", "长度 100 m，电流 1 A，理想阶跃关断"),
             ("背景电导率", "0.01 S/m", "100 ohm m 均匀地下半空间"),
             ("空气电导率", "1e-8 S/m", "数值空气层"),
-            ("通道尺寸", "60 x 10 x 10 m", "长轴与导线 x 方向平行"),
-            ("通道中心", "(0,0,20) m", "正下方 20 m，深度范围 15-25 m"),
+            ("通道尺寸", profile["size_text"], "长轴与导线 x 方向平行"),
+            ("通道中心", "(0,0,20) m", f"正下方 20 m，深度范围 {profile['depth_text']}"),
             ("通道电导率", f"{channel['conductivity_s_per_m']:.1f} S/m", "高导充水渗流通道，本阶段不含 IP"),
             ("观测时刻", "1e-5-1e-2 s，31 个对数时刻", "输出 Ex、dBz/dt、Hz"),
         ],
@@ -293,18 +352,33 @@ def add_model(document: Document, result_dir: Path, audit: dict) -> None:
     )
 
 
-def add_methods(document: Document, result_dir: Path, fenics_background: dict, fenics_channel: dict) -> None:
+def add_methods(document: Document, result_dir: Path, fenics_background: dict, fenics_channel: dict, profile: dict) -> None:
+    simpeg_cells = _simpeg_mesh_cell_count(result_dir)
+    fenics_background_mesh = _fenics_mesh_stats(result_dir, "background")
+    fenics_channel_mesh = _fenics_mesh_stats(result_dir, "channel")
     add_heading(document, "3. 算法、离散与求解参数", page_break=True)
     add_table(
         document,
         ["方法", "模型能力与角色", "空间离散", "时间/频域处理"],
         [
             ("empymod", "分层一维背景参考；不表示有限三维长方体", "半空间积分核", "频域计算后转时域"),
-            ("SimPEG", "三维背景和通道正演", "TensorMesh，345,600 单元", "EB 时域，371 个内部时间节点"),
+            ("SimPEG", "三维背景和通道正演", f"TensorMesh，{simpeg_cells:,} 单元", "EB 时域，371 个内部时间节点"),
             ("FEniCSx", "三维背景和通道全域正演", "一阶 Nedelec 四面体", "theta=1，相对步长 5%，晚期上限 1e-4 s"),
         ],
     )
     material = fenics_channel["material_audit"]
+    background_material = fenics_background["material_audit"]
+    background_box_count = background_material.get("global_cell_count", 0)
+    background_box_volume = (
+        f"{background_material['global_discrete_volume_m3']:.3f} m3"
+        if "global_discrete_volume_m3" in background_material
+        else "-"
+    )
+    background_volume_error = (
+        _fmt_pct(background_material["relative_volume_error"])
+        if "relative_volume_error" in background_material
+        else "-"
+    )
     add_heading(document, "3.1 SimPEG 参数", level=2)
     add_table(
         document,
@@ -322,11 +396,11 @@ def add_methods(document: Document, result_dir: Path, fenics_background: dict, f
         document,
         ["项目", "背景", "含通道"],
         [
-            ("四面体数", "156,203", "156,439"),
-            ("Nedelec 自由度", "183,839", "184,116"),
-            ("通道单元数", "0", material["global_cell_count"]),
-            ("通道离散体积", "-", f"{material['global_discrete_volume_m3']:.1f} m3"),
-            ("体积相对误差", "-", _fmt_pct(material["relative_volume_error"])),
+            ("四面体数", f"{fenics_background_mesh['cells']:,}", f"{fenics_channel_mesh['cells']:,}"),
+            ("Nedelec 自由度", f"{fenics_background_mesh['dofs']:,}", f"{fenics_channel_mesh['dofs']:,}"),
+            ("通道范围单元数", background_box_count, material["global_cell_count"]),
+            ("通道离散体积", background_box_volume, f"{material['global_discrete_volume_m3']:.3f} m3"),
+            ("体积相对误差", background_volume_error, _fmt_pct(material["relative_volume_error"])),
             ("线源积分点", "4,048", "4,048"),
             ("时间内步数", "224", "224"),
             ("线性求解器", "CG + hypre/AMS", "CG + hypre/AMS"),
@@ -342,12 +416,13 @@ def add_methods(document: Document, result_dir: Path, fenics_background: dict, f
     add_callout(
         document,
         "重要边界",
-        "empymod 在本报告中只是均匀背景一维参考（background_only_1d=true）。有限长 60 x 10 x 10 m 的通道是三维体，不能将通道响应误标为 empymod 的三维求解结果。",
+        f"empymod 在本报告中只是均匀背景一维参考（background_only_1d=true）。有限长 {profile['size_text']} 的通道是三维体，不能将通道响应误标为 empymod 的三维求解结果。",
         fill=PALE_YELLOW,
     )
 
 
 def add_results(document: Document, result_dir: Path, summary: dict) -> None:
+    delta_pass = all(summary["channel_delta"][name]["pass"] for name in ("Ex", "dBzdt", "Hz"))
     add_heading(document, "4. 结果对比", page_break=True)
     add_heading(document, "4.1 均匀背景与 empymod 参考", level=2)
     add_figure(document, result_dir / "background_response.png", "图 2  均匀背景三算法 Ex、dBz/dt 和 Hz 响应")
@@ -362,11 +437,12 @@ def add_results(document: Document, result_dir: Path, summary: dict) -> None:
         "异常对比结果",
         "强信号样本中，Ex、dBz/dt、Hz 的中位相对误差分别为 "
         + ", ".join(_fmt_pct(summary["channel_delta"][name]["median_relative_error"]) for name in ("Ex", "dBzdt", "Hz"))
-        + "，均低于 20% 目标。",
+        + ("，均通过 20% 目标。" if delta_pass else "，存在未通过 20% 目标的分量，详见汇总表。"),
     )
 
 
-def add_quality_and_reproducibility(document: Document, result_dir: Path, audit: dict) -> None:
+def add_quality_and_reproducibility(document: Document, result_dir: Path, audit: dict, fenics_channel: dict, profile: dict) -> None:
+    material = fenics_channel["material_audit"]
     add_heading(document, "5. 质量控制、局限与复现", page_break=True)
     add_table(
         document,
@@ -374,7 +450,7 @@ def add_quality_and_reproducibility(document: Document, result_dir: Path, audit:
         [
             ("数据完整性", "SimPEG 背景/通道和 FEniCSx 背景/通道均为 5 x 31 x 3，全部有限"),
             ("FEniCSx 接收点来源", "5/5 为 explicit_full_domain，无单侧对称镜像"),
-            ("通道网格体积", "5727.3 m3 / 6000 m3，相对误差 4.55%"),
+            ("通道网格体积", f"{material['global_discrete_volume_m3']:.3f} m3 / {profile['theoretical_volume_m3']:.3f} m3，相对误差 {_fmt_pct(material['relative_volume_error'])}"),
             ("比较边界", "empymod 只参与背景比较，禁止将通道差分与一维参考直接比较"),
             ("空间/时间收敛扫描", "本次未执行独立加密算例；convergence_summary.json 显式记录 available=false"),
         ],
@@ -398,12 +474,20 @@ def add_quality_and_reproducibility(document: Document, result_dir: Path, audit:
         ],
     )
     add_heading(document, "5.2 复现命令", level=2)
-    commands = [
-        "python tools/run_seepage_channel_benchmark.py all --output-root output/seepage_channel_100m_5rx",
-        "python tools/plot_seepage_channel_benchmark.py output/seepage_channel_100m_5rx",
-        "bash tools/run_fenicsx_seepage_background.sh",
-        "bash tools/run_fenicsx_seepage_channel.sh",
-    ]
+    if profile["variant"] == "thin_60x1x1":
+        commands = [
+            "python tools/run_seepage_channel_benchmark.py all --variant thin_60x1x1 --output-root output/seepage_channel_100m_5rx_60x1x1",
+            "python tools/plot_seepage_channel_benchmark.py output/seepage_channel_100m_5rx_60x1x1",
+            "bash tools/run_fenicsx_seepage_thin_background.sh",
+            "bash tools/run_fenicsx_seepage_thin_channel.sh",
+        ]
+    else:
+        commands = [
+            "python tools/run_seepage_channel_benchmark.py all --output-root output/seepage_channel_100m_5rx",
+            "python tools/plot_seepage_channel_benchmark.py output/seepage_channel_100m_5rx",
+            "bash tools/run_fenicsx_seepage_background.sh",
+            "bash tools/run_fenicsx_seepage_channel.sh",
+        ]
     for command in commands:
         paragraph = document.add_paragraph()
         paragraph.paragraph_format.left_indent = Inches(0.25)
@@ -425,15 +509,16 @@ def build_report(
     audit = _read_json(result_dir / "model_audit.json")
     fenics_background = _read_json(result_dir / "fenicsx_background" / "fenicsx_run_summary.json")
     fenics_channel = _read_json(result_dir / "fenicsx_channel" / "fenicsx_run_summary.json")
+    profile = _report_profile(audit)
 
     document = Document()
-    configure_document(document)
-    add_cover(document)
+    configure_document(document, profile)
+    add_cover(document, profile)
     add_summary(document, summary)
-    add_model(document, result_dir, audit)
-    add_methods(document, result_dir, fenics_background, fenics_channel)
+    add_model(document, result_dir, audit, profile)
+    add_methods(document, result_dir, fenics_background, fenics_channel, profile)
     add_results(document, result_dir, summary)
-    add_quality_and_reproducibility(document, result_dir, audit)
+    add_quality_and_reproducibility(document, result_dir, audit, fenics_channel, profile)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(output_path)
