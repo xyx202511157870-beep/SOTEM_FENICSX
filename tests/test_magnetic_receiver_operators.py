@@ -115,3 +115,70 @@ def test_faraday_loop_rejects_nonfinite_electric_values() -> None:
 
     with pytest.raises(ValueError, match="finite and match"):
         module.faraday_loop_dbdt(electric, rule)
+
+
+def test_tetra4_rule_integrates_constant_and_linear_coordinates() -> None:
+    module = load_module()
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+
+    points, weights = module.tetra4_rule(vertices)
+
+    np.testing.assert_allclose(weights.sum(), 1.0 / 6.0)
+    np.testing.assert_allclose(
+        np.sum(weights[:, None] * points, axis=0),
+        [1.0 / 24.0, 1.0 / 24.0, 1.0 / 24.0],
+    )
+    assert np.all(points > 0.0)
+    assert np.all(np.sum(points, axis=1) < 1.0)
+
+
+def test_neumaier_vector_sum_retains_small_residual_after_cancellation() -> None:
+    module = load_module()
+    values = np.array(
+        [
+            [1.0e16, -1.0e16, 0.0],
+            [1.0, -2.0, 3.0],
+            [-1.0e16, 1.0e16, 0.0],
+        ]
+    )
+
+    np.testing.assert_allclose(
+        module.neumaier_vector_sum(values),
+        [1.0, -2.0, 3.0],
+    )
+
+
+def test_biot_volume_integral_has_expected_sign_for_x_current_above_receiver() -> None:
+    module = load_module()
+    points = np.array([[0.0, 1.0, 0.0]])
+    currents = np.array([[1.0, 0.0, 0.0]])
+
+    result, audit = module.biot_savart_volume_h(
+        receiver=(0.0, 0.0, 0.0),
+        points=points,
+        current_density=currents,
+        weights=np.array([2.0]),
+    )
+
+    assert result[2] < 0.0
+    assert audit["sample_count"] == 1
+    assert audit["cancellation_ratio"][2] == 1.0
+
+
+def test_biot_volume_integral_rejects_receiver_on_integration_point() -> None:
+    module = load_module()
+
+    with pytest.raises(ValueError, match="coincides"):
+        module.biot_savart_volume_h(
+            receiver=(0.0, 0.0, 0.0),
+            points=np.array([[0.0, 0.0, 0.0]]),
+            current_density=np.array([[1.0, 0.0, 0.0]]),
+            weights=np.array([1.0]),
+        )
