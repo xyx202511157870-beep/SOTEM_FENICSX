@@ -365,7 +365,11 @@ def add_methods(document: Document, result_dir: Path, fenics_background: dict, f
 def add_results(document: Document, result_dir: Path, summary: dict) -> None:
     add_heading(document, "4. 结果对比")
     add_heading(document, "4.1 均匀背景与 empymod 参考", level=2)
-    add_figure(document, result_dir / "background_response.png", "图 2  均匀背景三算法 Ex、dBz/dt 和 Hz 响应")
+    add_figure(
+        document,
+        result_dir / "background_response.png",
+        "图 2  均匀背景三算法 Ex、dBz/dt 和 Hz 绝对幅值常规衰减曲线",
+    )
     add_figure(document, result_dir / "background_error.png", "图 3  SimPEG 和 FEniCSx 背景相对 empymod 的逐点误差")
     add_heading(document, "4.2 含渗流通道的三维响应", level=2, page_break=True)
     add_figure(document, result_dir / "channel_response.png", "图 4  SimPEG 和 FEniCSx 含通道响应")
