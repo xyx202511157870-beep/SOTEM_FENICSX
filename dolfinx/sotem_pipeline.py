@@ -1731,6 +1731,14 @@ def _mesh_y_bounds(config: PipelineConfig) -> tuple[float, float]:
     raise ValueError("mesh_symmetry_mode must be 'ordinary' or 'positive_half_source'")
 
 
+def _mesh_source_embedding_dimension(config: PipelineConfig) -> int:
+    return (
+        2
+        if str(config.mesh_symmetry_mode).strip().lower() == "positive_half_source"
+        else 3
+    )
+
+
 def generate_verification_mesh(config: PipelineConfig) -> Path:
     """Generate the two-volume air-earth Gmsh model."""
 
@@ -1784,7 +1792,26 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         p0 = occ.addPoint(*config.source_start, 5.0)
         p1 = occ.addPoint(*config.source_end, 5.0)
         source_line = occ.addLine(p0, p1)
-        source_cloud = [occ.addPoint(*point, config.source_mesh_size) for point in _source_refinement_cloud_points(config)]
+        source_cloud_points = _source_refinement_cloud_points(config)
+        if _mesh_source_embedding_dimension(config) == 2:
+            source_cloud_points = [
+                point for point in source_cloud_points if float(point[1]) >= -1.0e-10
+            ]
+        source_cloud = [
+            occ.addPoint(*point, config.source_mesh_size)
+            for point in source_cloud_points
+        ]
+        source_surface_cloud = [
+            tag
+            for point, tag in zip(source_cloud_points, source_cloud)
+            if abs(float(point[1])) <= 1.0e-10
+        ]
+        source_volume_cloud = [
+            tag
+            for point, tag in zip(source_cloud_points, source_cloud)
+            if _mesh_source_embedding_dimension(config) == 3
+            or float(point[1]) > 1.0e-10
+        ]
         receiver_specs, receiver_point_sizes = _receiver_refinement_point_specs(config)
         receiver_point_tags = {
             point: occ.addPoint(*point, mesh_size)
@@ -1836,9 +1863,19 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         surfaces = gmsh.model.getEntities(2)
         outer: list[int] = []
         interface: list[int] = []
+        half_source_surfaces: list[int] = []
         tol = 1.0e-6
         for _, tag in surfaces:
             xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(2, tag)
+            if (
+                _mesh_source_embedding_dimension(config) == 2
+                and abs(ymin - y0) < tol
+                and abs(ymax - y0) < tol
+                and zmin - tol <= float(config.source_start[2]) <= zmax + tol
+                and xmin - tol <= min(config.source_start[0], config.source_end[0])
+                and xmax + tol >= max(config.source_start[0], config.source_end[0])
+            ):
+                half_source_surfaces.append(tag)
             if abs(zmin) < tol and abs(zmax) < tol:
                 interface.append(tag)
             elif (
@@ -1875,7 +1912,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         ]
         if not top_earth_vols:
             raise RuntimeError("failed to identify top earth layer volumes for source and receiver embedding")
-        earth_receiver_points = [*source_cloud]
+        earth_receiver_points = [*source_volume_cloud]
         air_receiver_points: list[int] = []
         surface_receiver_points = [*receiver_surface_cloud]
         for entry in receiver_entries:
@@ -1895,8 +1932,19 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         earth_receiver_points = list(dict.fromkeys(earth_receiver_points))
         air_receiver_points = list(dict.fromkeys(air_receiver_points))
         surface_receiver_points = list(dict.fromkeys(surface_receiver_points))
+        if _mesh_source_embedding_dimension(config) == 2:
+            if len(half_source_surfaces) != 1:
+                raise RuntimeError(
+                    "failed to identify exactly one y=0 earth surface for the source line"
+                )
+            gmsh.model.mesh.embed(1, [source_line], 2, half_source_surfaces[0])
+            if source_surface_cloud:
+                gmsh.model.mesh.embed(
+                    0, source_surface_cloud, 2, half_source_surfaces[0]
+                )
         for earth_vol in top_earth_vols:
-            gmsh.model.mesh.embed(1, [source_line], 3, earth_vol)
+            if _mesh_source_embedding_dimension(config) == 3:
+                gmsh.model.mesh.embed(1, [source_line], 3, earth_vol)
             gmsh.model.mesh.embed(0, earth_receiver_points, 3, earth_vol)
         if air_receiver_points:
             for air_vol in air_vols:

@@ -104,3 +104,7 @@ def test_pipeline_mesh_y_bounds_support_half_source_only():
     assert pipeline._mesh_y_bounds(
         pipeline.PipelineConfig(y_extent=20.0, mesh_symmetry_mode="positive_half_source")
     ) == (0.0, 20.0)
+    assert pipeline._mesh_source_embedding_dimension(pipeline.PipelineConfig()) == 3
+    assert pipeline._mesh_source_embedding_dimension(
+        pipeline.PipelineConfig(mesh_symmetry_mode="positive_half_source")
+    ) == 2

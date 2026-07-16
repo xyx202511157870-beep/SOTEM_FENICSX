@@ -46,6 +46,9 @@ def mirror_half_topology_from_meshio(mesh: Any) -> dict[str, Any]:
     tetrahedra, tetra_tags = _cell_block(mesh, "tetra", 4)
     triangles, triangle_tags = _cell_block(mesh, "triangle", 3)
     lines, line_tags = _cell_block(mesh, "line", 2)
+    input_source_line_elements = int(
+        np.count_nonzero(line_tags == SOURCE_PHYSICAL_TAG)
+    )
     mirrored = mirror_half_topology(
         np.asarray(mesh.points[:, :3], dtype=float),
         tetrahedra,
@@ -61,7 +64,22 @@ def mirror_half_topology_from_meshio(mesh: Any) -> dict[str, Any]:
         np.abs(mirrored["points"][mirrored["lines"], 1]) <= 1.0e-10,
         axis=1,
     )
-    mirrored["source_line_count"] = int(np.count_nonzero(plane_source))
+    output_source_line_elements = int(np.count_nonzero(plane_source))
+    source_group = np.asarray(
+        getattr(mesh, "field_data", {}).get("source_wire", []), dtype=int
+    ).reshape(-1)
+    source_group_count = int(
+        source_group.size >= 2
+        and source_group[0] == SOURCE_PHYSICAL_TAG
+        and source_group[1] == 1
+    )
+    mirrored["source_line_count"] = source_group_count
+    mirrored["source_line_element_count"] = output_source_line_elements
+    mirrored["source_line_input_element_count"] = input_source_line_elements
+    mirrored["source_line_preserved_once"] = bool(
+        input_source_line_elements > 0
+        and output_source_line_elements == input_source_line_elements
+    )
     mirrored["field_data"] = dict(getattr(mesh, "field_data", {}))
     return mirrored
 
@@ -94,7 +112,7 @@ def write_meshio_full_domain(path: Path, mirrored: dict[str, Any]) -> Path:
         field_data=mirrored.get("field_data", {}),
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    meshio.write(path, output, file_format="gmsh", binary=False)
+    meshio.write(path, output, file_format="gmsh22", binary=False)
     return path
 
 
@@ -108,7 +126,7 @@ def build_symmetric_mesh(half_path: Path, output_path: Path, audit_path: Path) -
     )
     if not audit["passed"]:
         raise RuntimeError(f"symmetric full-domain mesh audit failed: {audit}")
-    if mirrored["source_line_count"] != 1:
+    if mirrored["source_line_count"] != 1 or not mirrored["source_line_preserved_once"]:
         raise RuntimeError("symmetric full-domain mesh must contain one source physical line")
     write_meshio_full_domain(output_path, mirrored)
     audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,6 +135,9 @@ def build_symmetric_mesh(half_path: Path, output_path: Path, audit_path: Path) -
             {
                 **audit,
                 "source_line_count": mirrored["source_line_count"],
+                "source_line_element_count": mirrored["source_line_element_count"],
+                "source_line_input_element_count": mirrored["source_line_input_element_count"],
+                "source_line_preserved_once": mirrored["source_line_preserved_once"],
                 "solver_domain": "full",
                 "field_mirroring": False,
             },
