@@ -62,7 +62,7 @@ def test_staged_magnetic_commands_use_stable_full_domain_receivers() -> None:
         for receiver in ("0,-20,0.1", "0,-10,0.1", "0,0,0.1", "0,10,0.1", "0,20,0.1"):
             assert f"--receiver-location {receiver}" in source
         for contract in (
-            "--magnetic-dbdt-mode faraday_loop",
+            "--magnetic-dbdt-mode biot_rate",
             "--biot-current-integration tetra4",
             "--faraday-loop-radius 2",
             "--faraday-loop-quadrature-points 32",

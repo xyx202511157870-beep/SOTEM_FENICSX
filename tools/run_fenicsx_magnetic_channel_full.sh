@@ -31,7 +31,7 @@ exec /home/paidaxin/miniconda3/envs/fenicsx/bin/python -u dolfinx/sotem_pipeline
   --time-method theta --time-theta 1 --outer-boundary-mode natural \
   --formulation e --initial-dc-mode fem \
   --magnetic-receiver-mode biot_current \
-  --magnetic-dbdt-mode faraday_loop \
+  --magnetic-dbdt-mode biot_rate \
   --biot-current-integration tetra4 \
   --faraday-loop-radius 2 \
   --faraday-loop-quadrature-points 32 \
