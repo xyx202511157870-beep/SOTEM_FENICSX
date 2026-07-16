@@ -72,13 +72,17 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
     assert "SimPEG" in text and "empymod" in text and "FEniCSx" in text
     assert "explicit_full_domain" in text
     assert "不使用单侧求解后对称镜像" in text
+    assert "Rx1、Rx2、Rx4、Rx5" in text
+    assert "正式报告仅展示四个非中心接收点" in text
+    assert "原始五点" in text
+    assert "Rx3" not in text
     assert "60 x 10 x 10 m" in text
     assert "Faraday 有限线圈" in text
     assert "候选诊断" in text
     assert "Biot-Savart Hz 时间差分（biot_rate）" in text
     assert "正式方法\nbiot_rate" in text
     assert "四面体四点 Biot-Savart" in text
-    assert "Rx3 对称理论零点" in text
+    assert '("rx3_absolute_residual",' not in report_source
     assert "2 m" in text and "32" in text and "tetra4" in text
     assert len(document.tables) >= 3
-    assert len(document.inline_shapes) >= 3
+    assert len(document.inline_shapes) == 1

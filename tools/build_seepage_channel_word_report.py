@@ -29,6 +29,7 @@ GRID = "BAC4CC"
 WHITE = "FFFFFF"
 CHINESE_FONT = "Microsoft YaHei"
 LATIN_FONT = "Calibri"
+REPORT_RECEIVER_INDICES = (0, 1, 3, 4)
 
 
 def _read_json(path: Path) -> dict:
@@ -265,7 +266,11 @@ def add_summary(document: Document, summary: dict) -> None:
 
 def add_model(document: Document, result_dir: Path, audit: dict) -> None:
     add_heading(document, "2. 物理模型与观测系统", page_break=True)
-    add_figure(document, result_dir / "model_geometry.png", "图 1  发射导线、五个接收点与渗流通道的完整三维几何")
+    add_figure(
+        document,
+        result_dir / "model_geometry.png",
+        "图 1  发射导线、四个正式接收点与渗流通道的完整三维几何（物理深度向下）",
+    )
     channel = audit["channel"]
     add_table(
         document,
@@ -282,13 +287,21 @@ def add_model(document: Document, result_dir: Path, audit: dict) -> None:
         ],
     )
     receiver_rows = []
-    for index, location in enumerate(audit["receiver_locations_m"], start=1):
-        receiver_rows.append((f"Rx{index}", *(f"{value:g}" for value in location), "explicit_full_domain"))
+    for receiver_index in REPORT_RECEIVER_INDICES:
+        location = audit["receiver_locations_m"][receiver_index]
+        receiver_rows.append(
+            (
+                f"Rx{receiver_index + 1}",
+                *(f"{value:g}" for value in location),
+                "explicit_full_domain",
+            )
+        )
     add_table(document, ["接收点", "x (m)", "y (m)", "z (m)", "FEniCSx 来源"], receiver_rows)
     add_callout(
         document,
-        "FEniCSx 全域要求",
-        "五个接收点全部在同一个完整三维域中直接求值，不使用单侧求解后对称镜像；每个接收点的来源标记都是 explicit_full_domain。",
+        "四点报告视图与全域求解来源",
+        "原始五点均在同一个完整三维域中直接求值；正式报告仅展示四个非中心接收点："
+        "Rx1、Rx2、Rx4、Rx5。四点来源均为 explicit_full_domain，不使用单侧求解后对称镜像。",
         fill=PALE_YELLOW,
     )
 
@@ -415,7 +428,7 @@ def add_quality_and_reproducibility(document: Document, result_dir: Path, audit:
 
 
 def add_magnetic_stability_section(document: Document, result_dir: Path) -> None:
-    """Add data-driven stable magnetic receiver methods and symmetry gates."""
+    """Add the selected magnetic method for the four reporting receivers."""
 
     magnetic_dir = result_dir / "magnetic_receiver_stability"
     metrics = _read_json(magnetic_dir / "magnetic_symmetry_metrics.json")
@@ -429,20 +442,20 @@ def add_magnetic_stability_section(document: Document, result_dir: Path) -> None
         "curl": "单元 curl(E)",
     }.get(selected, "Faraday 有限线圈" if str(selected).startswith("faraday_loop") else "未选择")
 
-    add_heading(document, "磁场接收计算稳定性与 Rx3 对称残差", page_break=True)
+    add_heading(document, "四个正式接收点的磁场计算稳定性", page_break=True)
     add_body(
         document,
         "问题根因是点式 -curl(E) 在材料界面和共享单元处对局部离散误差敏感，"
-        "理论奇对称零点 Rx3 会把很小的绝对误差放大成异常曲线形态。"
         "候选诊断同时评估单元 curl(E)、Biot-Savart Hz 时间差分和 Faraday 有限线圈；"
         "正式算子由对称残差门禁与强信号一致性审计的数据结果选择，而不是预先指定。"
+        "位于导线正下方的理论零点不进入正式观测曲线，报告只展示 Rx1、Rx2、Rx4、Rx5；"
         "Hz 统一用四面体四点 Biot-Savart 计算。",
     )
     add_callout(
         document,
         "全域求解约束",
-        "五个接收点均标记为 explicit_full_domain；不使用单侧求解后对称镜像，"
-        "也不从相反 y 坐标复制接收值。",
+        "原始五点均标记为 explicit_full_domain；正式报告仅展示四个非中心接收点："
+        "Rx1、Rx2、Rx4、Rx5。不使用单侧求解后对称镜像，也不从相反 y 坐标复制接收值。",
         fill=PALE_YELLOW,
     )
     add_table(
@@ -462,7 +475,6 @@ def add_magnetic_stability_section(document: Document, result_dir: Path) -> None
         document,
         ["对称指标", "实测值", "门限"],
         [
-            ("Rx3 对称理论零点 R0", selected_metrics.get("rx3_zero_ratio", "N/A"), "<= 0.01"),
             ("Rx2/Rx4 奇对称残差", selected_metrics.get("pair_24_residual", "N/A"), "<= 0.01"),
             ("Rx1/Rx5 奇对称残差", selected_metrics.get("pair_15_residual", "N/A"), "<= 0.01"),
         ],
@@ -478,12 +490,11 @@ def add_magnetic_stability_section(document: Document, result_dir: Path) -> None
             ("网格对称审计", "PASS" if mesh_audit.get("passed") else "FAIL"),
         ],
     )
-    for stem, caption in (
-        ("magnetic_receiver_comparison", "各磁场方法在非零接收点的带符号曲线"),
-        ("rx3_absolute_residual", "Rx3 带符号值与绝对残差；零点不使用普通百分比误差"),
-        ("magnetic_symmetry_convergence", "R0、Rodd24 与 Rodd15 收敛及 0.01 门限"),
-    ):
-        add_figure(document, magnetic_dir / f"{stem}.png", caption)
+    add_figure(
+        document,
+        magnetic_dir / "magnetic_receiver_comparison.png",
+        "四个正式接收点的磁场计算方法带符号曲线对比",
+    )
     add_body(
         document,
         f"数据驱动结论：综合门禁为 {conclusion}；正式方法为 {selected or '无'}。"
@@ -501,7 +512,7 @@ def _build_magnetic_only_report(result_dir: Path, output_path: Path) -> Path:
     add_body(
         document,
         "比较 SimPEG、empymod 与 FEniCSx 的统一模型参数，并重点记录 FEniCSx 磁场接收算子、"
-        "Rx3 对称残差及全域五接收点审计。",
+        "四个正式接收点曲线及原始五点全域求解审计。",
     )
     add_magnetic_stability_section(document, result_dir)
     output_path.parent.mkdir(parents=True, exist_ok=True)
