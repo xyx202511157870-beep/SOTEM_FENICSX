@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import tools.run_comsol_seepage_channel_3d as comsol_runner
 from atem3d.comsol_seepage_channel_3d import (
     comsol_case_contract,
     read_comsol_wide_export,
@@ -54,6 +55,151 @@ def test_comsol_adapter_never_overwrites_the_source_mph(tmp_path: Path) -> None:
         validate_distinct_model_paths(source, source)
 
 
+def test_isolated_comsol_prefs_enable_external_runtime_without_modifying_template(
+    tmp_path: Path,
+) -> None:
+    template = tmp_path / "template" / "comsol.prefs"
+    template.parent.mkdir()
+    original = (
+        "keep.before=true\n"
+        "security.external.runtimepermission=off\n"
+        "keep.after=false\n"
+    )
+    template.write_text(original, encoding="utf-8")
+    prefs_dir = tmp_path / "case" / "isolated_prefs"
+
+    result = comsol_runner.prepare_isolated_prefs(template, prefs_dir)
+
+    assert result == prefs_dir
+    assert template.read_text(encoding="utf-8") == original
+    assert (prefs_dir / "comsol.prefs").read_text(encoding="utf-8") == (
+        "keep.before=true\n"
+        "security.external.runtimepermission=on\n"
+        "keep.after=false\n"
+    )
+
+
+def test_clear_generated_outputs_preserves_run_inputs_and_manifests(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mph"
+    source.write_text("source", encoding="utf-8")
+    paths = build_case_paths(tmp_path / "results", "channel", source)
+    paths["case_dir"].mkdir(parents=True)
+    commands = paths["case_dir"] / "commands.json"
+    paths["contract"].write_text("contract", encoding="utf-8")
+    commands.write_text("commands", encoding="utf-8")
+    for key in ("output_model", "output_csv", "normalized", "provenance"):
+        paths[key].write_text(f"stale {key}", encoding="utf-8")
+
+    comsol_runner.clear_generated_outputs(paths)
+
+    assert source.read_text(encoding="utf-8") == "source"
+    assert paths["contract"].read_text(encoding="utf-8") == "contract"
+    assert commands.read_text(encoding="utf-8") == "commands"
+    for key in ("output_model", "output_csv", "normalized", "provenance"):
+        assert not paths[key].exists()
+
+
+def test_run_clears_stale_outputs_and_prepares_prefs_before_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.mph"
+    source.write_text("source", encoding="utf-8")
+    template = tmp_path / "template" / "comsol.prefs"
+    template.parent.mkdir()
+    template.write_text(
+        "security.external.runtimepermission=off\n", encoding="utf-8"
+    )
+    output_root = tmp_path / "results"
+    paths = build_case_paths(output_root, "channel", source)
+    paths["case_dir"].mkdir(parents=True)
+    for key in ("output_model", "output_csv", "normalized", "provenance"):
+        paths[key].write_text(f"stale {key}", encoding="utf-8")
+
+    def stop_at_first_subprocess(*_args, **_kwargs):
+        for key in ("output_model", "output_csv", "normalized", "provenance"):
+            assert not paths[key].exists()
+        assert source.is_file()
+        assert paths["contract"].is_file()
+        assert (paths["case_dir"] / "commands.json").is_file()
+        assert (paths["prefs_dir"] / "comsol.prefs").read_text(
+            encoding="utf-8"
+        ) == "security.external.runtimepermission=on\n"
+        raise RuntimeError("stop before external process")
+
+    monkeypatch.setattr(comsol_runner.subprocess, "run", stop_at_first_subprocess)
+
+    with pytest.raises(RuntimeError, match="stop before external process"):
+        comsol_runner.run_case(
+            case="channel",
+            output_root=output_root,
+            source_model=source,
+            comsol_bin=tmp_path / "bin",
+            prefs_template=template,
+            prepare_only=False,
+        )
+
+
+def test_prepare_case_writes_isolated_prefs_without_launching_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    template = tmp_path / "template" / "comsol.prefs"
+    template.parent.mkdir()
+    template.write_text(
+        "security.external.runtimepermission=off\n", encoding="utf-8"
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("prepare-only must not launch an external process")
+
+    monkeypatch.setattr(comsol_runner.subprocess, "run", fail_if_called)
+    result = comsol_runner.run_case(
+        case="channel",
+        output_root=tmp_path / "results",
+        source_model=tmp_path / "source.mph",
+        comsol_bin=tmp_path / "bin",
+        prefs_template=template,
+        prepare_only=True,
+    )
+
+    prefs = result.parent / "isolated_prefs" / "comsol.prefs"
+    assert prefs.read_text(encoding="utf-8") == (
+        "security.external.runtimepermission=on\n"
+    )
+
+
+def test_cli_accepts_a_custom_comsol_prefs_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_case(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "commands.json"
+
+    monkeypatch.setattr(comsol_runner, "run_case", fake_run_case)
+    template = tmp_path / "comsol.prefs"
+
+    assert (
+        comsol_runner.main(
+            [
+                "prepare",
+                "--case",
+                "channel",
+                "--output-root",
+                str(tmp_path / "results"),
+                "--source-model",
+                str(tmp_path / "source.mph"),
+                "--prefs-template",
+                str(template),
+            ]
+        )
+        == 0
+    )
+    assert captured["prefs_template"] == template
+
+
 def test_comsol_wide_export_normalizes_five_receivers_and_31_times(
     tmp_path: Path,
 ) -> None:
@@ -99,3 +245,6 @@ def test_comsol_batch_spec_uses_distinct_case_output_and_read_only_source(
     assert compile_command[0].endswith("comsolcompile.exe")
     assert "-inputfile" in batch_command
     assert paths["log"] == Path(batch_command[batch_command.index("-batchlog") + 1])
+    assert paths["prefs_dir"] == Path(
+        batch_command[batch_command.index("-prefsdir") + 1]
+    )

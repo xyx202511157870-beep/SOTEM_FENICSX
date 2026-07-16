@@ -57,6 +57,7 @@ def build_case_paths(
         "log": case_dir / "comsol_batch.log",
         "contract": case_dir / "model_contract.json",
         "provenance": case_dir / "provenance.json",
+        "prefs_dir": case_dir / "isolated_prefs",
     }
     validate_distinct_model_paths(paths["source_model"], paths["output_model"])
     return paths
@@ -72,12 +73,36 @@ def build_commands(comsol_bin: str | Path, paths: dict[str, Path]) -> tuple[tupl
         str(binary_dir / "comsolbatch.exe"),
         "-np",
         "4",
+        "-prefsdir",
+        str(paths["prefs_dir"]),
         "-inputfile",
         str(JAVA_CLASS),
         "-batchlog",
         str(paths["log"]),
     )
     return compile_command, batch_command
+
+
+def prepare_isolated_prefs(
+    prefs_template: str | Path, prefs_dir: str | Path
+) -> Path:
+    template = Path(prefs_template)
+    destination = Path(prefs_dir)
+    setting = "security.external.runtimepermission=off"
+    text = template.read_text(encoding="utf-8")
+    if text.count(setting) != 1:
+        raise ValueError(f"expected exactly one {setting!r} setting in {template}")
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "comsol.prefs").write_text(
+        text.replace(setting, "security.external.runtimepermission=on", 1),
+        encoding="utf-8",
+    )
+    return destination
+
+
+def clear_generated_outputs(paths: dict[str, Path]) -> None:
+    for key in ("output_model", "output_csv", "normalized", "provenance"):
+        paths[key].unlink(missing_ok=True)
 
 
 def _write_contract(paths: dict[str, Path], case: str) -> dict:
@@ -133,6 +158,7 @@ def run_case(
     output_root: str | Path,
     source_model: str | Path,
     comsol_bin: str | Path,
+    prefs_template: str | Path,
     prepare_only: bool,
 ) -> Path:
     paths = build_case_paths(output_root, case, source_model)
@@ -147,9 +173,11 @@ def run_case(
     manifest_path.write_text(
         json.dumps(command_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    prepare_isolated_prefs(prefs_template, paths["prefs_dir"])
     if prepare_only:
         return manifest_path
 
+    clear_generated_outputs(paths)
     subprocess.run(compile_command, cwd=JAVA_SOURCE.parent, check=True)
     environment = os.environ.copy()
     environment.update(
@@ -184,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=Path(r"D:\APP\Comsol_64\bin\win64"),
     )
+    parser.add_argument(
+        "--prefs-template",
+        type=Path,
+        default=Path.home() / ".comsol" / "v64" / "comsol.prefs",
+    )
     args = parser.parse_args(argv)
 
     if args.action == "import-background":
@@ -202,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
             output_root=args.output_root,
             source_model=args.source_model,
             comsol_bin=args.comsol_bin,
+            prefs_template=args.prefs_template,
             prepare_only=args.action == "prepare",
         )
     print(result.resolve())
