@@ -63,6 +63,12 @@ def test_report_geometry_draws_four_receivers_with_depth_down(
         assert len(axis_3d.collections[0]._offsets3d[0]) == 4
         assert len(axis_yz.collections[0].get_offsets()) == 4
         assert captured["stem"] == "model_geometry"
+        fig.tight_layout()
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        assert not axis_3d.zaxis.label.get_window_extent(renderer).overlaps(
+            axis_xz.yaxis.label.get_window_extent(renderer)
+        )
     finally:
         plt.close(fig)
 

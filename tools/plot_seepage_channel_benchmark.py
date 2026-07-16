@@ -88,7 +88,7 @@ def _draw_box_edges(axis, bounds, **kwargs) -> None:
 
 
 def plot_model_geometry(output_root: Path) -> None:
-    fig = plt.figure(figsize=(12, 4.2))
+    fig = plt.figure(figsize=(14, 4.2))
     axis_3d = fig.add_subplot(131, projection="3d")
     source = np.asarray(MODEL.source_endpoints)
     receivers = np.asarray(MODEL.receiver_locations)[list(REPORT_RECEIVER_INDICES)]
