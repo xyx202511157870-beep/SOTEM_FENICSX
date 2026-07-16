@@ -63,6 +63,9 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
     assert "正式报告视图：4 个接收点" in report_source
     assert "原始计算产物保留 5 点" in report_source
     assert "绝对幅值常规衰减曲线" in report_source
+    assert "含通道绝对幅值常规衰减曲线" in report_source
+    assert "通道异常绝对幅值常规衰减曲线" in report_source
+    assert "4.3 通道带符号异常响应" not in report_source
     paragraph_text = [paragraph.text for paragraph in document.paragraphs]
     table_text = [
         cell.text

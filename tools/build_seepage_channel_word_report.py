@@ -372,9 +372,17 @@ def add_results(document: Document, result_dir: Path, summary: dict) -> None:
     )
     add_figure(document, result_dir / "background_error.png", "图 3  SimPEG 和 FEniCSx 背景相对 empymod 的逐点误差")
     add_heading(document, "4.2 含渗流通道的三维响应", level=2, page_break=True)
-    add_figure(document, result_dir / "channel_response.png", "图 4  SimPEG 和 FEniCSx 含通道响应")
-    add_heading(document, "4.3 通道带符号异常响应", level=2)
-    add_figure(document, result_dir / "channel_delta.png", "图 5  通道响应减背景响应的带符号差分")
+    add_figure(
+        document,
+        result_dir / "channel_response.png",
+        "图 4  SimPEG 和 FEniCSx 含通道绝对幅值常规衰减曲线",
+    )
+    add_heading(document, "4.3 通道异常绝对幅值衰减响应", level=2)
+    add_figure(
+        document,
+        result_dir / "channel_delta.png",
+        "图 5  通道异常绝对幅值常规衰减曲线",
+    )
     add_figure(document, result_dir / "channel_delta_error.png", "图 6  SimPEG 与 FEniCSx 通道差分的逐点误差")
     add_callout(
         document,
