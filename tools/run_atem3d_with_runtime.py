@@ -26,12 +26,23 @@ def _add_native_dll_directories() -> list[object]:
     return handles
 
 
+def _out_of_core_enabled() -> bool:
+    return os.environ.get("ATEM3D_PARDISO_OUT_OF_CORE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _preflight_pardiso() -> None:
     import numpy as np
     from pymatsolver import Pardiso
     from scipy.sparse import eye
 
     solver = Pardiso(eye(2, format="csc"))
+    if _out_of_core_enabled():
+        solver.solver.set_iparm(59, 2)
     result = np.asarray(solver * np.array([1.0, 2.0]), dtype=float)
     solver.clean()
     if not np.allclose(result, [1.0, 2.0]):
@@ -75,6 +86,7 @@ def _write_runtime_audit(arguments: list[str]) -> Path | None:
         "native_dll_directories": [
             item for item in os.environ.get("ATEM3D_DLL_DIRS", "").split(os.pathsep) if item
         ],
+        "pardiso_out_of_core": _out_of_core_enabled(),
         "pardiso_preflight": "passed",
     }
     path.parent.mkdir(parents=True, exist_ok=True)

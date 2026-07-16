@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Sequence
 
 import numpy as np
@@ -922,6 +923,13 @@ class TDEMIPSimulation:
             is_symmetric=False if active_cpml else True,
             is_positive_definite=False if active_cpml else True,
         )
+        if os.environ.get("ATEM3D_PARDISO_OUT_OF_CORE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            solver.solver.set_iparm(59, 2)
         return solver.solve
 
     def _time_step_cache_key(self, step_index: int) -> int:

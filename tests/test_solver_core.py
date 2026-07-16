@@ -1,3 +1,6 @@
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from discretize import TensorMesh
@@ -1142,6 +1145,28 @@ def test_pardiso_linear_solver_supports_active_cpml_for_small_problem():
 
     np.testing.assert_allclose(pardiso.e, direct.e, rtol=1.0e-8, atol=1.0e-10)
     np.testing.assert_allclose(pardiso.b, direct.b, rtol=1.0e-8, atol=1.0e-10)
+
+
+def test_pardiso_out_of_core_runtime_sets_iparm_59(monkeypatch):
+    configured: list[tuple[int, int]] = []
+
+    class FakePardiso:
+        def __init__(self, matrix, **kwargs):
+            self.solver = SimpleNamespace(
+                set_iparm=lambda index, value: configured.append((index, value))
+            )
+            self.solve = lambda rhs: rhs
+
+    monkeypatch.setitem(sys.modules, "pymatsolver", SimpleNamespace(Pardiso=FakePardiso))
+    monkeypatch.setenv("ATEM3D_PARDISO_OUT_OF_CORE", "1")
+    simulation = SimpleNamespace(cpml=None)
+
+    solve = TDEMIPSimulation._factorize_pardiso(
+        simulation, simulation_module.sp.eye(2, format="csr")
+    )
+
+    assert configured == [(59, 2)]
+    np.testing.assert_allclose(solve(np.array([1.0, 2.0])), [1.0, 2.0])
 
 
 def test_cg_jacobi_preconditioner_handles_diagonal_system():
