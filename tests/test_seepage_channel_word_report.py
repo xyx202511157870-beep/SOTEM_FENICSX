@@ -5,6 +5,9 @@ from pathlib import Path
 
 from docx import Document
 import matplotlib.pyplot as plt
+import pytest
+
+from atem3d.seepage_verification import VerificationGateError
 
 
 def test_report_profile_uses_model_audit_instead_of_baseline_constants() -> None:
@@ -12,6 +15,7 @@ def test_report_profile_uses_model_audit_instead_of_baseline_constants() -> None
 
     profile = _report_profile(
         {
+            "model_fingerprint": "b" * 64,
             "channel": {
                 "size_m": [60.0, 1.0, 1.0],
                 "bounds_m": [[-30.0, 30.0], [-0.5, 0.5], [19.5, 20.5]],
@@ -25,6 +29,7 @@ def test_report_profile_uses_model_audit_instead_of_baseline_constants() -> None
     assert profile["depth_text"] == "19.5-20.5 m"
     assert profile["theoretical_volume_m3"] == 60.0
     assert profile["variant"] == "thin_60x1x1"
+    assert profile["model_fingerprint"] == "b" * 64
 
 
 def test_summary_conclusion_reports_failed_targets_honestly() -> None:
@@ -108,7 +113,11 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
         plt.close(fig)
 
     report_path = tmp_path / "seepage_channel_report.docx"
-    built = build_report(result_dir=result_dir, output_path=report_path)
+    built = build_report(
+        result_dir=result_dir,
+        output_path=report_path,
+        allow_unverified_draft=True,
+    )
 
     assert built == report_path
     document = Document(report_path)
@@ -163,3 +172,25 @@ def test_report_source_adds_channel_anomaly_diagnostic_figures() -> None:
         assert f'result_dir / "{filename}"' in source
     assert "100 x |F_channel - F_background| / |F_background|" in source
     assert 'result_dir / "channel_delta_error.png", "图 9' in source
+
+
+def test_formal_report_refuses_missing_or_failed_verification_summary(
+    tmp_path: Path,
+) -> None:
+    from tools.build_seepage_channel_word_report import build_report
+
+    with pytest.raises(VerificationGateError, match="verification_summary.json"):
+        build_report(result_dir=tmp_path, output_path=tmp_path / "report.docx")
+
+    (tmp_path / "verification_summary.json").write_text(
+        json.dumps(
+            {
+                "pass": False,
+                "failed_gates": ["spatial_convergence"],
+                "model_fingerprint": "a" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(VerificationGateError, match="spatial_convergence"):
+        build_report(result_dir=tmp_path, output_path=tmp_path / "report.docx")

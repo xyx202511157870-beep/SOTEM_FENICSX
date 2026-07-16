@@ -18,6 +18,14 @@ class ModelContractMismatch(ValueError):
     """Raised when artifacts do not describe one identical physical model."""
 
 
+class VerificationGateError(RuntimeError):
+    """Raised when a formal artifact is requested before verification passes."""
+
+
+FORMAL_RECEIVER_INDICES = (0, 1, 3, 4)
+COMPONENTS = ("Ex", "dBzdt", "Hz")
+
+
 def _vectors(values: Any) -> list[list[float]]:
     return [[float(component) for component in vector] for vector in values]
 
@@ -257,12 +265,264 @@ def verify_simpeg_config_contract(
     }
 
 
+def _formal_values(values: Any) -> np.ndarray:
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 3 or array.shape[0] != 5 or array.shape[2] != 3:
+        raise ValueError("solver values must have shape (5, n_times, 3)")
+    if not np.all(np.isfinite(array)):
+        raise ValueError("solver values must all be finite")
+    return array[list(FORMAL_RECEIVER_INDICES)]
+
+
+def zero_contrast_metrics(
+    delta: Any,
+    background: Any,
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    """Measure zero-contrast residuals on the four formal receivers."""
+
+    delta_values = _formal_values(delta)
+    background_values = _formal_values(background)
+    ratios = []
+    for component in range(3):
+        numerator = np.linalg.norm(delta_values[:, :, component])
+        denominator = max(
+            np.linalg.norm(background_values[:, :, component]), np.finfo(float).tiny
+        )
+        ratios.append(float(numerator / denominator))
+    return {
+        "available": True,
+        "pass": bool(all(value <= threshold for value in ratios)),
+        "threshold": float(threshold),
+        "normalized_l2": ratios,
+        "formal_receiver_indices": list(FORMAL_RECEIVER_INDICES),
+    }
+
+
+def anomaly_energy_trend(
+    control_values: list[float] | tuple[float, ...],
+    deltas: list[Any] | tuple[Any, ...],
+    background: Any,
+    *,
+    relative_tolerance: float = 1e-8,
+) -> dict[str, Any]:
+    """Check that normalized anomaly energy is non-decreasing in a sweep."""
+
+    if len(control_values) != len(deltas) or len(deltas) < 2:
+        raise ValueError("a trend requires matching control values and at least two deltas")
+    background_values = _formal_values(background)
+    scale = max(np.linalg.norm(background_values), np.finfo(float).tiny)
+    energies = [float(np.linalg.norm(_formal_values(delta)) / scale) for delta in deltas]
+    monotone = all(
+        later + relative_tolerance * max(1.0, abs(earlier)) >= earlier
+        for earlier, later in zip(energies[:-1], energies[1:])
+    )
+    return {
+        "available": True,
+        "pass": bool(monotone),
+        "control_values": [float(value) for value in control_values],
+        "energies": energies,
+        "relative_tolerance": float(relative_tolerance),
+    }
+
+
+def _relative_error_samples(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+    samples: list[np.ndarray] = []
+    for receiver in range(first.shape[0]):
+        for component in range(first.shape[2]):
+            a = first[receiver, :, component]
+            b = second[receiver, :, component]
+            scale = max(float(np.max(np.abs(a))), float(np.max(np.abs(b))))
+            if scale == 0.0:
+                continue
+            mask = (np.abs(a) >= 0.05 * scale) | (np.abs(b) >= 0.05 * scale)
+            floor = max(scale * 1e-12, np.finfo(float).tiny)
+            denominator = np.maximum(np.maximum(np.abs(a[mask]), np.abs(b[mask])), floor)
+            samples.append(np.abs(a[mask] - b[mask]) / denominator)
+    return np.concatenate(samples) if samples else np.empty(0, dtype=float)
+
+
+def _error_stats(first: np.ndarray, second: np.ndarray) -> dict[str, Any]:
+    errors = _relative_error_samples(first, second)
+    if errors.size == 0:
+        return {"count": 0, "median": 0.0, "p95": 0.0}
+    return {
+        "count": int(errors.size),
+        "median": float(np.median(errors)),
+        "p95": float(np.percentile(errors, 95.0)),
+    }
+
+
+def three_level_convergence(
+    coarse: Any,
+    medium: Any,
+    fine: Any,
+    *,
+    median_threshold: float,
+    p95_threshold: float,
+) -> dict[str, Any]:
+    """Evaluate decreasing coarse/medium/fine changes on anomaly arrays."""
+
+    coarse_values = _formal_values(coarse)
+    medium_values = _formal_values(medium)
+    fine_values = _formal_values(fine)
+    medium_coarse = _error_stats(medium_values, coarse_values)
+    fine_medium = _error_stats(fine_values, medium_values)
+    passed = (
+        fine_medium["median"] < medium_coarse["median"]
+        and fine_medium["p95"] < medium_coarse["p95"]
+        and fine_medium["median"] <= median_threshold
+        and fine_medium["p95"] <= p95_threshold
+    )
+    return {
+        "available": True,
+        "pass": bool(passed),
+        "medium_coarse": medium_coarse,
+        "fine_medium": fine_medium,
+        "median_threshold": float(median_threshold),
+        "p95_threshold": float(p95_threshold),
+    }
+
+
+def parity_metrics(
+    values: Any,
+    *,
+    pair_threshold: float,
+    center_threshold: float,
+) -> dict[str, Any]:
+    """Evaluate Ex even parity and magnetic odd parity on the five-point array."""
+
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 3 or array.shape[0] != 5 or array.shape[2] != 3:
+        raise ValueError("solver values must have shape (5, n_times, 3)")
+    component_metrics: dict[str, Any] = {}
+    passed = True
+    for component_index, component in enumerate(COMPONENTS):
+        parity_sign = 1.0 if component == "Ex" else -1.0
+        peak = max(float(np.max(np.abs(array[:, :, component_index]))), np.finfo(float).tiny)
+        pair_15 = float(
+            np.max(
+                np.abs(
+                    array[0, :, component_index]
+                    - parity_sign * array[4, :, component_index]
+                )
+            )
+            / peak
+        )
+        pair_24 = float(
+            np.max(
+                np.abs(
+                    array[1, :, component_index]
+                    - parity_sign * array[3, :, component_index]
+                )
+            )
+            / peak
+        )
+        center_ratio = (
+            0.0
+            if component == "Ex"
+            else float(np.max(np.abs(array[2, :, component_index])) / peak)
+        )
+        item_pass = max(pair_15, pair_24) <= pair_threshold and (
+            component == "Ex" or center_ratio <= center_threshold
+        )
+        passed &= item_pass
+        component_metrics[component] = {
+            "parity": "even" if component == "Ex" else "odd",
+            "pair_15_residual": pair_15,
+            "pair_24_residual": pair_24,
+            "center_ratio": center_ratio,
+            "pass": bool(item_pass),
+        }
+    return {
+        "available": True,
+        "pass": bool(passed),
+        "pair_threshold": float(pair_threshold),
+        "center_threshold": float(center_threshold),
+        "components": component_metrics,
+    }
+
+
+def cross_solver_agreement(
+    first: Any,
+    second: Any,
+    *,
+    median_threshold: float,
+    p95_threshold: float,
+) -> dict[str, Any]:
+    """Compare two anomaly arrays on formal receivers and strong signals."""
+
+    first_values = _formal_values(first)
+    second_values = _formal_values(second)
+    components: dict[str, Any] = {}
+    passed = True
+    for index, component in enumerate(COMPONENTS):
+        stats = _error_stats(
+            first_values[:, :, index : index + 1],
+            second_values[:, :, index : index + 1],
+        )
+        stats["pass"] = bool(
+            stats["median"] <= median_threshold and stats["p95"] <= p95_threshold
+        )
+        passed &= stats["pass"]
+        components[component] = stats
+    return {
+        "available": True,
+        "pass": bool(passed),
+        "median_threshold": float(median_threshold),
+        "p95_threshold": float(p95_threshold),
+        "components": components,
+        "formal_receiver_indices": list(FORMAL_RECEIVER_INDICES),
+    }
+
+
+def build_verification_summary(
+    *,
+    model_fingerprint_value: str,
+    required_gates: tuple[str, ...] | list[str],
+    gates: Mapping[str, Mapping[str, Any]],
+    require_pass: bool = False,
+) -> dict[str, Any]:
+    """Build a deterministic fail-closed verification summary."""
+
+    normalized: dict[str, dict[str, Any]] = {}
+    failed: list[str] = []
+    for name in required_gates:
+        item = dict(gates.get(name, {"available": False, "pass": False}))
+        item.setdefault("available", False)
+        item.setdefault("pass", False)
+        normalized[str(name)] = item
+        if not item["available"] or not item["pass"]:
+            failed.append(str(name))
+    summary = {
+        "model_fingerprint": str(model_fingerprint_value),
+        "required_gates": [str(name) for name in required_gates],
+        "gates": normalized,
+        "failed_gates": failed,
+        "pass": not failed,
+    }
+    if require_pass and failed:
+        raise VerificationGateError(
+            "verification failed for mandatory gates: " + ", ".join(failed)
+        )
+    return summary
+
+
 __all__ = [
     "ModelContractMismatch",
+    "VerificationGateError",
+    "FORMAL_RECEIVER_INDICES",
+    "anomaly_energy_trend",
+    "build_verification_summary",
     "canonical_model_contract",
     "canonical_model_json",
     "model_fingerprint",
+    "parity_metrics",
     "require_consistent_fingerprints",
+    "three_level_convergence",
+    "cross_solver_agreement",
     "verify_fenicsx_run_contract",
     "verify_simpeg_config_contract",
+    "zero_contrast_metrics",
 ]

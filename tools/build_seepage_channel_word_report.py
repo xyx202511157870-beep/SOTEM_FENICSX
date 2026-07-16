@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Iterable
@@ -17,8 +18,14 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from atem3d.seepage_verification import VerificationGateError  # noqa: E402
+
+
 DEFAULT_RESULT_DIR = ROOT / "output" / "seepage_channel_100m_5rx"
 DEFAULT_REPORT_PATH = ROOT / "output" / "doc" / "100m长导线渗流通道三算法正演对比报告.docx"
 
@@ -50,6 +57,9 @@ def _report_profile(audit: dict) -> dict:
         "depth_text": f"{float(bounds[2][0]):g}-{float(bounds[2][1]):g} m",
         "theoretical_volume_m3": float(channel["theoretical_volume_m3"]),
         "variant": str(audit.get("variant", "baseline_60x10x10")),
+        "model_fingerprint": str(
+            audit.get("model_fingerprint", "UNVERIFIED_DRAFT")
+        ),
     }
 
 
@@ -258,11 +268,12 @@ def add_cover(document: Document, profile: dict) -> None:
     run = subtitle.add_run("SimPEG  |  empymod  |  FEniCSx")
     _set_run_font(run, 15, bold=True, color=BLUE)
     document.add_paragraph()
-    meta = document.add_table(rows=4, cols=2)
+    meta = document.add_table(rows=5, cols=2)
     meta.alignment = WD_TABLE_ALIGNMENT.CENTER
     meta_rows = [
         ("研究目标", "平行长导线下方 20 m 高导渗流通道响应"),
         ("模型版本", profile["variant"]),
+        ("模型 SHA-256", profile["model_fingerprint"]),
         ("坐标约定", "z=0 地表，z>0 地下，z<0 空气"),
         ("生成日期", date.today().isoformat()),
     ]
@@ -676,9 +687,22 @@ def build_report(
     *,
     result_dir: Path = DEFAULT_RESULT_DIR,
     output_path: Path = DEFAULT_REPORT_PATH,
+    allow_unverified_draft: bool = False,
 ) -> Path:
     result_dir = Path(result_dir)
     output_path = Path(output_path)
+    verification_path = result_dir / "verification_summary.json"
+    if not allow_unverified_draft:
+        if not verification_path.is_file():
+            raise VerificationGateError(
+                f"formal report requires {verification_path.name}"
+            )
+        verification = _read_json(verification_path)
+        if not verification.get("pass"):
+            failed = verification.get("failed_gates", ["unknown"])
+            raise VerificationGateError(
+                "formal report blocked by failed gates: " + ", ".join(failed)
+            )
     if not (result_dir / "benchmark_summary.json").exists():
         return _build_magnetic_only_report(result_dir, output_path)
     summary = _read_json(result_dir / "benchmark_summary.json")
@@ -707,8 +731,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build the seepage-channel three-solver Word report.")
     parser.add_argument("--result-dir", type=Path, default=DEFAULT_RESULT_DIR)
     parser.add_argument("--output", type=Path, default=DEFAULT_REPORT_PATH)
+    parser.add_argument("--allow-unverified-draft", action="store_true")
     args = parser.parse_args()
-    path = build_report(result_dir=args.result_dir, output_path=args.output)
+    path = build_report(
+        result_dir=args.result_dir,
+        output_path=args.output,
+        allow_unverified_draft=args.allow_unverified_draft,
+    )
     print(path.resolve())
     return 0
 

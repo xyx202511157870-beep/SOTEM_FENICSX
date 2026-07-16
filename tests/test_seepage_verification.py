@@ -10,11 +10,18 @@ from atem3d.seepage_channel_model import model_for_variant
 import atem3d.seepage_channel_validation as validation
 from atem3d.seepage_verification import (
     ModelContractMismatch,
+    VerificationGateError,
+    anomaly_energy_trend,
+    build_verification_summary,
     canonical_model_contract,
+    cross_solver_agreement,
     model_fingerprint,
+    parity_metrics,
     require_consistent_fingerprints,
+    three_level_convergence,
     verify_fenicsx_run_contract,
     verify_simpeg_config_contract,
+    zero_contrast_metrics,
 )
 
 
@@ -127,3 +134,105 @@ def test_simpeg_thin_configs_match_the_same_model_contract() -> None:
         )
         assert provenance["model_fingerprint"] == model_fingerprint(thin)
         assert provenance["case"] == case
+
+
+def test_zero_contrast_metrics_exclude_center_and_normalize_by_background() -> None:
+    background = np.ones((5, 4, 3), dtype=float)
+    delta = np.zeros_like(background)
+    delta[2, :, :] = 100.0
+    delta[[0, 1, 3, 4], :, :] = 1.0e-7
+
+    metrics = zero_contrast_metrics(delta, background, threshold=1.0e-6)
+
+    assert metrics["pass"] is True
+    assert metrics["formal_receiver_indices"] == [0, 1, 3, 4]
+    assert all(value == pytest.approx(1.0e-7) for value in metrics["normalized_l2"])
+
+
+def test_anomaly_energy_trend_is_monotone_from_zero_contrast() -> None:
+    background = np.ones((5, 4, 3), dtype=float)
+    deltas = [np.full_like(background, value) for value in (0.0, 0.01, 0.1, 0.5)]
+
+    summary = anomaly_energy_trend(
+        [0.01, 0.02, 0.1, 1.0], deltas, background
+    )
+
+    assert summary["pass"] is True
+    assert summary["energies"] == sorted(summary["energies"])
+
+
+def test_three_level_convergence_requires_decreasing_error_and_thresholds() -> None:
+    fine = np.ones((5, 4, 3), dtype=float)
+    medium = fine * 1.04
+    coarse = fine * 1.20
+
+    summary = three_level_convergence(
+        coarse,
+        medium,
+        fine,
+        median_threshold=0.10,
+        p95_threshold=0.20,
+    )
+
+    assert summary["pass"] is True
+    assert summary["fine_medium"]["median"] < summary["medium_coarse"]["median"]
+
+
+def test_parity_metrics_apply_even_ex_and_odd_magnetic_contracts() -> None:
+    values = np.zeros((5, 3, 3), dtype=float)
+    values[0, :, 0], values[4, :, 0] = 2.0, 2.0
+    values[1, :, 0], values[3, :, 0] = 1.0, 1.0
+    values[2, :, 0] = 3.0
+    for component in (1, 2):
+        values[0, :, component], values[4, :, component] = 2.0, -2.0
+        values[1, :, component], values[3, :, component] = 1.0, -1.0
+        values[2, :, component] = 0.0
+
+    summary = parity_metrics(values, pair_threshold=0.05, center_threshold=0.02)
+
+    assert summary["pass"] is True
+    assert summary["components"]["dBzdt"]["parity"] == "odd"
+    assert summary["components"]["Hz"]["center_ratio"] == 0.0
+
+
+def test_cross_solver_agreement_uses_formal_strong_signal_percentiles() -> None:
+    first = np.ones((5, 6, 3), dtype=float)
+    second = first * 1.10
+    second[2, :, :] = 1000.0
+
+    summary = cross_solver_agreement(
+        first,
+        second,
+        median_threshold=0.20,
+        p95_threshold=0.35,
+    )
+
+    assert summary["pass"] is True
+    assert all(item["median"] < 0.20 for item in summary["components"].values())
+
+
+def test_verification_summary_fails_closed_on_missing_or_failed_gate() -> None:
+    fingerprint = model_fingerprint(model_for_variant("thin_60x1x1"))
+    required = ("zero_contrast", "spatial_convergence", "cross_solver")
+
+    missing = build_verification_summary(
+        model_fingerprint_value=fingerprint,
+        required_gates=required,
+        gates={"zero_contrast": {"available": True, "pass": True}},
+    )
+    assert missing["pass"] is False
+    assert missing["gates"]["spatial_convergence"]["available"] is False
+
+    failed = build_verification_summary(
+        model_fingerprint_value=fingerprint,
+        required_gates=required,
+        gates={name: {"available": True, "pass": name != "cross_solver"} for name in required},
+    )
+    assert failed["pass"] is False
+    with pytest.raises(VerificationGateError, match="cross_solver"):
+        build_verification_summary(
+            model_fingerprint_value=fingerprint,
+            required_gates=required,
+            gates=failed["gates"],
+            require_pass=True,
+        )
