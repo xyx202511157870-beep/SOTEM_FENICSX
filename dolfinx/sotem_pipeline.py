@@ -72,6 +72,7 @@ class PipelineConfig:
     msh_name: str = "verification_mesh.msh"
     force_mesh: bool = False
     mesh_source_path: Path | None = None
+    mesh_symmetry_mode: str = "ordinary"  # ordinary, positive_half_source
 
     x_extent: float = 25_000.0
     y_extent: float = 25_000.0
@@ -736,6 +737,11 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     nedelec_order = int(config.nedelec_order)
     if nedelec_order not in {1, 2}:
         raise ValueError(f"nedelec_order must be 1 or 2; got {nedelec_order}")
+    mesh_symmetry_mode = str(config.mesh_symmetry_mode).strip().lower()
+    if mesh_symmetry_mode not in {"ordinary", "positive_half_source"}:
+        raise ValueError(
+            "mesh_symmetry_mode must be 'ordinary' or 'positive_half_source'"
+        )
     source_term_mode = str(config.source_term_mode).strip().lower()
     if source_term_mode not in {"impressed_current", "primary_dc", "primary_secondary"}:
         raise ValueError(
@@ -1102,6 +1108,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "source_projection_mode": source_projection_mode,
             "source_only": bool(config.source_only),
             "nedelec_order": nedelec_order,
+            "mesh_symmetry_mode": mesh_symmetry_mode,
             "source_term_mode": source_term_mode,
             "primary_secondary_sampling_strategy": primary_secondary_sampling_strategy,
             "primary_secondary_dc_mode": primary_secondary_dc_mode,
@@ -1715,6 +1722,15 @@ def _source_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float,
     return points
 
 
+def _mesh_y_bounds(config: PipelineConfig) -> tuple[float, float]:
+    mode = str(config.mesh_symmetry_mode).strip().lower()
+    if mode == "positive_half_source":
+        return 0.0, float(config.y_extent)
+    if mode == "ordinary":
+        return -float(config.y_extent), float(config.y_extent)
+    raise ValueError("mesh_symmetry_mode must be 'ordinary' or 'positive_half_source'")
+
+
 def generate_verification_mesh(config: PipelineConfig) -> Path:
     """Generate the two-volume air-earth Gmsh model."""
 
@@ -1747,8 +1763,8 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
 
         occ = gmsh.model.occ
         x0, x1 = -config.x_extent, config.x_extent
-        y0, y1 = -config.y_extent, config.y_extent
-        air = occ.addBox(x0, y0, 0.0, 2.0 * config.x_extent, 2.0 * config.y_extent, config.air_height)
+        y0, y1 = _mesh_y_bounds(config)
+        air = occ.addBox(x0, y0, 0.0, 2.0 * config.x_extent, y1 - y0, config.air_height)
         layer_depths, _layer_resistivities = _normalise_layer_model(config)
         earth_depth_breaks = [0.0, *layer_depths, float(config.earth_depth)]
         earth_boxes: list[int] = []
@@ -1759,7 +1775,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
                     y0,
                     -bottom_depth,
                     2.0 * config.x_extent,
-                    2.0 * config.y_extent,
+                    y1 - y0,
                     bottom_depth - top_depth,
                 )
             )
@@ -10463,6 +10479,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "initial_dc_mode": str(config.initial_dc_mode),
         "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
         "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
+        "mesh_symmetry_mode": str(config.mesh_symmetry_mode),
         "biot_current_integration": str(config.biot_current_integration),
         "faraday_loop_radius": float(config.faraday_loop_radius),
         "faraday_loop_quadrature_points": int(config.faraday_loop_quadrature_points),
@@ -12906,6 +12923,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--x-extent", type=float, default=25_000.0)
     parser.add_argument("--y-extent", type=float, default=25_000.0)
+    parser.add_argument(
+        "--mesh-symmetry-mode",
+        choices=("ordinary", "positive_half_source"),
+        default="ordinary",
+    )
     parser.add_argument("--air-height", type=float, default=10_000.0)
     parser.add_argument("--earth-depth", type=float, default=25_000.0)
     parser.add_argument("--layer-depths", default="", help="Comma-separated earth-interface depths below z=0, e.g. 2000,2200.")
@@ -13042,6 +13064,7 @@ def main(argv: list[str] | None = None) -> int:
         ramp_solver_t_min=args.ramp_solver_t_min,
         x_extent=args.x_extent,
         y_extent=args.y_extent,
+        mesh_symmetry_mode=args.mesh_symmetry_mode,
         air_height=args.air_height,
         earth_depth=args.earth_depth,
         layer_depths=_parse_float_csv(args.layer_depths, "--layer-depths"),
