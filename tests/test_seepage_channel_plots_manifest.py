@@ -28,3 +28,9 @@ def test_plot_source_contains_required_panels() -> None:
         assert name in source
     assert "R0=0.01" in source
     assert "Rx3 absolute residual" in source
+    for name in (
+        "magnetic_receiver_comparison.png",
+        "rx3_absolute_residual.png",
+        "magnetic_symmetry_convergence.png",
+    ):
+        assert f"magnetic_root / \"{name}\"" in source

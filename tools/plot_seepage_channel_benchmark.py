@@ -338,9 +338,15 @@ def generate_plots(result_dir: str | Path) -> list[Path]:
         metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
         convergence = json.loads(convergence_path.read_text(encoding="utf-8"))
         method_table["selected"] = convergence.get("selected")
-        plot_magnetic_receiver_comparison(method_table, output_root / "magnetic_receiver_comparison.png")
-        plot_rx3_absolute_residual(method_table, metrics, output_root / "rx3_absolute_residual.png")
-        plot_magnetic_symmetry_convergence(metrics, output_root / "magnetic_symmetry_convergence.png")
+        plot_magnetic_receiver_comparison(
+            method_table, magnetic_root / "magnetic_receiver_comparison.png"
+        )
+        plot_rx3_absolute_residual(
+            method_table, metrics, magnetic_root / "rx3_absolute_residual.png"
+        )
+        plot_magnetic_symmetry_convergence(
+            metrics, magnetic_root / "magnetic_symmetry_convergence.png"
+        )
     return [output_root / f"{stem}.{suffix}" for stem in FIGURE_STEMS for suffix in ("png", "pdf")]
 
 
