@@ -24,7 +24,6 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from atem3d.seepage_channel_model import MODEL  # noqa: E402
 from atem3d.seepage_channel_validation import (  # noqa: E402
     COMPONENTS,
     ordinary_relative_error,
@@ -91,11 +90,36 @@ def _draw_box_edges(axis, bounds, **kwargs) -> None:
                 axis.plot(*zip(first, second), **kwargs)
 
 
+def load_geometry_contract(result_dir: str | Path) -> dict[str, Any]:
+    """Load the solved model geometry from its authoritative audit artifact."""
+
+    audit = json.loads((Path(result_dir) / "model_audit.json").read_text(encoding="utf-8"))
+    return {
+        "variant": audit.get("variant", "baseline_60x10x10"),
+        "coordinate_convention": audit["coordinate_convention"],
+        "source_endpoints_m": audit["source_endpoints_m"],
+        "receiver_locations_m": audit["receiver_locations_m"],
+        "receiver_provenance": audit.get(
+            "receiver_provenance", ["explicit_full_domain"] * 5
+        ),
+        "channel_bounds_m": audit["channel"]["bounds_m"],
+        "channel_size_m": audit["channel"]["size_m"],
+        "channel_conductivity_s_per_m": audit["channel"]["conductivity_s_per_m"],
+        "empymod_background_only_1d": audit.get("empymod", {}).get(
+            "background_only_1d", True
+        ),
+    }
+
+
 def plot_model_geometry(output_root: Path) -> None:
-    fig = plt.figure(figsize=(14, 4.2))
+    contract = load_geometry_contract(output_root)
+    fig = plt.figure(figsize=(14, 4.4))
     axis_3d = fig.add_subplot(131, projection="3d")
-    source = np.asarray(MODEL.source_endpoints)
-    receivers = np.asarray(MODEL.receiver_locations)[list(REPORT_RECEIVER_INDICES)]
+    source = np.asarray(contract["source_endpoints_m"], dtype=float)
+    receivers = np.asarray(contract["receiver_locations_m"], dtype=float)[
+        list(REPORT_RECEIVER_INDICES)
+    ]
+    channel_bounds = contract["channel_bounds_m"]
     axis_3d.plot(source[:, 0], source[:, 1], source[:, 2], color="crimson", lw=3, label="100 m wire")
     axis_3d.scatter(
         receivers[:, 0],
@@ -105,26 +129,26 @@ def plot_model_geometry(output_root: Path) -> None:
         s=28,
         label="Rx1, Rx2, Rx4, Rx5",
     )
-    _draw_box_edges(axis_3d, MODEL.channel.bounds, color="teal", lw=1.5)
-    axis_3d.set(xlabel="x (m)", ylabel="y (m)", zlabel="physical z-down (m)")
+    _draw_box_edges(axis_3d, channel_bounds, color="teal", lw=1.5)
+    axis_3d.set(xlabel="x (m)", ylabel="y (m)", zlabel="z-down (m)")
     axis_3d.invert_zaxis()
     axis_3d.legend(fontsize=7)
     axis_3d.set_title("Full 3D geometry")
 
     axis_xz = fig.add_subplot(132)
     axis_xz.plot(source[:, 0], source[:, 2], color="crimson", lw=3)
-    (xmin, xmax), (_ymin, _ymax), (zmin, zmax) = MODEL.channel.bounds
+    (xmin, xmax), (_ymin, _ymax), (zmin, zmax) = channel_bounds
     axis_xz.add_patch(plt.Rectangle((xmin, zmin), xmax - xmin, zmax - zmin, color="teal", alpha=0.3))
     axis_xz.axhline(0.0, color="black", lw=0.8)
-    axis_xz.set(xlabel="x (m)", ylabel="physical z-down (m)", title="x-z section")
+    axis_xz.set(xlabel="x (m)", ylabel="z-down (m)", title="x-z section")
     axis_xz.invert_yaxis()
 
     axis_yz = fig.add_subplot(133)
     axis_yz.scatter(receivers[:, 1], receivers[:, 2], color="navy", s=28)
-    (_xmin, _xmax), (ymin, ymax), (zmin, zmax) = MODEL.channel.bounds
+    (_xmin, _xmax), (ymin, ymax), (zmin, zmax) = channel_bounds
     axis_yz.add_patch(plt.Rectangle((ymin, zmin), ymax - ymin, zmax - zmin, color="teal", alpha=0.3))
     axis_yz.axhline(0.0, color="black", lw=0.8)
-    axis_yz.set(xlabel="y (m)", ylabel="physical z-down (m)", title="y-z section")
+    axis_yz.set(xlabel="y (m)", ylabel="z-down (m)", title="y-z section")
     axis_yz.invert_yaxis()
     _save_figure(fig, output_root, "model_geometry")
 
@@ -500,6 +524,9 @@ def _package_version(name: str) -> str:
 
 def write_manifest(result_dir: str | Path) -> Path:
     output_root = Path(result_dir)
+    contract = load_geometry_contract(output_root)
+    with np.load(output_root / "benchmark_results.npz", allow_pickle=False) as data:
+        times = np.asarray(data["times"], dtype=float).tolist()
     manifest = {
         "inventory": build_output_inventory(output_root),
         "versions": {
@@ -512,14 +539,9 @@ def write_manifest(result_dir: str | Path) -> Path:
             "petsc4py": _package_version("petsc4py"),
         },
         "model_contract": {
-            "coordinate_convention": MODEL.coordinate_convention,
-            "source_endpoints_m": MODEL.source_endpoints,
-            "receiver_locations_m": MODEL.receiver_locations,
-            "channel_bounds_m": MODEL.channel.bounds,
-            "channel_conductivity_s_per_m": MODEL.channel.conductivity,
-            "times_s": MODEL.times.tolist(),
-            "fenicsx_receiver_provenance": ["explicit_full_domain"] * 5,
-            "empymod_background_only_1d": True,
+            **contract,
+            "times_s": times,
+            "fenicsx_receiver_provenance": contract["receiver_provenance"],
         },
     }
     path = output_root / "benchmark_manifest.json"

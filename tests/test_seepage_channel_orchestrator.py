@@ -14,3 +14,18 @@ def test_run_plan_contains_no_mirrored_fenicsx_jobs() -> None:
         "manifest",
     ]
     assert all("mirror" not in " ".join(job.command).lower() for job in plan)
+
+
+def test_thin_run_plan_selects_thin_configs_scripts_and_variant_argument() -> None:
+    plan = build_run_plan(
+        output_root="output/seepage_channel_100m_5rx_60x1x1",
+        variant="thin_60x1x1",
+    )
+    commands = {job.name: " ".join(job.command) for job in plan}
+    inputs = {job.name: " ".join(str(path) for path in job.required_inputs) for job in plan}
+    assert "simpeg_thin_background.yaml" in inputs["simpeg_background"]
+    assert "simpeg_thin_channel.yaml" in inputs["simpeg_channel"]
+    assert "run_fenicsx_seepage_thin_background.sh" in commands["fenicsx_background"]
+    assert "run_fenicsx_seepage_thin_channel.sh" in commands["fenicsx_channel"]
+    assert "--variant thin_60x1x1" in commands["aggregate"]
+    assert all("mirror" not in command.lower() for command in commands.values())

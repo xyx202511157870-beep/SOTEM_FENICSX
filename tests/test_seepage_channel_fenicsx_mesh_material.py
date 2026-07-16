@@ -81,3 +81,62 @@ def test_overlapping_receiver_refinement_points_share_one_geometry_tag() -> None
     ]
     assert len(referenced) > len(point_sizes)
     assert set(referenced) == set(point_sizes)
+
+
+class _FakeOcc:
+    def __init__(self) -> None:
+        self.boxes = []
+        self.fragments = []
+
+    def addBox(self, *args):
+        self.boxes.append(tuple(float(value) for value in args))
+        return len(self.boxes)
+
+    def fragment(self, objects, tools):
+        self.fragments.append((list(objects), list(tools)))
+
+
+def test_thin_conductivity_box_uses_embedded_refinement_cloud() -> None:
+    module = load_pipeline_module()
+    occ = _FakeOcc()
+    config = module.PipelineConfig(
+        x_extent=3000.0,
+        y_extent=3000.0,
+        air_height=600.0,
+        earth_depth=6000.0,
+        conductivity_box_name="thin_channel",
+        conductivity_box_bounds=((-30.0, 30.0), (-0.5, 0.5), (-20.5, -19.5)),
+        conductivity_box_sigma=1.0,
+        conductivity_box_mesh_size=0.25,
+    )
+
+    module._add_air_earth_domain(occ, config)
+    cloud = module._conductivity_box_refinement_cloud_points(config)
+
+    assert len(occ.boxes) == 2
+    objects, tools = occ.fragments[-1]
+    assert objects == [(3, 1)]
+    assert tools == [(3, 2)]
+    assert cloud
+    assert all(-30.25 <= point[0] <= 30.25 for point in cloud)
+    assert all(-0.75 <= point[1] <= 0.75 for point in cloud)
+    assert all(-20.75 <= point[2] <= -19.25 for point in cloud)
+    assert any(point[1] == -0.5 for point in cloud)
+    assert any(point[1] == 0.5 for point in cloud)
+    assert any(point[1] < -0.5 for point in cloud)
+    assert any(point[2] > -19.5 for point in cloud)
+
+
+def test_refinement_cloud_retains_standard_hxt_mesh_pipeline() -> None:
+    module = load_pipeline_module()
+    plain = module.PipelineConfig()
+    imprinted = module.PipelineConfig(
+        conductivity_box_name="thin_channel",
+        conductivity_box_bounds=((-30.0, 30.0), (-0.5, 0.5), (-20.5, -19.5)),
+        conductivity_box_sigma=1.0,
+    )
+
+    assert module._gmsh_algorithm_3d(plain) == 10
+    assert module._gmsh_algorithm_3d(imprinted) == 10
+    assert module._gmsh_optimize_netgen(plain) == 1
+    assert module._gmsh_optimize_netgen(imprinted) == 1

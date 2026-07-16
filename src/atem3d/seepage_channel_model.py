@@ -6,7 +6,7 @@ surface, positive ``z`` is underground, and negative ``z`` is air.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from numpy.typing import NDArray
@@ -96,4 +96,34 @@ class SeepageChannelBenchmark:
 MODEL = SeepageChannelBenchmark()
 
 
-__all__ = ["ChannelBox", "MODEL", "SeepageChannelBenchmark"]
+def benchmark_model(variant: str = "baseline_60x10x10") -> SeepageChannelBenchmark:
+    """Return a named seepage-channel contract while preserving the baseline default."""
+
+    normalized = str(variant).strip().lower()
+    if normalized in {"baseline", "baseline_60x10x10", "60x10x10"}:
+        return MODEL
+    if normalized in {"thin", "thin_60x1x1", "60x1x1"}:
+        return replace(
+            MODEL,
+            channel=ChannelBox(
+                center=MODEL.channel.center,
+                size=(60.0, 1.0, 1.0),
+                conductivity=MODEL.channel.conductivity,
+            ),
+        )
+    raise ValueError(f"unknown seepage-channel benchmark variant: {variant}")
+
+
+def model_for_variant(variant: str = "baseline_60x10x10") -> SeepageChannelBenchmark:
+    """Return the canonical model for a named benchmark variant."""
+
+    return benchmark_model(variant)
+
+
+__all__ = [
+    "ChannelBox",
+    "MODEL",
+    "SeepageChannelBenchmark",
+    "benchmark_model",
+    "model_for_variant",
+]

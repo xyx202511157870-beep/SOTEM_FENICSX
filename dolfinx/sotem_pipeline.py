@@ -1547,6 +1547,74 @@ def _mesh_memory_preflight_for_path(config: PipelineConfig, msh_path: Path) -> d
         return None
 
 
+def _add_air_earth_domain(occ, config: PipelineConfig):
+    """Build the layered domain without introducing thin OCC sliver volumes."""
+
+    x0, y0 = -config.x_extent, -config.y_extent
+    air = occ.addBox(
+        x0,
+        y0,
+        0.0,
+        2.0 * config.x_extent,
+        2.0 * config.y_extent,
+        config.air_height,
+    )
+    layer_depths, _layer_resistivities = _normalise_layer_model(config)
+    earth_depth_breaks = [0.0, *layer_depths, float(config.earth_depth)]
+    earth_boxes = [
+        occ.addBox(
+            x0,
+            y0,
+            -bottom_depth,
+            2.0 * config.x_extent,
+            2.0 * config.y_extent,
+            bottom_depth - top_depth,
+        )
+        for top_depth, bottom_depth in zip(
+            earth_depth_breaks[:-1], earth_depth_breaks[1:]
+        )
+    ]
+
+    occ.fragment([(3, air)], [(3, earth) for earth in earth_boxes])
+    return air, earth_boxes
+
+
+def _conductivity_box_refinement_cloud_points(
+    config: PipelineConfig,
+) -> list[tuple[float, float, float]]:
+    """Return interior points that force thin-box sampling without sliver faces."""
+
+    audit = _conductivity_box_config_audit(config)
+    if not audit["enabled"]:
+        return []
+    bounds = tuple(tuple(float(value) for value in axis) for axis in audit["bounds"])
+    h = float(audit["mesh_size_m"])
+    axes = []
+    for lower, upper in bounds:
+        count = max(1, int(math.ceil((upper - lower) / h)))
+        step = (upper - lower) / count
+        core = [lower + index * step for index in range(count + 1)]
+        axes.append([lower - step, *core, upper + step])
+    return [
+        (float(x), float(y), float(z))
+        for x in axes[0]
+        for y in axes[1]
+        for z in axes[2]
+    ]
+
+
+def _gmsh_algorithm_3d(config: PipelineConfig) -> int:
+    """Use HXT now that thin conductivity boxes are represented cellwise."""
+
+    return 10
+
+
+def _gmsh_optimize_netgen(config: PipelineConfig) -> int:
+    """Keep standard Netgen optimization for the unsplit air-earth domain."""
+
+    return 1
+
+
 def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
     """Return extra embedded points that keep receiver cells locally small."""
 
@@ -1766,7 +1834,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
     try:
         gmsh.option.setNumber("General.Terminal", 1)
         gmsh.option.setNumber("Mesh.MshFileVersion", 4.1)
-        gmsh.option.setNumber("Mesh.Algorithm3D", 10)
+        gmsh.option.setNumber("Mesh.Algorithm3D", _gmsh_algorithm_3d(config))
         gmsh.model.add("sotem_air_earth")
 
         occ = gmsh.model.occ
@@ -1806,6 +1874,11 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
             for point, tag in zip(source_cloud_points, source_cloud)
             if _mesh_source_embedding_dimension(config) == 3
             or float(point[1]) > 1.0e-10
+        ]
+        conductivity_box_audit = _conductivity_box_config_audit(config)
+        conductivity_cloud = [
+            occ.addPoint(*point, conductivity_box_audit["mesh_size_m"])
+            for point in _conductivity_box_refinement_cloud_points(config)
         ]
         receiver_specs, receiver_point_sizes = _receiver_refinement_point_specs(config)
         if _mesh_source_embedding_dimension(config) == 2:
@@ -1937,7 +2010,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         ]
         if not top_earth_vols:
             raise RuntimeError("failed to identify top earth layer volumes for source and receiver embedding")
-        earth_receiver_points = [*source_volume_cloud]
+        earth_receiver_points = [*source_volume_cloud, *conductivity_cloud]
         air_receiver_points: list[int] = []
         surface_receiver_points = [*receiver_surface_cloud]
         for entry in receiver_entries:
@@ -2075,7 +2148,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(mesh_size_candidates))
         gmsh.option.setNumber("Mesh.MeshSizeMax", far_field_mesh_size)
         gmsh.option.setNumber("Mesh.Optimize", 1)
-        gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
+        gmsh.option.setNumber("Mesh.OptimizeNetgen", _gmsh_optimize_netgen(config))
 
         gmsh.model.mesh.generate(3)
         msh_path.parent.mkdir(parents=True, exist_ok=True)

@@ -5,7 +5,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from tools.plot_seepage_channel_benchmark import build_output_inventory
+from tools.plot_seepage_channel_benchmark import (
+    build_output_inventory,
+    load_geometry_contract,
+)
 
 
 def test_relative_anomaly_percent_uses_pointwise_background_with_finite_floor() -> None:
@@ -344,3 +347,21 @@ def test_all_formal_response_plots_enable_magnitude_decay() -> None:
         "channel_response",
         "channel_delta",
     }
+
+
+def test_geometry_contract_is_loaded_from_result_audit(tmp_path: Path) -> None:
+    audit = {
+        "coordinate_convention": "z_down",
+        "source_endpoints_m": [[-50.0, 0.0, 0.1], [50.0, 0.0, 0.1]],
+        "receiver_locations_m": [[0.0, y, -0.1] for y in (-20, -10, 0, 10, 20)],
+        "receiver_provenance": ["explicit_full_domain"] * 5,
+        "channel": {
+            "bounds_m": [[-30.0, 30.0], [-0.5, 0.5], [19.5, 20.5]],
+            "size_m": [60.0, 1.0, 1.0],
+            "conductivity_s_per_m": 1.0,
+        },
+        "empymod": {"background_only_1d": True},
+    }
+    (tmp_path / "model_audit.json").write_text(json.dumps(audit), encoding="utf-8")
+    contract = load_geometry_contract(tmp_path)
+    assert contract["channel_bounds_m"] == audit["channel"]["bounds_m"]

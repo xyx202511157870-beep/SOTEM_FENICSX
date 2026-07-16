@@ -5,6 +5,8 @@ BACKGROUND = Path("tools/run_fenicsx_seepage_background.sh")
 CHANNEL = Path("tools/run_fenicsx_seepage_channel.sh")
 MAGNETIC_SHORT = Path("tools/run_fenicsx_magnetic_background_short.sh")
 MAGNETIC_CHANNEL = Path("tools/run_fenicsx_magnetic_channel_full.sh")
+THIN_BACKGROUND = Path("tools/run_fenicsx_seepage_thin_background.sh")
+THIN_CHANNEL = Path("tools/run_fenicsx_seepage_thin_channel.sh")
 
 
 def _command_tokens(path: Path) -> list[str]:
@@ -74,3 +76,22 @@ def test_staged_magnetic_commands_use_stable_full_domain_receivers() -> None:
         assert "mirror" not in source.lower()
     assert "--stop-after-outputs 10" in MAGNETIC_SHORT.read_text(encoding="utf-8")
     assert "--stop-after-outputs" not in MAGNETIC_CHANNEL.read_text(encoding="utf-8")
+
+
+def test_thin_commands_preserve_five_full_domain_receivers_and_refine_box() -> None:
+    background = THIN_BACKGROUND.read_text(encoding="utf-8")
+    channel = THIN_CHANNEL.read_text(encoding="utf-8")
+    for forbidden in ("mirror", "y10_baseline", "y20_baseline"):
+        assert forbidden not in background.lower()
+        assert forbidden not in channel.lower()
+    for receiver in ("0,-20,0.1", "0,-10,0.1", "0,0,0.1", "0,10,0.1", "0,20,0.1"):
+        assert f"--receiver-location {receiver}" in background
+        assert f"--receiver-location {receiver}" in channel
+    assert '"--conductivity-box-bounds=-30,30;-0.5,0.5;-20.5,-19.5"' in channel
+    assert '"--conductivity-box-bounds=-30,30;-0.5,0.5;-20.5,-19.5"' in background
+    assert "--conductivity-box-mesh-size 0.25" in channel
+    assert "--conductivity-box-mesh-size 0.25" in background
+    assert "--conductivity-box-sigma 0.01" in background
+    assert "--conductivity-box-sigma 1.0" in channel
+    assert "--workdir output/seepage_channel_100m_5rx_60x1x1/fenicsx_background" in background
+    assert "--workdir output/seepage_channel_100m_5rx_60x1x1/fenicsx_channel" in channel

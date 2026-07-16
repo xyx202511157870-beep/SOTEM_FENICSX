@@ -10,8 +10,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .four_way_validation import load_simpeg_values, run_empymod_reference
-from .seepage_channel_model import MODEL
+from .seepage_reference import load_simpeg_values, run_empymod_reference
+from .seepage_channel_model import MODEL, SeepageChannelBenchmark
 
 
 COMPONENTS = ("Ex", "dBzdt", "Hz")
@@ -143,6 +143,8 @@ def aggregate_payloads(
     fenicsx_background: Mapping[str, Any],
     fenicsx_channel: Mapping[str, Any],
     convergence_cases: Mapping[str, tuple[Any, Any]] | None = None,
+    model: SeepageChannelBenchmark = MODEL,
+    variant: str = "baseline_60x10x10",
 ) -> dict[str, Any]:
     output = Path(output_root)
     output.mkdir(parents=True, exist_ok=True)
@@ -168,8 +170,8 @@ def aggregate_payloads(
         values[("FEniCSx", "channel")],
         values[("FEniCSx", "background")],
     )
-    times = np.asarray(MODEL.times, dtype=float)
-    locations = np.asarray(MODEL.receiver_locations, dtype=float)
+    times = np.asarray(model.times, dtype=float)
+    locations = np.asarray(model.receiver_locations, dtype=float)
 
     benchmark_rows: list[dict[str, Any]] = []
     for (method, case), method_values in values.items():
@@ -310,16 +312,17 @@ def aggregate_payloads(
         )
 
     model_audit = {
-        "coordinate_convention": MODEL.coordinate_convention,
-        "source_endpoints_m": MODEL.source_endpoints,
-        "receiver_locations_m": MODEL.receiver_locations,
+        "variant": str(variant),
+        "coordinate_convention": model.coordinate_convention,
+        "source_endpoints_m": model.source_endpoints,
+        "receiver_locations_m": model.receiver_locations,
         "receiver_provenance": ["explicit_full_domain"] * 5,
         "channel": {
-            "center_m": MODEL.channel.center,
-            "size_m": MODEL.channel.size,
-            "bounds_m": MODEL.channel.bounds,
-            "conductivity_s_per_m": MODEL.channel.conductivity,
-            "theoretical_volume_m3": MODEL.channel.volume_m3,
+            "center_m": model.channel.center,
+            "size_m": model.channel.size,
+            "bounds_m": model.channel.bounds,
+            "conductivity_s_per_m": model.channel.conductivity,
+            "theoretical_volume_m3": model.channel.volume_m3,
         },
         "empymod": {
             "background_only_1d": True,
@@ -501,7 +504,12 @@ def _payload_from_npz(path: Path) -> dict[str, Any]:
         return {name: np.asarray(stored[name]) for name in stored.files}
 
 
-def aggregate_result_directory(output_root: str | Path) -> dict[str, Any]:
+def aggregate_result_directory(
+    output_root: str | Path,
+    *,
+    model: SeepageChannelBenchmark = MODEL,
+    variant: str = "baseline_60x10x10",
+) -> dict[str, Any]:
     output = Path(output_root)
     empymod = _payload_from_npz(output / "empymod_background.npz")
     simpeg_background = _payload_from_npz(output / "simpeg_background.npz")
@@ -532,6 +540,8 @@ def aggregate_result_directory(output_root: str | Path) -> dict[str, Any]:
         fenicsx_background=fenicsx_background,
         fenicsx_channel=fenicsx_channel,
         convergence_cases=convergence_cases,
+        model=model,
+        variant=variant,
     )
 
 
