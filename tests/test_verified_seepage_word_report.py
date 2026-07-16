@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -10,6 +12,18 @@ from tools.build_verified_seepage_word_report import (
     _gate_status_rows,
     build_verified_report,
 )
+
+
+def test_verified_report_cli_is_directly_executable() -> None:
+    script = Path(__file__).resolve().parents[1] / "tools" / "build_verified_seepage_word_report.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_verified_report_refuses_missing_or_failed_final_summary(
