@@ -96,7 +96,7 @@ class _FakeOcc:
         self.fragments.append((list(objects), list(tools)))
 
 
-def test_thin_conductivity_box_is_imprinted_into_occ_domain() -> None:
+def test_thin_conductivity_box_uses_embedded_refinement_cloud() -> None:
     module = load_pipeline_module()
     occ = _FakeOcc()
     config = module.PipelineConfig(
@@ -110,15 +110,24 @@ def test_thin_conductivity_box_is_imprinted_into_occ_domain() -> None:
         conductivity_box_mesh_size=0.25,
     )
 
-    module._add_air_earth_domain_with_conductivity_imprint(occ, config)
+    module._add_air_earth_domain(occ, config)
+    cloud = module._conductivity_box_refinement_cloud_points(config)
 
-    assert occ.boxes[-1] == (-30.0, -0.5, -20.5, 60.0, 1.0, 1.0)
+    assert len(occ.boxes) == 2
     objects, tools = occ.fragments[-1]
-    assert (3, len(occ.boxes)) in tools
-    assert len(objects) == 2
+    assert objects == [(3, 1)]
+    assert tools == [(3, 2)]
+    assert cloud
+    assert all(-30.25 <= point[0] <= 30.25 for point in cloud)
+    assert all(-0.75 <= point[1] <= 0.75 for point in cloud)
+    assert all(-20.75 <= point[2] <= -19.25 for point in cloud)
+    assert any(point[1] == -0.5 for point in cloud)
+    assert any(point[1] == 0.5 for point in cloud)
+    assert any(point[1] < -0.5 for point in cloud)
+    assert any(point[2] > -19.5 for point in cloud)
 
 
-def test_imprinted_conductivity_box_uses_frontal_algorithm() -> None:
+def test_refinement_cloud_retains_standard_hxt_mesh_pipeline() -> None:
     module = load_pipeline_module()
     plain = module.PipelineConfig()
     imprinted = module.PipelineConfig(
@@ -128,6 +137,6 @@ def test_imprinted_conductivity_box_uses_frontal_algorithm() -> None:
     )
 
     assert module._gmsh_algorithm_3d(plain) == 10
-    assert module._gmsh_algorithm_3d(imprinted) == 4
+    assert module._gmsh_algorithm_3d(imprinted) == 10
     assert module._gmsh_optimize_netgen(plain) == 1
-    assert module._gmsh_optimize_netgen(imprinted) == 0
+    assert module._gmsh_optimize_netgen(imprinted) == 1

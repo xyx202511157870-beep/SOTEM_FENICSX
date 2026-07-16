@@ -1496,8 +1496,8 @@ def _mesh_memory_preflight_for_path(config: PipelineConfig, msh_path: Path) -> d
         return None
 
 
-def _add_air_earth_domain_with_conductivity_imprint(occ, config: PipelineConfig):
-    """Build the layered domain and imprint an enabled conductivity box."""
+def _add_air_earth_domain(occ, config: PipelineConfig):
+    """Build the layered domain without introducing thin OCC sliver volumes."""
 
     x0, y0 = -config.x_extent, -config.y_extent
     air = occ.addBox(
@@ -1524,36 +1524,44 @@ def _add_air_earth_domain_with_conductivity_imprint(occ, config: PipelineConfig)
         )
     ]
 
-    conductivity_box_audit = _conductivity_box_config_audit(config)
-    if conductivity_box_audit["enabled"]:
-        bounds = conductivity_box_audit["bounds"]
-        conductivity_box = occ.addBox(
-            bounds[0][0],
-            bounds[1][0],
-            bounds[2][0],
-            bounds[0][1] - bounds[0][0],
-            bounds[1][1] - bounds[1][0],
-            bounds[2][1] - bounds[2][0],
-        )
-        occ.fragment(
-            [(3, air), *((3, earth) for earth in earth_boxes)],
-            [(3, conductivity_box)],
-        )
-    else:
-        occ.fragment([(3, air)], [(3, earth) for earth in earth_boxes])
+    occ.fragment([(3, air)], [(3, earth) for earth in earth_boxes])
     return air, earth_boxes
 
 
-def _gmsh_algorithm_3d(config: PipelineConfig) -> int:
-    """Select a volume mesher compatible with imprinted internal faces."""
+def _conductivity_box_refinement_cloud_points(
+    config: PipelineConfig,
+) -> list[tuple[float, float, float]]:
+    """Return interior points that force thin-box sampling without sliver faces."""
 
-    return 4 if _conductivity_box_config_audit(config)["enabled"] else 10
+    audit = _conductivity_box_config_audit(config)
+    if not audit["enabled"]:
+        return []
+    bounds = tuple(tuple(float(value) for value in axis) for axis in audit["bounds"])
+    h = float(audit["mesh_size_m"])
+    axes = []
+    for lower, upper in bounds:
+        count = max(1, int(math.ceil((upper - lower) / h)))
+        step = (upper - lower) / count
+        core = [lower + index * step for index in range(count + 1)]
+        axes.append([lower - step, *core, upper + step])
+    return [
+        (float(x), float(y), float(z))
+        for x in axes[0]
+        for y in axes[1]
+        for z in axes[2]
+    ]
+
+
+def _gmsh_algorithm_3d(config: PipelineConfig) -> int:
+    """Use HXT now that thin conductivity boxes are represented cellwise."""
+
+    return 10
 
 
 def _gmsh_optimize_netgen(config: PipelineConfig) -> int:
-    """Avoid Netgen's known thin-volume optimizer crash after imprints."""
+    """Keep standard Netgen optimization for the unsplit air-earth domain."""
 
-    return 0 if _conductivity_box_config_audit(config)["enabled"] else 1
+    return 1
 
 
 def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
@@ -1764,13 +1772,18 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         occ = gmsh.model.occ
         x0, x1 = -config.x_extent, config.x_extent
         y0, y1 = -config.y_extent, config.y_extent
-        _add_air_earth_domain_with_conductivity_imprint(occ, config)
+        _add_air_earth_domain(occ, config)
         layer_depths, _layer_resistivities = _normalise_layer_model(config)
 
         p0 = occ.addPoint(*config.source_start, 5.0)
         p1 = occ.addPoint(*config.source_end, 5.0)
         source_line = occ.addLine(p0, p1)
         source_cloud = [occ.addPoint(*point, config.source_mesh_size) for point in _source_refinement_cloud_points(config)]
+        conductivity_box_audit = _conductivity_box_config_audit(config)
+        conductivity_cloud = [
+            occ.addPoint(*point, conductivity_box_audit["mesh_size_m"])
+            for point in _conductivity_box_refinement_cloud_points(config)
+        ]
         receiver_specs, receiver_point_sizes = _receiver_refinement_point_specs(config)
         receiver_point_tags = {
             point: occ.addPoint(*point, mesh_size)
@@ -1861,7 +1874,7 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         ]
         if not top_earth_vols:
             raise RuntimeError("failed to identify top earth layer volumes for source and receiver embedding")
-        earth_receiver_points = [*source_cloud]
+        earth_receiver_points = [*source_cloud, *conductivity_cloud]
         air_receiver_points: list[int] = []
         surface_receiver_points = [*receiver_surface_cloud]
         for entry in receiver_entries:
