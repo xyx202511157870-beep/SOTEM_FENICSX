@@ -392,6 +392,23 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
             "dBzdt": 3.0,
         }
     ]
+    magnetic_receiver_diagnostics = [
+        {
+            "receiver_id": "Rx3",
+            "receiver_x_m": 0.0,
+            "receiver_y_m": 0.0,
+            "receiver_z_m": 0.1,
+            "time_obs": 1.0e-5,
+            "dBzdt_curl": 1.0,
+            "dBzdt_biot_rate": 2.0,
+            "dBzdt_faraday_loop": 3.0,
+            "Hz_biot_center": 4.0,
+            "Hz_biot_tetra4": 5.0,
+            "faraday_audit": {"point_count": 32},
+            "biot_tetra4_audit": {"cell_count": 7},
+            "provenance": "explicit_full_domain",
+        }
+    ]
 
     sp._save_forward_checkpoint(
         config,
@@ -405,6 +422,7 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
         solver_log=solver_log,
         h_old_receiver=np.asarray([10.0, 11.0, 12.0]),
         receiver_diagnostic_rows=receiver_diagnostics,
+        magnetic_receiver_diagnostic_rows=magnetic_receiver_diagnostics,
     )
 
     loaded = sp._load_forward_checkpoint(config)
@@ -420,6 +438,7 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
     np.testing.assert_allclose(loaded["h_old_receiver"], np.asarray([10.0, 11.0, 12.0]))
     assert loaded["receiver_diagnostic_rows"][0]["receiver_type"] == "volume_average"
     assert loaded["receiver_diagnostic_rows"][0]["dBzdt"] == 3.0
+    assert loaded["magnetic_receiver_diagnostic_rows"] == magnetic_receiver_diagnostics
 
 
 def test_forward_checkpoint_round_trips_divergence_cleaning_stats(tmp_path):

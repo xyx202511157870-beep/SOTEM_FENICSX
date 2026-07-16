@@ -8216,6 +8216,9 @@ def run_fetd_forward(
         else:
             row_times = _completed_return_times(return_times, rows).tolist()
         receiver_diagnostic_rows = list(checkpoint["receiver_diagnostic_rows"])
+        magnetic_receiver_diagnostic_rows = list(
+            checkpoint["magnetic_receiver_diagnostic_rows"]
+        )
         solver_log = list(checkpoint["solver_log"])
         previous_time = float(checkpoint["previous_time"])
         start_step = _resume_start_step_from_time(
@@ -8633,6 +8636,7 @@ def run_fetd_forward(
                     solver_log=solver_log,
                     h_old_receiver=H_old_receiver,
                     receiver_diagnostic_rows=receiver_diagnostic_rows,
+                    magnetic_receiver_diagnostic_rows=magnetic_receiver_diagnostic_rows,
                 )
         should_stop = is_output and stop_after_outputs > 0 and (len(rows) - initial_rows_count) >= stop_after_outputs
         b.destroy()
@@ -12252,6 +12256,32 @@ def _checkpoint_output_count(rows) -> int:
     return 0 if values.size == 0 else int(values.shape[0])
 
 
+def _magnetic_receiver_diagnostic_payload(rows) -> dict[str, Any]:
+    import numpy as np
+
+    rendered = [
+        json.dumps(
+            _json_safe_diagnostic(dict(row)),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        for row in (rows or [])
+    ]
+    return {"magnetic_receiver_diagnostic_json": np.asarray(rendered)}
+
+
+def _magnetic_receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:
+    import numpy as np
+
+    key = "magnetic_receiver_diagnostic_json"
+    if key not in payload.files:
+        return []
+    return [
+        dict(json.loads(str(item)))
+        for item in np.asarray(payload[key]).astype(str).tolist()
+    ]
+
+
 def _save_forward_checkpoint(
     config: PipelineConfig,
     *,
@@ -12265,6 +12295,7 @@ def _save_forward_checkpoint(
     solver_log,
     h_old_receiver=None,
     receiver_diagnostic_rows=None,
+    magnetic_receiver_diagnostic_rows=None,
 ) -> None:
     import numpy as np
 
@@ -12295,6 +12326,12 @@ def _save_forward_checkpoint(
     }
     if receiver_diagnostic_rows:
         payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
+    if magnetic_receiver_diagnostic_rows:
+        payload.update(
+            _magnetic_receiver_diagnostic_payload(
+                magnetic_receiver_diagnostic_rows
+            )
+        )
     payload.update(_solver_log_to_arrays(solver_log))
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with tmp_path.open("wb") as handle:
@@ -12328,6 +12365,9 @@ def _load_forward_checkpoint(config: PipelineConfig):
         if "h_old_receiver" in payload.files
         else np.full(3, np.nan, dtype=float),
         "receiver_diagnostic_rows": _receiver_diagnostic_rows_from_payload(payload),
+        "magnetic_receiver_diagnostic_rows": (
+            _magnetic_receiver_diagnostic_rows_from_payload(payload)
+        ),
     }
 
 
