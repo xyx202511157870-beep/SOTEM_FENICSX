@@ -29,6 +29,7 @@ from atem3d.seepage_case_matrix import (  # noqa: E402
     case_model,
     write_case_manifest,
 )
+from atem3d.config import _build_ip_model_properties, _build_mesh  # noqa: E402
 from atem3d.seepage_channel_validation import (  # noqa: E402
     empymod_background_payload,
     fenicsx_payload_from_csv,
@@ -225,6 +226,47 @@ def _simpeg_h5_matches_config(h5_path: Path, config_path: Path) -> bool:
         return raw is not None and yaml.safe_load(raw) == expected
     except (KeyError, OSError, TypeError, ValueError, yaml.YAMLError):
         return False
+
+
+def simpeg_zero_operator_audit(
+    background_config: str | Path, zero_config: str | Path
+) -> dict[str, Any]:
+    """Prove background/zero-contrast meshes and conductivity arrays are identical."""
+
+    paths = [Path(background_config), Path(zero_config)]
+    configs = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in paths]
+    meshes = [_build_mesh(config["mesh"]) for config in configs]
+    models = []
+    for config in configs:
+        model = dict(config["model"])
+        model["coordinate_system"] = config["coordinate_system"]
+        models.append(model)
+    conductivities = [
+        _build_ip_model_properties(mesh, model)[0]
+        for mesh, model in zip(meshes, models)
+    ]
+    mesh_equal = bool(
+        np.array_equal(meshes[0].origin, meshes[1].origin)
+        and all(np.array_equal(first, second) for first, second in zip(meshes[0].h, meshes[1].h))
+    )
+    conductivity_equal = bool(np.array_equal(conductivities[0], conductivities[1]))
+    controls_equal = all(
+        configs[0][key] == configs[1][key]
+        for key in ("coordinate_system", "source", "receivers", "time_steps", "solver")
+    )
+    return {
+        "available": True,
+        "pass": bool(mesh_equal and conductivity_equal and controls_equal),
+        "mesh_bitwise_equal": mesh_equal,
+        "conductivity_bitwise_equal": conductivity_equal,
+        "non_material_controls_equal": bool(controls_equal),
+        "different_conductivity_cell_count": int(
+            np.count_nonzero(conductivities[0] != conductivities[1])
+        ),
+        "cell_count": int(meshes[0].n_cells),
+        "background_config_sha256": hashlib.sha256(paths[0].read_bytes()).hexdigest(),
+        "zero_config_sha256": hashlib.sha256(paths[1].read_bytes()).hexdigest(),
+    }
 
 
 def _reuse_legacy_simpeg_output(
@@ -433,6 +475,30 @@ def main(argv: list[str] | None = None) -> int:
         print(write_empymod_verification_reference(args.output_root).resolve(), flush=True)
     for case in cases:
         print(run_case(case, args.output_root, force=args.force).resolve(), flush=True)
+    if args.solver in (None, "simpeg"):
+        simpeg_root = Path(args.output_root) / "verification_runs" / "simpeg"
+        background_config = (
+            simpeg_root
+            / "simpeg-conductivity-background-reference"
+            / "simpeg_config.yaml"
+        )
+        zero_config = (
+            simpeg_root
+            / "simpeg-conductivity-channel-sigma-0p01"
+            / "simpeg_config.yaml"
+        )
+        if background_config.is_file() and zero_config.is_file():
+            audit_path = Path(args.output_root) / "simpeg_zero_operator_audit.json"
+            audit_path.write_text(
+                json.dumps(
+                    simpeg_zero_operator_audit(background_config, zero_config),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            print(audit_path.resolve(), flush=True)
     return 0
 
 

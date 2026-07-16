@@ -15,6 +15,7 @@ from tools.run_seepage_verification_matrix import (
     _simpeg_h5_matches_config,
     build_case_command,
     reuse_case_output,
+    simpeg_zero_operator_audit,
     write_simpeg_case_config,
 )
 
@@ -208,3 +209,19 @@ def test_legacy_simpeg_h5_is_reused_only_for_semantically_identical_config(
     with h5py.File(h5_path, "w") as handle:
         handle.attrs["config_yaml"] = yaml.safe_dump(config, sort_keys=False)
     assert not _simpeg_h5_matches_config(h5_path, config_path)
+
+
+def test_zero_contrast_configs_build_bitwise_identical_discrete_operators(
+    tmp_path: Path,
+) -> None:
+    background = _case("simpeg-conductivity-background-reference")
+    zero = _case("simpeg-conductivity-channel-sigma-0p01")
+    background_path = write_simpeg_case_config(background, tmp_path)
+    zero_path = write_simpeg_case_config(zero, tmp_path)
+
+    audit = simpeg_zero_operator_audit(background_path, zero_path)
+
+    assert audit["pass"] is True
+    assert audit["mesh_bitwise_equal"] is True
+    assert audit["conductivity_bitwise_equal"] is True
+    assert audit["different_conductivity_cell_count"] == 0
