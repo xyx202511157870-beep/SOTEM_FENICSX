@@ -79,6 +79,52 @@ def test_isolated_comsol_prefs_enable_external_runtime_without_modifying_templat
     )
 
 
+def test_isolated_comsol_prefs_accept_an_already_enabled_runtime_setting(
+    tmp_path: Path,
+) -> None:
+    template = tmp_path / "template" / "comsol.prefs"
+    template.parent.mkdir()
+    original = (
+        "keep.before=true\n"
+        "security.external.runtimepermission=on\n"
+        "keep.after=false\n"
+    )
+    template.write_text(original, encoding="utf-8")
+
+    prefs_dir = comsol_runner.prepare_isolated_prefs(
+        template, tmp_path / "case" / "isolated_prefs"
+    )
+
+    assert template.read_text(encoding="utf-8") == original
+    assert (prefs_dir / "comsol.prefs").read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "keep=true\n",
+        (
+            "security.external.runtimepermission=off\n"
+            "security.external.runtimepermission=on\n"
+        ),
+        "# security.external.runtimepermission=off\n",
+    ],
+)
+def test_isolated_comsol_prefs_reject_missing_or_ambiguous_runtime_settings(
+    tmp_path: Path, content: str
+) -> None:
+    template = tmp_path / "template" / "comsol.prefs"
+    template.parent.mkdir()
+    template.write_text(content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exactly one"):
+        comsol_runner.prepare_isolated_prefs(
+            template, tmp_path / "case" / "isolated_prefs"
+        )
+
+    assert template.read_text(encoding="utf-8") == content
+
+
 def test_clear_generated_outputs_preserves_run_inputs_and_manifests(
     tmp_path: Path,
 ) -> None:
@@ -89,7 +135,7 @@ def test_clear_generated_outputs_preserves_run_inputs_and_manifests(
     commands = paths["case_dir"] / "commands.json"
     paths["contract"].write_text("contract", encoding="utf-8")
     commands.write_text("commands", encoding="utf-8")
-    for key in ("output_model", "output_csv", "normalized", "provenance"):
+    for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
         paths[key].write_text(f"stale {key}", encoding="utf-8")
 
     comsol_runner.clear_generated_outputs(paths)
@@ -97,7 +143,45 @@ def test_clear_generated_outputs_preserves_run_inputs_and_manifests(
     assert source.read_text(encoding="utf-8") == "source"
     assert paths["contract"].read_text(encoding="utf-8") == "contract"
     assert commands.read_text(encoding="utf-8") == "commands"
-    for key in ("output_model", "output_csv", "normalized", "provenance"):
+    for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
+        assert not paths[key].exists()
+
+
+def test_run_invalidates_stale_outputs_before_prefs_validation_can_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.mph"
+    source.write_text("source", encoding="utf-8")
+    invalid_template = tmp_path / "template" / "comsol.prefs"
+    invalid_template.parent.mkdir()
+    invalid_template.write_text("keep=true\n", encoding="utf-8")
+    paths = build_case_paths(tmp_path / "results", "channel", source)
+    paths["case_dir"].mkdir(parents=True)
+    commands = paths["case_dir"] / "commands.json"
+    paths["contract"].write_text("old contract", encoding="utf-8")
+    commands.write_text("old commands", encoding="utf-8")
+    for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
+        paths[key].write_text(f"stale {key}", encoding="utf-8")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("invalid prefs must fail before subprocess")
+
+    monkeypatch.setattr(comsol_runner.subprocess, "run", fail_if_called)
+
+    with pytest.raises(ValueError, match="exactly one"):
+        comsol_runner.run_case(
+            case="channel",
+            output_root=tmp_path / "results",
+            source_model=source,
+            comsol_bin=tmp_path / "bin",
+            prefs_template=invalid_template,
+            prepare_only=False,
+        )
+
+    assert source.read_text(encoding="utf-8") == "source"
+    assert paths["contract"].is_file()
+    assert commands.is_file()
+    for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
         assert not paths[key].exists()
 
 
@@ -114,11 +198,11 @@ def test_run_clears_stale_outputs_and_prepares_prefs_before_subprocess(
     output_root = tmp_path / "results"
     paths = build_case_paths(output_root, "channel", source)
     paths["case_dir"].mkdir(parents=True)
-    for key in ("output_model", "output_csv", "normalized", "provenance"):
+    for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
         paths[key].write_text(f"stale {key}", encoding="utf-8")
 
     def stop_at_first_subprocess(*_args, **_kwargs):
-        for key in ("output_model", "output_csv", "normalized", "provenance"):
+        for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
             assert not paths[key].exists()
         assert source.is_file()
         assert paths["contract"].is_file()

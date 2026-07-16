@@ -88,20 +88,28 @@ def prepare_isolated_prefs(
 ) -> Path:
     template = Path(prefs_template)
     destination = Path(prefs_dir)
-    setting = "security.external.runtimepermission=off"
-    text = template.read_text(encoding="utf-8")
-    if text.count(setting) != 1:
-        raise ValueError(f"expected exactly one {setting!r} setting in {template}")
+    off_setting = b"security.external.runtimepermission=off"
+    on_setting = b"security.external.runtimepermission=on"
+    lines = template.read_bytes().splitlines(keepends=True)
+    setting_lines = [
+        index
+        for index, line in enumerate(lines)
+        if line.rstrip(b"\r\n") in (off_setting, on_setting)
+    ]
+    if len(setting_lines) != 1:
+        raise ValueError(
+            f"expected exactly one external runtime permission setting in {template}"
+        )
+    index = setting_lines[0]
+    if lines[index].rstrip(b"\r\n") == off_setting:
+        lines[index] = lines[index].replace(off_setting, on_setting, 1)
     destination.mkdir(parents=True, exist_ok=True)
-    (destination / "comsol.prefs").write_text(
-        text.replace(setting, "security.external.runtimepermission=on", 1),
-        encoding="utf-8",
-    )
+    (destination / "comsol.prefs").write_bytes(b"".join(lines))
     return destination
 
 
 def clear_generated_outputs(paths: dict[str, Path]) -> None:
-    for key in ("output_model", "output_csv", "normalized", "provenance"):
+    for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
         paths[key].unlink(missing_ok=True)
 
 
@@ -162,6 +170,8 @@ def run_case(
     prepare_only: bool,
 ) -> Path:
     paths = build_case_paths(output_root, case, source_model)
+    if not prepare_only:
+        clear_generated_outputs(paths)
     _write_contract(paths, case)
     compile_command, batch_command = build_commands(comsol_bin, paths)
     command_manifest = {
@@ -177,7 +187,6 @@ def run_case(
     if prepare_only:
         return manifest_path
 
-    clear_generated_outputs(paths)
     subprocess.run(compile_command, cwd=JAVA_SOURCE.parent, check=True)
     environment = os.environ.copy()
     environment.update(
