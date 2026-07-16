@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -188,9 +190,92 @@ def biot_savart_volume_h(
     }
 
 
+def evaluate_faraday_loop_field(
+    electric_field: Any,
+    mesh: Any,
+    *,
+    center: ArrayLike,
+    radius: float,
+    point_count: int,
+    find_cells: Callable[[Any, NDArray[np.float64]], Sequence[int]],
+) -> tuple[float, dict[str, object]]:
+    """Evaluate a finite-loop Faraday receiver and fail if any point is absent."""
+
+    rule = horizontal_loop_rule(
+        center,
+        radius=radius,
+        point_count=point_count,
+    )
+    selected_cells: list[int] = []
+    missing_indices: list[int] = []
+    for point_index, point in enumerate(rule.points):
+        candidates = np.asarray(find_cells(mesh, point), dtype=np.int64).reshape(-1)
+        if candidates.size == 0:
+            missing_indices.append(point_index)
+        else:
+            selected_cells.append(int(np.min(candidates)))
+    if missing_indices:
+        raise RuntimeError(
+            "Faraday loop point location failed for indices "
+            + ",".join(str(index) for index in missing_indices)
+        )
+
+    cells = np.asarray(selected_cells, dtype=np.int32)
+    electric_values = np.asarray(
+        electric_field.eval(rule.points, cells),
+        dtype=float,
+    ).reshape(rule.points.shape[0], -1)
+    if electric_values.shape[1] != 3:
+        raise ValueError("electric field evaluation must return three components")
+    value = faraday_loop_dbdt(electric_values, rule)
+    return value, {
+        "method": "faraday_loop",
+        "radius_m": float(rule.radius),
+        "point_count": int(rule.points.shape[0]),
+        "located_point_count": int(rule.points.shape[0]),
+        "missing_point_indices": [],
+    }
+
+
+def evaluate_biot_current_field(
+    current_density: Any,
+    *,
+    receiver: ArrayLike,
+    points: ArrayLike,
+    cells: ArrayLike,
+    weights: ArrayLike,
+) -> tuple[NDArray[np.float64], dict[str, object]]:
+    """Evaluate a current-density function and integrate its Biot receiver H."""
+
+    integration_points = np.asarray(points, dtype=float)
+    owning_cells = np.asarray(cells, dtype=np.int32).reshape(-1)
+    integration_weights = np.asarray(weights, dtype=float).reshape(-1)
+    if integration_points.ndim != 2 or integration_points.shape[1] != 3:
+        raise ValueError("Biot integration points must have shape (n, 3)")
+    if owning_cells.shape != (integration_points.shape[0],):
+        raise ValueError("Biot owning cells must match integration points")
+    if integration_weights.shape != (integration_points.shape[0],):
+        raise ValueError("Biot weights must match integration points")
+    current_values = np.asarray(
+        current_density.eval(integration_points, owning_cells),
+        dtype=float,
+    ).reshape(integration_points.shape[0], -1)
+    if current_values.shape[1] != 3:
+        raise ValueError("current density evaluation must return three components")
+    value, audit = biot_savart_volume_h(
+        receiver=receiver,
+        points=integration_points,
+        current_density=current_values,
+        weights=integration_weights,
+    )
+    return value, {"method": "biot_tetra4", **audit}
+
+
 __all__ = [
     "HorizontalLoopRule",
     "biot_savart_volume_h",
+    "evaluate_biot_current_field",
+    "evaluate_faraday_loop_field",
     "faraday_loop_dbdt",
     "horizontal_loop_rule",
     "neumaier_vector_sum",
