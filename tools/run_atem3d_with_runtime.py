@@ -35,12 +35,22 @@ def _out_of_core_enabled() -> bool:
     }
 
 
+def _pardiso_threads() -> int | None:
+    raw = os.environ.get("ATEM3D_PARDISO_THREADS", "").strip()
+    if not raw:
+        return None
+    value = int(raw)
+    if value < 1:
+        raise ValueError("ATEM3D_PARDISO_THREADS must be a positive integer")
+    return value
+
+
 def _preflight_pardiso() -> None:
     import numpy as np
     from pymatsolver import Pardiso
     from scipy.sparse import eye
 
-    solver = Pardiso(eye(2, format="csc"))
+    solver = Pardiso(eye(2, format="csc"), n_threads=_pardiso_threads())
     if _out_of_core_enabled():
         solver.solver.set_iparm(59, 2)
     result = np.asarray(solver * np.array([1.0, 2.0]), dtype=float)
@@ -87,6 +97,7 @@ def _write_runtime_audit(arguments: list[str]) -> Path | None:
             item for item in os.environ.get("ATEM3D_DLL_DIRS", "").split(os.pathsep) if item
         ],
         "pardiso_out_of_core": _out_of_core_enabled(),
+        "pardiso_threads": _pardiso_threads(),
         "pardiso_preflight": "passed",
     }
     path.parent.mkdir(parents=True, exist_ok=True)

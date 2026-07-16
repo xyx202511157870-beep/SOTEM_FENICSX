@@ -1169,6 +1169,26 @@ def test_pardiso_out_of_core_runtime_sets_iparm_59(monkeypatch):
     np.testing.assert_allclose(solve(np.array([1.0, 2.0])), [1.0, 2.0])
 
 
+def test_pardiso_runtime_limits_native_threads(monkeypatch):
+    constructor_kwargs: list[dict[str, object]] = []
+
+    class FakePardiso:
+        def __init__(self, matrix, **kwargs):
+            constructor_kwargs.append(kwargs)
+            self.solver = SimpleNamespace(set_iparm=lambda *_args: None)
+            self.solve = lambda rhs: rhs
+
+    monkeypatch.setitem(sys.modules, "pymatsolver", SimpleNamespace(Pardiso=FakePardiso))
+    monkeypatch.setenv("ATEM3D_PARDISO_THREADS", "1")
+    simulation = SimpleNamespace(cpml=None)
+
+    TDEMIPSimulation._factorize_pardiso(
+        simulation, simulation_module.sp.eye(2, format="csr")
+    )
+
+    assert constructor_kwargs[0]["n_threads"] == 1
+
+
 def test_cg_jacobi_preconditioner_handles_diagonal_system():
     mesh = _mesh()
     sim = TDEMIPSimulation(

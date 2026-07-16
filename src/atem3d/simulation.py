@@ -918,8 +918,13 @@ class TDEMIPSimulation:
             ) from err
 
         active_cpml = self.cpml is not None and self.cpml.thickness_cells > 0
+        threads_text = os.environ.get("ATEM3D_PARDISO_THREADS", "").strip()
+        n_threads = None if not threads_text else int(threads_text)
+        if n_threads is not None and n_threads < 1:
+            raise ValueError("ATEM3D_PARDISO_THREADS must be a positive integer")
         solver = Pardiso(
             matrix.tocsr(),
+            n_threads=n_threads,
             is_symmetric=False if active_cpml else True,
             is_positive_definite=False if active_cpml else True,
         )
