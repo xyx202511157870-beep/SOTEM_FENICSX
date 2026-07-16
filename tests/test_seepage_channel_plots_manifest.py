@@ -7,6 +7,19 @@ import numpy as np
 from tools.plot_seepage_channel_benchmark import build_output_inventory
 
 
+def test_relative_anomaly_percent_uses_pointwise_background_with_finite_floor() -> None:
+    import tools.plot_seepage_channel_benchmark as plots
+
+    background = np.asarray([[[2.0], [0.0]]])
+    delta = np.asarray([[[1.0], [0.25]]])
+
+    result = plots.relative_anomaly_percent(delta, background)
+
+    assert result[0, 0, 0] == 50.0
+    assert np.isfinite(result).all()
+    assert result[0, 1, 0] == 100.0 * 0.25 / (2.0e-12)
+
+
 def test_inventory_is_not_self_referential(tmp_path: Path) -> None:
     (tmp_path / "benchmark_results.npz").write_bytes(b"data")
     (tmp_path / "benchmark_manifest.json").write_text("stale", encoding="utf-8")

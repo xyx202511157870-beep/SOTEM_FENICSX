@@ -131,6 +131,21 @@ def _symlog_limit(values: list[np.ndarray]) -> float:
     return max(peak * 1.0e-6, np.finfo(float).tiny)
 
 
+def relative_anomaly_percent(
+    delta: np.ndarray, background: np.ndarray
+) -> np.ndarray:
+    """Return pointwise channel anomaly as a finite percentage of background."""
+
+    delta_values = np.asarray(delta, dtype=float)
+    background_values = np.asarray(background, dtype=float)
+    if delta_values.shape != background_values.shape:
+        raise ValueError("delta and background must have matching shapes")
+    scale = np.max(np.abs(background_values), axis=1, keepdims=True)
+    floor = np.maximum(scale * 1.0e-12, np.finfo(float).tiny)
+    denominator = np.maximum(np.abs(background_values), floor)
+    return 100.0 * np.abs(delta_values) / denominator
+
+
 def _plot_response_grid(
     output_root: Path,
     stem: str,
