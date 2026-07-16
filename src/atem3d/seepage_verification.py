@@ -107,6 +107,7 @@ def verify_fenicsx_run_contract(
     *,
     model: SeepageChannelBenchmark,
     case: str,
+    expected_local_mesh_size: float | None = None,
 ) -> dict[str, Any]:
     """Verify FEniCSx resolved inputs before signing them with a model hash."""
 
@@ -168,6 +169,12 @@ def verify_fenicsx_run_contract(
         material.get("theoretical_volume_m3"),
         model.channel.volume_m3,
     )
+    if expected_local_mesh_size is not None:
+        _require_close(
+            "conductivity-box mesh size",
+            material.get("mesh_size_m"),
+            expected_local_mesh_size,
+        )
 
     return {
         "method": "FEniCSx",
@@ -184,6 +191,7 @@ def verify_simpeg_config_contract(
     *,
     model: SeepageChannelBenchmark,
     case: str,
+    expected_local_mesh_size: float | None = None,
 ) -> dict[str, Any]:
     """Verify a SimPEG YAML input before signing it with a model hash."""
 
@@ -253,7 +261,13 @@ def verify_simpeg_config_contract(
     _require_close("simulation end time", duration, model.times[-1], atol=1e-14)
     for axis in ("hy", "hz"):
         minimum = min(float(segment[0]) for segment in config["mesh"][axis])
-        if minimum > 0.25:
+        if expected_local_mesh_size is not None and not np.isclose(
+            minimum, expected_local_mesh_size
+        ):
+            raise ModelContractMismatch(
+                f"SimPEG {axis} local mesh size does not match controlled case"
+            )
+        if expected_local_mesh_size is None and minimum > 0.25:
             raise ModelContractMismatch(f"SimPEG {axis} does not resolve the 1 m channel")
 
     return {

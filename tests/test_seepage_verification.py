@@ -100,13 +100,16 @@ def test_fenicsx_contract_is_derived_from_resolved_config_and_material_audit(
             "theoretical_volume_m3": 60.0,
             "global_discrete_volume_m3": 60.01,
             "relative_volume_error": 1.0 / 6000.0,
+            "mesh_size_m": 0.25,
         },
     }
     (tmp_path / "fenicsx_run_summary.json").write_text(
         json.dumps(summary), encoding="utf-8"
     )
 
-    provenance = verify_fenicsx_run_contract(tmp_path, model=thin, case="channel")
+    provenance = verify_fenicsx_run_contract(
+        tmp_path, model=thin, case="channel", expected_local_mesh_size=0.25
+    )
 
     assert provenance["model_fingerprint"] == model_fingerprint(thin)
     assert provenance["magnetic_dbdt_mode"] == "biot_rate"
