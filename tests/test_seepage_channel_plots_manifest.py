@@ -20,6 +20,122 @@ def test_relative_anomaly_percent_uses_pointwise_background_with_finite_floor() 
     assert result[0, 1, 0] == 100.0 * 0.25 / (2.0e-12)
 
 
+def test_representative_profile_indices_select_nearest_output_gates() -> None:
+    import tools.plot_seepage_channel_benchmark as plots
+
+    times = np.asarray([1.0e-5, 1.0e-4, 3.162e-4, 1.0e-3, 1.0e-2])
+
+    assert plots._representative_profile_indices(times) == (0, 2, 4)
+
+
+def test_channel_diagnostic_plot_source_contains_new_formal_artifacts() -> None:
+    import tools.plot_seepage_channel_benchmark as plots
+
+    assert "channel_relative_anomaly" in plots.FIGURE_STEMS
+    assert "channel_delta_signed" in plots.FIGURE_STEMS
+    assert "channel_relative_anomaly_profiles" in plots.FIGURE_STEMS
+
+
+def test_signed_anomaly_plot_preserves_negative_values(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import tools.plot_seepage_channel_benchmark as plots
+
+    captured = {}
+
+    def capture_figure(fig, output_root, stem) -> None:
+        captured["fig"] = fig
+
+    monkeypatch.setattr(plots, "_save_figure", capture_figure)
+    times = np.asarray([1.0e-5, 1.0e-4])
+    values = np.ones((5, 2, 3), dtype=float)
+    values[:, 1, :] = -0.5
+
+    plots._plot_response_grid(
+        tmp_path,
+        "channel_delta_signed",
+        times,
+        {"FEniCSx": values},
+        title="signed",
+        magnitude_decay=False,
+    )
+
+    fig = captured["fig"]
+    try:
+        assert all(axis.get_yscale() == "symlog" for axis in fig.axes)
+        assert any(
+            np.any(np.asarray(line.get_ydata()) < 0.0)
+            for line in fig.axes[0].lines
+        )
+    finally:
+        plt.close(fig)
+
+
+def test_relative_anomaly_profiles_exclude_rx3(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import tools.plot_seepage_channel_benchmark as plots
+
+    captured = {}
+
+    def capture_figure(fig, output_root, stem) -> None:
+        captured["fig"] = fig
+
+    monkeypatch.setattr(plots, "_save_figure", capture_figure)
+    times = np.asarray([1.0e-5, 3.162e-4, 1.0e-2])
+    receiver_locations = np.column_stack(
+        (np.zeros(5), [-20.0, -10.0, 0.0, 10.0, 20.0], np.zeros(5))
+    )
+    relative = np.ones((5, 3, 3), dtype=float)
+
+    plots._plot_relative_anomaly_profiles(
+        tmp_path,
+        times,
+        receiver_locations,
+        {"FEniCSx": relative},
+    )
+
+    fig = captured["fig"]
+    try:
+        for axis in fig.axes:
+            for line in axis.lines:
+                np.testing.assert_array_equal(
+                    line.get_xdata(), [-20.0, -10.0, 10.0, 20.0]
+                )
+    finally:
+        plt.close(fig)
+
+
+def test_relative_anomaly_decay_uses_log_percent_axes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import tools.plot_seepage_channel_benchmark as plots
+
+    captured = {}
+
+    def capture_figure(fig, output_root, stem) -> None:
+        captured["fig"] = fig
+
+    monkeypatch.setattr(plots, "_save_figure", capture_figure)
+    times = np.asarray([1.0e-5, 1.0e-4, 1.0e-3])
+    relative = np.full((5, 3, 3), 10.0, dtype=float)
+
+    plots._plot_relative_anomaly_grid(
+        tmp_path,
+        times,
+        {"FEniCSx": relative},
+    )
+
+    fig = captured["fig"]
+    try:
+        for axis in fig.axes:
+            assert axis.get_xscale() == "log"
+            assert axis.get_yscale() == "log"
+            assert axis.get_ylabel() == "relative anomaly (%)"
+    finally:
+        plt.close(fig)
+
+
 def test_inventory_is_not_self_referential(tmp_path: Path) -> None:
     (tmp_path / "benchmark_results.npz").write_bytes(b"data")
     (tmp_path / "benchmark_manifest.json").write_text("stale", encoding="utf-8")

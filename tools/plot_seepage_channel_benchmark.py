@@ -36,12 +36,16 @@ FIGURE_STEMS = (
     "background_response",
     "channel_response",
     "channel_delta",
+    "channel_relative_anomaly",
+    "channel_delta_signed",
+    "channel_relative_anomaly_profiles",
     "background_error",
     "channel_delta_error",
     "convergence",
 )
 
 REPORT_RECEIVER_INDICES = (0, 1, 3, 4)
+PROFILE_TARGET_TIMES = (1.0e-5, 3.162e-4, 1.0e-2)
 
 
 def _sha256(path: Path) -> str:
@@ -146,6 +150,14 @@ def relative_anomaly_percent(
     return 100.0 * np.abs(delta_values) / denominator
 
 
+def _representative_profile_indices(times: np.ndarray) -> tuple[int, ...]:
+    values = np.asarray(times, dtype=float)
+    return tuple(
+        int(np.argmin(np.abs(np.log(values) - np.log(target))))
+        for target in PROFILE_TARGET_TIMES
+    )
+
+
 def _plot_response_grid(
     output_root: Path,
     stem: str,
@@ -186,6 +198,75 @@ def _plot_response_grid(
     axes[0].legend(fontsize=6, ncol=2)
     fig.suptitle(title)
     _save_figure(fig, output_root, stem)
+
+
+def _plot_relative_anomaly_grid(
+    output_root: Path,
+    times: np.ndarray,
+    series: dict[str, np.ndarray],
+) -> None:
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.4), sharex=True)
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(REPORT_RECEIVER_INDICES)))
+    for component_index, (axis, component) in enumerate(zip(axes, COMPONENTS)):
+        for method, values in series.items():
+            for color_index, receiver_index in enumerate(REPORT_RECEIVER_INDICES):
+                axis.plot(
+                    times,
+                    values[receiver_index, :, component_index],
+                    color=colors[color_index],
+                    ls={"SimPEG": "--", "FEniCSx": "-"}[method],
+                    lw=1.1,
+                    label=(
+                        f"{method} Rx{receiver_index + 1}"
+                        if component_index == 0
+                        else None
+                    ),
+                )
+        axis.set_xscale("log")
+        axis.set_yscale("log")
+        axis.set_xlabel("time (s)")
+        axis.set_ylabel("relative anomaly (%)")
+        axis.set_title(component)
+        axis.grid(True, which="both", alpha=0.25)
+    axes[0].legend(fontsize=6, ncol=2)
+    fig.suptitle("Channel relative anomaly: |channel - background| / |background|")
+    _save_figure(fig, output_root, "channel_relative_anomaly")
+
+
+def _plot_relative_anomaly_profiles(
+    output_root: Path,
+    times: np.ndarray,
+    receiver_locations: np.ndarray,
+    series: dict[str, np.ndarray],
+) -> None:
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.4))
+    gate_indices = _representative_profile_indices(times)
+    receiver_indices = list(REPORT_RECEIVER_INDICES)
+    y_positions = np.asarray(receiver_locations)[receiver_indices, 1]
+    gate_colors = plt.cm.plasma(np.linspace(0.15, 0.85, len(gate_indices)))
+    for component_index, (axis, component) in enumerate(zip(axes, COMPONENTS)):
+        for method, values in series.items():
+            for gate_color, gate_index in zip(gate_colors, gate_indices):
+                axis.plot(
+                    y_positions,
+                    values[receiver_indices, gate_index, component_index],
+                    color=gate_color,
+                    ls={"SimPEG": "--", "FEniCSx": "-"}[method],
+                    marker="o",
+                    lw=1.1,
+                    label=(
+                        f"{method}, {times[gate_index]:.3g} s"
+                        if component_index == 0
+                        else None
+                    ),
+                )
+        axis.set_xlabel("receiver y (m)")
+        axis.set_ylabel("relative anomaly (%)")
+        axis.set_title(component)
+        axis.grid(True, alpha=0.25)
+    axes[0].legend(fontsize=6, ncol=2)
+    fig.suptitle("Channel relative-anomaly profiles at representative times")
+    _save_figure(fig, output_root, "channel_relative_anomaly_profiles")
 
 
 def _plot_error_grid(
@@ -342,6 +423,29 @@ def generate_plots(result_dir: str | Path) -> list[Path]:
         {"SimPEG": arrays["simpeg_delta"], "FEniCSx": arrays["fenicsx_delta"]},
         title="Absolute channel-minus-background anomaly decay",
         magnitude_decay=True,
+    )
+    relative_series = {
+        "SimPEG": relative_anomaly_percent(
+            arrays["simpeg_delta"], arrays["simpeg_background"]
+        ),
+        "FEniCSx": relative_anomaly_percent(
+            arrays["fenicsx_delta"], arrays["fenicsx_background"]
+        ),
+    }
+    _plot_relative_anomaly_grid(output_root, times, relative_series)
+    _plot_response_grid(
+        output_root,
+        "channel_delta_signed",
+        times,
+        {"SimPEG": arrays["simpeg_delta"], "FEniCSx": arrays["fenicsx_delta"]},
+        title="Signed channel-minus-background anomaly",
+        magnitude_decay=False,
+    )
+    _plot_relative_anomaly_profiles(
+        output_root,
+        times,
+        arrays["receiver_locations"],
+        relative_series,
     )
     _plot_error_grid(
         output_root,
