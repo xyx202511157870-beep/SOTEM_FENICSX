@@ -8219,6 +8219,12 @@ def run_fetd_forward(
         magnetic_receiver_diagnostic_rows = list(
             checkpoint["magnetic_receiver_diagnostic_rows"]
         )
+        if not magnetic_receiver_diagnostic_rows:
+            magnetic_csv = config.workdir / "magnetic_receiver_diagnostics.csv"
+            if magnetic_csv.is_file():
+                magnetic_receiver_diagnostic_rows = (
+                    _load_magnetic_receiver_diagnostics_csv(magnetic_csv)
+                )
         solver_log = list(checkpoint["solver_log"])
         previous_time = float(checkpoint["previous_time"])
         start_step = _resume_start_step_from_time(
@@ -12268,6 +12274,34 @@ def _magnetic_receiver_diagnostic_payload(rows) -> dict[str, Any]:
         for row in (rows or [])
     ]
     return {"magnetic_receiver_diagnostic_json": np.asarray(rendered)}
+
+
+def _load_magnetic_receiver_diagnostics_csv(path: str | Path) -> list[dict[str, Any]]:
+    numeric_fields = (
+        "receiver_x_m",
+        "receiver_y_m",
+        "receiver_z_m",
+        "time_obs",
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
+        "dBzdt_faraday_loop",
+        "Hz_biot_center",
+        "Hz_biot_tetra4",
+    )
+    rows = []
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            row: dict[str, Any] = dict(raw)
+            for key in numeric_fields:
+                row[key] = float(row[key])
+            row["faraday_audit"] = json.loads(
+                row.pop("faraday_audit_json", "{}") or "{}"
+            )
+            row["biot_tetra4_audit"] = json.loads(
+                row.pop("biot_tetra4_audit_json", "{}") or "{}"
+            )
+            rows.append(row)
+    return rows
 
 
 def _magnetic_receiver_diagnostic_rows_from_payload(payload) -> list[dict[str, Any]]:

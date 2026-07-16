@@ -441,6 +441,26 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
     assert loaded["magnetic_receiver_diagnostic_rows"] == magnetic_receiver_diagnostics
 
 
+def test_magnetic_diagnostic_csv_can_seed_legacy_checkpoint_resume(tmp_path):
+    sp = _load_pipeline_module()
+    path = tmp_path / "magnetic_receiver_diagnostics.csv"
+    path.write_text(
+        "receiver_id,receiver_x_m,receiver_y_m,receiver_z_m,time_obs,"
+        "dBzdt_curl,dBzdt_biot_rate,dBzdt_faraday_loop,Hz_biot_center,"
+        "Hz_biot_tetra4,faraday_audit_json,biot_tetra4_audit_json,provenance\n"
+        'Rx3,0,0,0.1,1e-5,1,2,3,4,5,"{""point_count"": 32}",'
+        '"{""cell_count"": 7}",explicit_full_domain\n',
+        encoding="utf-8",
+    )
+
+    rows = sp._load_magnetic_receiver_diagnostics_csv(path)
+
+    assert rows[0]["time_obs"] == 1.0e-5
+    assert rows[0]["dBzdt_biot_rate"] == 2.0
+    assert rows[0]["faraday_audit"] == {"point_count": 32}
+    assert rows[0]["biot_tetra4_audit"] == {"cell_count": 7}
+
+
 def test_forward_checkpoint_round_trips_divergence_cleaning_stats(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path)
