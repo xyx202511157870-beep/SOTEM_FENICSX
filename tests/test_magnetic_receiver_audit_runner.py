@@ -115,3 +115,44 @@ def test_invalid_audit_inputs_never_write_passing_manifest(tmp_path, case):
     manifest = output_dir / "run_manifest.json"
     if manifest.exists():
         assert json.loads(manifest.read_text(encoding="utf-8"))["passed"] is False
+
+
+def test_build_method_arrays_bridges_formal_data_and_diagnostic_rows():
+    runner = load_runner()
+    times = np.asarray([1.0e-5, 2.0e-5])
+    formal = np.zeros((5, 2, 3), dtype=float)
+    formal[:, :, 0] = np.arange(10, dtype=float).reshape(5, 2)
+    rows = []
+    for receiver_index in range(5):
+        for time_index, time_obs in enumerate(times):
+            seed = 10.0 * receiver_index + time_index
+            rows.append(
+                {
+                    "receiver_id": f"Rx{receiver_index + 1}",
+                    "time_obs": str(time_obs),
+                    "dBzdt_curl": str(seed + 1),
+                    "dBzdt_biot_rate": str(seed + 2),
+                    "dBzdt_faraday_loop": str(seed + 3),
+                    "Hz_biot_center": str(seed + 4),
+                    "Hz_biot_tetra4": str(seed + 5),
+                    "provenance": "explicit_full_domain",
+                }
+            )
+
+    methods = runner.build_method_arrays(
+        formal_data=formal,
+        times=times,
+        diagnostic_rows=rows,
+        faraday_point_count=32,
+    )
+
+    assert set(methods) == {
+        "curl",
+        "biot_rate",
+        "faraday_loop_32",
+        "biot_center",
+        "biot_tetra4",
+    }
+    assert methods["faraday_loop_32"][4, 1, 1] == 44.0
+    assert methods["biot_tetra4"][4, 1, 2] == 46.0
+    np.testing.assert_allclose(methods["curl"][:, :, 0], formal[:, :, 0])

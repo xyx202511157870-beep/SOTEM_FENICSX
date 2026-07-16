@@ -36,6 +36,131 @@ def _finite_array(value: Any, name: str) -> np.ndarray:
     return array
 
 
+def build_method_arrays(
+    *,
+    formal_data: np.ndarray,
+    times: np.ndarray,
+    diagnostic_rows: list[dict[str, str]],
+    faraday_point_count: int,
+) -> dict[str, np.ndarray]:
+    """Bridge formal five-receiver data and long-form magnetic diagnostics."""
+
+    time_values = _finite_array(times, "times").reshape(-1)
+    formal = _finite_array(formal_data, "formal_data")
+    if formal.shape != (5, time_values.size, 3):
+        raise ValueError("formal_data must have shape (5, n_times, 3)")
+    expected_rows = 5 * time_values.size
+    if len(diagnostic_rows) != expected_rows:
+        raise ValueError(f"diagnostic rows must contain {expected_rows} records")
+    diagnostic_fields = {
+        name: np.empty((5, time_values.size), dtype=float)
+        for name in (
+            "dBzdt_curl",
+            "dBzdt_biot_rate",
+            "dBzdt_faraday_loop",
+            "Hz_biot_center",
+            "Hz_biot_tetra4",
+        )
+    }
+    seen: set[tuple[int, int]] = set()
+    for row in diagnostic_rows:
+        if row.get("provenance") != "explicit_full_domain":
+            raise ValueError("diagnostic provenance must be explicit_full_domain")
+        receiver_id = str(row.get("receiver_id", ""))
+        if not receiver_id.startswith("Rx"):
+            raise ValueError("diagnostic receiver_id must be Rx1 through Rx5")
+        receiver_index = int(receiver_id[2:]) - 1
+        if receiver_index not in range(5):
+            raise ValueError("diagnostic receiver_id must be Rx1 through Rx5")
+        time_value = float(row["time_obs"])
+        matches = np.flatnonzero(np.isclose(time_values, time_value, rtol=1.0e-12, atol=0.0))
+        if matches.size != 1:
+            raise ValueError("diagnostic time does not match a formal observation")
+        key = (receiver_index, int(matches[0]))
+        if key in seen:
+            raise ValueError("duplicate receiver/time diagnostic row")
+        seen.add(key)
+        for field, values in diagnostic_fields.items():
+            values[key] = float(row[field])
+    for field, values in diagnostic_fields.items():
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{field} diagnostics must be finite")
+
+    def compose(dbdt_field: str, hz_field: str) -> np.ndarray:
+        output = formal.copy()
+        output[:, :, 1] = diagnostic_fields[dbdt_field]
+        output[:, :, 2] = diagnostic_fields[hz_field]
+        return output
+
+    return {
+        "curl": compose("dBzdt_curl", "Hz_biot_tetra4"),
+        "biot_rate": compose("dBzdt_biot_rate", "Hz_biot_tetra4"),
+        f"faraday_loop_{int(faraday_point_count)}": compose(
+            "dBzdt_faraday_loop", "Hz_biot_tetra4"
+        ),
+        "biot_center": compose("dBzdt_faraday_loop", "Hz_biot_center"),
+        "biot_tetra4": compose("dBzdt_faraday_loop", "Hz_biot_tetra4"),
+    }
+
+
+def load_fenics_run_methods(
+    run_dir: Path,
+    *,
+    faraday_point_count: int,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Load one completed run and reconstruct every named magnetic method."""
+
+    result_path = run_dir / "fenicsx_result_5rx.npz"
+    diagnostic_path = run_dir / "magnetic_receiver_diagnostics.csv"
+    with np.load(result_path, allow_pickle=False) as stored:
+        formal = {name: np.asarray(stored[name]) for name in stored.files}
+    required = {"times", "receiver_locations", "components", "data", "receiver_provenance"}
+    if required - set(formal):
+        raise ValueError(f"formal run missing {sorted(required - set(formal))}")
+    with diagnostic_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    methods = build_method_arrays(
+        formal_data=formal["data"],
+        times=formal["times"],
+        diagnostic_rows=rows,
+        faraday_point_count=faraday_point_count,
+    )
+    return methods, formal
+
+
+def build_payload_from_runs(
+    background_dir: Path,
+    channel_dir: Path,
+    output_path: Path,
+    *,
+    faraday_point_count: int = 32,
+) -> Path:
+    """Create the validated audit payload from two explicit FEniCSx run paths."""
+
+    background, background_formal = load_fenics_run_methods(
+        background_dir, faraday_point_count=faraday_point_count
+    )
+    channel, channel_formal = load_fenics_run_methods(
+        channel_dir, faraday_point_count=faraday_point_count
+    )
+    for key in ("times", "receiver_locations", "components", "receiver_provenance"):
+        if not np.array_equal(background_formal[key], channel_formal[key]):
+            raise ValueError(f"background and channel {key} differ")
+    if set(background) != set(channel):
+        raise ValueError("background and channel method sets differ")
+    payload = {
+        key: background_formal[key]
+        for key in ("times", "receiver_locations", "components", "receiver_provenance")
+    }
+    for name in sorted(background):
+        payload[f"background__{name}"] = background[name]
+        payload[f"channel__{name}"] = channel[name]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(output_path, **payload)
+    load_method_payload(output_path)
+    return output_path
+
+
 def build_method_summary(
     methods: Mapping[str, Mapping[str, np.ndarray]],
     *,
@@ -256,11 +381,22 @@ def run_audit(payload_path: Path, output_dir: Path, *, signal_floor: float = 1.0
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--payload", type=Path, required=True)
+    parser.add_argument("--payload", type=Path)
+    parser.add_argument("--background-run", type=Path)
+    parser.add_argument("--channel-run", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--signal-floor", type=float, default=1.0e-20)
     args = parser.parse_args()
-    result = run_audit(args.payload, args.output_dir, signal_floor=args.signal_floor)
+    payload_path = args.payload
+    if payload_path is None:
+        if args.background_run is None or args.channel_run is None:
+            parser.error("provide --payload or both --background-run and --channel-run")
+        payload_path = build_payload_from_runs(
+            args.background_run,
+            args.channel_run,
+            args.output_dir / "magnetic_method_payload.npz",
+        )
+    result = run_audit(payload_path, args.output_dir, signal_floor=args.signal_floor)
     print(json.dumps(result, sort_keys=True))
     return 0 if result["passed"] else 2
 
