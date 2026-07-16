@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -157,3 +158,33 @@ def test_background_response_uses_absolute_log_decay(
         np.testing.assert_array_equal(values, original)
     finally:
         plt.close(fig)
+
+
+def test_all_formal_response_plots_enable_magnitude_decay() -> None:
+    source = Path("tools/plot_seepage_channel_benchmark.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    configured_stems = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "_plot_response_grid":
+            continue
+        if len(node.args) < 2 or not isinstance(node.args[1], ast.Constant):
+            continue
+        magnitude_keyword = next(
+            (item for item in node.keywords if item.arg == "magnitude_decay"), None
+        )
+        if (
+            magnitude_keyword is not None
+            and isinstance(magnitude_keyword.value, ast.Constant)
+            and magnitude_keyword.value.value is True
+        ):
+            configured_stems.add(node.args[1].value)
+
+    assert configured_stems == {
+        "background_response",
+        "channel_response",
+        "channel_delta",
+    }

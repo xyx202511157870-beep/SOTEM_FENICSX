@@ -318,13 +318,15 @@ def generate_plots(result_dir: str | Path) -> list[Path]:
         times,
         {"SimPEG": arrays["simpeg_channel"], "FEniCSx": arrays["fenicsx_channel"]},
         title="Finite 3D seepage-channel response",
+        magnitude_decay=True,
     )
     _plot_response_grid(
         output_root,
         "channel_delta",
         times,
         {"SimPEG": arrays["simpeg_delta"], "FEniCSx": arrays["fenicsx_delta"]},
-        title="Signed channel minus background response",
+        title="Absolute channel-minus-background anomaly decay",
+        magnitude_decay=True,
     )
     _plot_error_grid(
         output_root,
