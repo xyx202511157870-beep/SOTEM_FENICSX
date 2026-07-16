@@ -88,11 +88,6 @@ def mirror_half_topology(
     }
 
 
-def _quantized(point: np.ndarray, tolerance: float) -> tuple[int, int, int]:
-    scale = max(float(tolerance), np.finfo(float).eps)
-    return tuple(np.rint(np.asarray(point, dtype=float) / scale).astype(np.int64))
-
-
 def audit_y_reflection(
     points: np.ndarray,
     tetrahedra: np.ndarray,
@@ -106,32 +101,30 @@ def audit_y_reflection(
     tags = np.asarray(tetra_tags, dtype=np.int32).reshape(-1)
     if tags.size != tetra.shape[0]:
         raise ValueError("tetra_tags must match tetrahedra")
-    node_map = {_quantized(point, tolerance): index for index, point in enumerate(xyz)}
-    node_matches = 0
-    maximum_distance = 0.0
-    for point in xyz:
-        reflected = point.copy()
-        reflected[1] *= -1.0
-        match = node_map.get(_quantized(reflected, tolerance))
-        if match is not None:
-            distance = float(np.linalg.norm(xyz[match] - reflected))
-            maximum_distance = max(maximum_distance, distance)
-            node_matches += int(distance <= tolerance)
+    from scipy.spatial import cKDTree
+
+    reflected_nodes = xyz.copy()
+    reflected_nodes[:, 1] *= -1.0
+    node_distances, _node_matches = cKDTree(xyz).query(reflected_nodes, k=1)
+    node_matches = int(np.count_nonzero(node_distances <= tolerance))
+    maximum_distance = float(np.max(node_distances)) if node_distances.size else 0.0
 
     centroids = np.mean(xyz[tetra], axis=1)
-    cell_geometry: dict[tuple[int, int, int], list[int]] = {}
-    for index, centroid in enumerate(centroids):
-        cell_geometry.setdefault(_quantized(centroid, tolerance), []).append(index)
-    centroid_matches = 0
-    tag_mismatch_count = 0
-    for index, centroid in enumerate(centroids):
-        reflected = centroid.copy()
-        reflected[1] *= -1.0
-        matches = cell_geometry.get(_quantized(reflected, tolerance), [])
-        if matches:
-            centroid_matches += 1
-            if not any(tags[match] == tags[index] for match in matches):
-                tag_mismatch_count += 1
+    reflected_centroids = centroids.copy()
+    reflected_centroids[:, 1] *= -1.0
+    centroid_distances, _centroid_indices = cKDTree(centroids).query(
+        reflected_centroids, k=1
+    )
+    geometry_matches = centroid_distances <= tolerance
+    centroid_matches = int(np.count_nonzero(geometry_matches))
+    tag_matches = np.zeros(tetra.shape[0], dtype=bool)
+    for tag in np.unique(tags):
+        indices = np.flatnonzero(tags == tag)
+        distances, _ = cKDTree(centroids[indices]).query(
+            reflected_centroids[indices], k=1
+        )
+        tag_matches[indices] = distances <= tolerance
+    tag_mismatch_count = int(np.count_nonzero(geometry_matches & ~tag_matches))
 
     vertices = xyz[tetra]
     determinants = np.linalg.det(

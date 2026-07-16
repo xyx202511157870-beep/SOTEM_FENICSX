@@ -1801,11 +1801,6 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
             occ.addPoint(*point, config.source_mesh_size)
             for point in source_cloud_points
         ]
-        source_surface_cloud = [
-            tag
-            for point, tag in zip(source_cloud_points, source_cloud)
-            if abs(float(point[1])) <= 1.0e-10
-        ]
         source_volume_cloud = [
             tag
             for point, tag in zip(source_cloud_points, source_cloud)
@@ -1813,9 +1808,39 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
             or float(point[1]) > 1.0e-10
         ]
         receiver_specs, receiver_point_sizes = _receiver_refinement_point_specs(config)
+        if _mesh_source_embedding_dimension(config) == 2:
+            if any(float(entry["anchor"][1]) < -1.0e-10 for entry in receiver_specs):
+                raise ValueError(
+                    "positive_half_source mesh generation accepts only y>=0 receiver anchors"
+                )
+            receiver_specs = tuple(
+                {
+                    **entry,
+                    "cloud": tuple(
+                        point for point in entry["cloud"] if float(point[1]) >= -1.0e-10
+                    ),
+                    "surface_cloud": tuple(
+                        point
+                        for point in entry["surface_cloud"]
+                        if float(point[1]) >= -1.0e-10
+                    ),
+                }
+                for entry in receiver_specs
+            )
+            receiver_point_sizes = {
+                point: mesh_size
+                for point, mesh_size in receiver_point_sizes.items()
+                if float(point[1]) >= -1.0e-10
+            }
         receiver_point_tags = {
             point: occ.addPoint(*point, mesh_size)
             for point, mesh_size in receiver_point_sizes.items()
+        }
+        half_plane_receiver_tags = {
+            tag
+            for point, tag in receiver_point_tags.items()
+            if _mesh_source_embedding_dimension(config) == 2
+            and abs(float(point[1])) <= 1.0e-10
         }
         receiver_entries: list[dict[str, Any]] = [
             {
@@ -1932,16 +1957,22 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         earth_receiver_points = list(dict.fromkeys(earth_receiver_points))
         air_receiver_points = list(dict.fromkeys(air_receiver_points))
         surface_receiver_points = list(dict.fromkeys(surface_receiver_points))
+        if half_plane_receiver_tags:
+            earth_receiver_points = [
+                tag for tag in earth_receiver_points if tag not in half_plane_receiver_tags
+            ]
+            air_receiver_points = [
+                tag for tag in air_receiver_points if tag not in half_plane_receiver_tags
+            ]
+            surface_receiver_points = [
+                tag for tag in surface_receiver_points if tag not in half_plane_receiver_tags
+            ]
         if _mesh_source_embedding_dimension(config) == 2:
             if len(half_source_surfaces) != 1:
                 raise RuntimeError(
                     "failed to identify exactly one y=0 earth surface for the source line"
                 )
             gmsh.model.mesh.embed(1, [source_line], 2, half_source_surfaces[0])
-            if source_surface_cloud:
-                gmsh.model.mesh.embed(
-                    0, source_surface_cloud, 2, half_source_surfaces[0]
-                )
         for earth_vol in top_earth_vols:
             if _mesh_source_embedding_dimension(config) == 3:
                 gmsh.model.mesh.embed(1, [source_line], 3, earth_vol)
