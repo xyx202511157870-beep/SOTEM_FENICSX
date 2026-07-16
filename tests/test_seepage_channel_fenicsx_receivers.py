@@ -1,4 +1,6 @@
 import importlib.util
+import csv
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -61,6 +63,49 @@ def test_five_receiver_set_calls_evaluator_five_times() -> None:
     ).shape == (5, 3)
 
 
+def test_five_receiver_set_evaluates_each_magnetic_diagnostic_independently() -> None:
+    module = load_full_domain_module()
+    magnetic_calls = []
+
+    def electric_evaluator(_electric_field, _dbdt, _mesh, config):
+        return {"Ex": config.receiver[1]}
+
+    def magnetic_evaluator(_electric_field, _dbdt, _mesh, config):
+        magnetic_calls.append(config.receiver)
+        y = float(config.receiver[1])
+        return {
+            "dBzdt_curl": y,
+            "dBzdt_biot_rate": 2.0 * y,
+            "dBzdt_faraday_loop": 3.0 * y,
+            "Hz_biot_center": 4.0 * y,
+            "Hz_biot_tetra4": 5.0 * y,
+        }
+
+    config = SimpleNamespace(
+        receiver_locations=tuple((0.0, y, 0.1) for y in (-20, -10, 0, 10, 20)),
+        receiver=(0.0, 0.0, 0.1),
+    )
+    records = module.evaluate_receiver_set(
+        None,
+        None,
+        None,
+        config,
+        evaluator=electric_evaluator,
+        magnetic_evaluator=magnetic_evaluator,
+    )
+
+    assert magnetic_calls == list(config.receiver_locations)
+    expected = {
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
+        "dBzdt_faraday_loop",
+        "Hz_biot_center",
+        "Hz_biot_tetra4",
+        "provenance",
+    }
+    assert all(expected <= set(record) for record in records)
+
+
 def test_full_domain_module_has_no_mirror_expansion() -> None:
     source = Path("dolfinx/seepage_channel_full_domain.py").read_text(
         encoding="utf-8"
@@ -90,6 +135,36 @@ def test_write_predictions_5rx_uses_long_form_rows(tmp_path) -> None:
     )
     assert len(lines) == 5
     assert all(line.endswith("explicit_full_domain") for line in lines[1:])
+
+
+def test_write_magnetic_receiver_diagnostics_csv_records_methods_and_audits(tmp_path) -> None:
+    module = load_full_domain_module()
+    path = tmp_path / "magnetic_receiver_diagnostics.csv"
+    records = [
+        {
+            "receiver_id": "Rx1",
+            "receiver_x_m": 0.0,
+            "receiver_y_m": -20.0,
+            "receiver_z_m": 0.1,
+            "time_obs": 1.0e-5,
+            "dBzdt_curl": 1.0,
+            "dBzdt_biot_rate": 2.0,
+            "dBzdt_faraday_loop": 3.0,
+            "Hz_biot_center": 4.0,
+            "Hz_biot_tetra4": 5.0,
+            "faraday_audit": {"point_count": 16},
+            "biot_tetra4_audit": {"sample_count": 40},
+            "provenance": "explicit_full_domain",
+        }
+    ]
+
+    module.write_magnetic_receiver_diagnostics_csv(path, records)
+
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    assert len(rows) == 1
+    assert rows[0]["dBzdt_faraday_loop"] == "3.0"
+    assert json.loads(rows[0]["faraday_audit_json"])["point_count"] == 16
+    assert json.loads(rows[0]["biot_tetra4_audit_json"])["sample_count"] == 40
 
 
 def test_multi_receiver_checkpoint_rows_preserve_output_axis() -> None:
@@ -127,3 +202,17 @@ def test_biot_h_is_only_recomputed_at_outputs_when_dbdt_uses_curl() -> None:
     assert not module._biot_h_required_for_step("curl", is_output=False)
     assert module._biot_h_required_for_step("curl", is_output=True)
     assert module._biot_h_required_for_step("biot_rate", is_output=False)
+
+
+def test_biot_rate_diagnostic_keeps_history_on_internal_steps() -> None:
+    module = load_pipeline_module()
+    assert module._biot_h_required_for_step(
+        "faraday_loop",
+        is_output=False,
+        diagnostic_methods=("biot_rate",),
+    )
+    assert not module._biot_h_required_for_step(
+        "faraday_loop",
+        is_output=False,
+        diagnostic_methods=("curl", "faraday_loop"),
+    )

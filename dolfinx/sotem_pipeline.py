@@ -35,6 +35,11 @@ PIPELINE_HELPER_DIR = Path(__file__).resolve().parent
 if str(PIPELINE_HELPER_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_HELPER_DIR))
 
+from magnetic_receiver_operators import (
+    biot_savart_volume_h,
+    evaluate_faraday_loop_field,
+)
+
 CORE_MODULES = ("dolfinx", "ufl", "basix", "mpi4py", "petsc4py")
 PIP_MODULES = {
     "gmsh": "gmsh",
@@ -5563,24 +5568,148 @@ def _biot_savart_total_h_at_receiver(
     *,
     debye=None,
     memories=None,
+    integration: str = "cell_center",
+    return_audit: bool = False,
 ):
     """Return receiver H from ohmic cell currents plus the impressed wire current."""
 
     import numpy as np
 
-    h = _biot_savart_cell_current_h_at_receiver(
-        E,
-        msh,
-        materials,
-        config,
-        debye=debye,
-        memories=memories,
-    )
-    h += _biot_savart_line_h_at_receiver(
+    integration_mode = str(integration).strip().lower()
+    audit: dict[str, Any]
+    if integration_mode == "cell_center":
+        volume_h = _biot_savart_cell_current_h_at_receiver(
+            E,
+            msh,
+            materials,
+            config,
+            debye=debye,
+            memories=memories,
+        )
+        audit = {"method": "biot_cell_center"}
+    elif integration_mode == "tetra4":
+        points, cells, weights = _cell_biot_quadrature_points_weights(msh)
+        e_values = np.asarray(E.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
+        use_debye_current = (
+            debye is not None
+            and memories is not None
+            and bool(debye.get("terms", []))
+        )
+        if use_debye_current:
+            sigma_source = materials.get(
+                "sigma_infinity_physical", materials["sigma_infinity"]
+            )
+        else:
+            sigma_source = materials.get("sigma_physical", materials["sigma"])
+        sigma = np.asarray(sigma_source.x.array, dtype=float)[cells]
+        if use_debye_current:
+            delta_values = [
+                np.asarray(delta_fn.x.array, dtype=float)[cells]
+                for delta_fn in debye["delta_functions"]
+            ]
+            memory_values = [
+                np.asarray(memory.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
+                for memory in memories
+            ]
+            currents = _cell_current_density_from_debye_values(
+                e_values, sigma, delta_values, memory_values
+            )
+        else:
+            currents = _cell_current_density_from_debye_values(e_values, sigma)
+        sampled_h = []
+        sample_audits = []
+        for receiver in _receiver_sampling_points(config):
+            value, sample_audit = biot_savart_volume_h(
+                receiver=receiver,
+                points=points,
+                current_density=currents,
+                weights=weights,
+            )
+            sampled_h.append(value)
+            sample_audits.append(sample_audit)
+        volume_h = np.mean(np.vstack(sampled_h), axis=0)
+        audit = {
+            "method": "biot_tetra4",
+            "receiver_sample_count": len(sample_audits),
+            "samples": sample_audits,
+        }
+    else:
+        raise ValueError("Biot current integration must be 'cell_center' or 'tetra4'")
+    line_h = _biot_savart_line_h_at_receiver(
         config,
         current=float(source_current),
     )
-    return h
+    total_h = volume_h + line_h
+    audit.update(
+        {
+            "volume_h": np.asarray(volume_h, dtype=float).tolist(),
+            "line_h": np.asarray(line_h, dtype=float).tolist(),
+            "total_h": np.asarray(total_h, dtype=float).tolist(),
+        }
+    )
+    return (total_h, audit) if return_audit else total_h
+
+
+def evaluate_magnetic_receiver_methods(
+    E,
+    dbdt,
+    msh,
+    materials: dict[str, Any],
+    receiver_config: PipelineConfig,
+    *,
+    source_current: float,
+    config: PipelineConfig,
+    h_new=None,
+    h_old=None,
+    dt: float | None = None,
+    debye=None,
+    memories=None,
+) -> dict[str, Any]:
+    """Evaluate named magnetic diagnostics at one explicit receiver."""
+
+    curl_record = evaluate_receivers(E, dbdt, msh, receiver_config)
+    faraday_value, faraday_audit = evaluate_faraday_loop_field(
+        E,
+        msh,
+        center=receiver_config.receiver,
+        radius=config.faraday_loop_radius,
+        point_count=config.faraday_loop_quadrature_points,
+        find_cells=_find_cells_for_point,
+    )
+    center_h = _biot_savart_total_h_at_receiver(
+        E,
+        msh,
+        materials,
+        receiver_config,
+        source_current,
+        debye=debye,
+        memories=memories,
+        integration="cell_center",
+    )
+    tetra_h, tetra_audit = _biot_savart_total_h_at_receiver(
+        E,
+        msh,
+        materials,
+        receiver_config,
+        source_current,
+        debye=debye,
+        memories=memories,
+        integration="tetra4",
+        return_audit=True,
+    )
+    result: dict[str, Any] = {
+        "dBzdt_curl": float(curl_record["dBzdt"]),
+        "dBzdt_faraday_loop": float(faraday_value),
+        "Hz_biot_center": float(center_h[2]),
+        "Hz_biot_tetra4": float(tetra_h[2]),
+        "faraday_audit": faraday_audit,
+        "biot_tetra4_audit": tetra_audit,
+    }
+    if h_new is not None and h_old is not None and dt is not None:
+        result["dBzdt_biot_rate"] = float(
+            _biot_receiver_dbdt_from_h(h_new, h_old, dt=dt)[2]
+        )
+    return result
 
 
 def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> None:
@@ -5589,10 +5718,54 @@ def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> N
     receiver_values["Hz"] = float(h_receiver[2])
 
 
-def _biot_h_required_for_step(magnetic_dbdt_mode: str, *, is_output: bool) -> bool:
+def _select_magnetic_receiver_outputs(
+    methods: dict[str, Any],
+    *,
+    magnetic_dbdt_mode: str,
+    biot_current_integration: str,
+) -> dict[str, float]:
+    """Select formal magnetic outputs from explicitly named diagnostics."""
+
+    dbdt_keys = {
+        "curl": "dBzdt_curl",
+        "biot_rate": "dBzdt_biot_rate",
+        "ampere_rate": "dBzdt_ampere_rate",
+        "faraday_loop": "dBzdt_faraday_loop",
+    }
+    hz_keys = {
+        "cell_center": "Hz_biot_center",
+        "tetra4": "Hz_biot_tetra4",
+    }
+    dbdt_mode = str(magnetic_dbdt_mode).strip().lower()
+    integration = str(biot_current_integration).strip().lower()
+    if dbdt_mode not in dbdt_keys:
+        raise ValueError(f"unknown magnetic_dbdt_mode: {magnetic_dbdt_mode!r}")
+    if integration not in hz_keys:
+        raise ValueError(f"unknown biot_current_integration: {biot_current_integration!r}")
+    selected_keys = ("Ex", dbdt_keys[dbdt_mode], hz_keys[integration])
+    for key in selected_keys:
+        if key not in methods:
+            raise KeyError(f"missing magnetic receiver diagnostic: {key}")
+    return {
+        "Ex": float(methods["Ex"]),
+        "dBzdt": float(methods[dbdt_keys[dbdt_mode]]),
+        "Hz": float(methods[hz_keys[integration]]),
+    }
+
+
+def _biot_h_required_for_step(
+    magnetic_dbdt_mode: str,
+    *,
+    is_output: bool,
+    diagnostic_methods: tuple[str, ...] = (),
+) -> bool:
     """Biot H is needed every step only for a finite-difference Biot dB/dt."""
 
-    return bool(is_output) or str(magnetic_dbdt_mode).strip().lower() == "biot_rate"
+    return (
+        bool(is_output)
+        or str(magnetic_dbdt_mode).strip().lower() == "biot_rate"
+        or "biot_rate" in diagnostic_methods
+    )
 
 
 def _advance_faraday_receiver_hz(
@@ -7829,8 +8002,10 @@ def run_fetd_forward(
             "magnetic_receiver_mode must be 'curl', 'biot_current', 'biot_ohmic', or 'faraday_integrated'"
         )
     magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
-    if magnetic_dbdt_mode not in {"curl", "biot_rate", "ampere_rate"}:
-        raise ValueError("magnetic_dbdt_mode must be 'curl', 'biot_rate', or 'ampere_rate'")
+    if magnetic_dbdt_mode not in {"curl", "biot_rate", "ampere_rate", "faraday_loop"}:
+        raise ValueError(
+            "magnetic_dbdt_mode must be 'curl', 'biot_rate', 'ampere_rate', or 'faraday_loop'"
+        )
     if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     if magnetic_dbdt_mode == "ampere_rate" and source_term_mode != "primary_secondary":
@@ -7870,6 +8045,7 @@ def run_fetd_forward(
                     source_current_value,
                     debye=debye,
                     memories=memories,
+                    integration=config.biot_current_integration,
                 )
             elif magnetic_receiver_mode == "biot_ohmic":
                 value = _biot_savart_cell_current_h_at_receiver(
@@ -7886,9 +8062,15 @@ def run_fetd_forward(
 
     H_old_receiver = None
     faraday_receiver_hz = None
-    if magnetic_receiver_mode == "biot_current" and magnetic_dbdt_mode == "biot_rate":
-        H_old_receiver = evaluate_biot_h_set(E_old, _source_current(0.0, config))
-    elif magnetic_receiver_mode == "biot_ohmic" and magnetic_dbdt_mode == "biot_rate":
+    biot_history_required = (
+        magnetic_receiver_mode in {"biot_current", "biot_ohmic"}
+        and _biot_h_required_for_step(
+            magnetic_dbdt_mode,
+            is_output=False,
+            diagnostic_methods=config.magnetic_diagnostic_methods,
+        )
+    )
+    if biot_history_required:
         H_old_receiver = evaluate_biot_h_set(E_old, _source_current(0.0, config))
     elif magnetic_receiver_mode == "faraday_integrated":
         faraday_initial_h = _biot_savart_total_h_at_receiver(
@@ -7905,6 +8087,7 @@ def run_fetd_forward(
     rows = []
     row_times = []
     receiver_diagnostic_rows = []
+    magnetic_receiver_diagnostic_rows = []
     solver_log = []
     components = (
         ["Ex", "dBzdt", "Hz"]
@@ -7945,10 +8128,7 @@ def run_fetd_forward(
             previous_time=previous_time,
             completed_step=int(checkpoint["completed_step"]),
         )
-        if (
-            magnetic_receiver_mode in {"biot_current", "biot_ohmic"}
-            and magnetic_dbdt_mode == "biot_rate"
-        ):
+        if biot_history_required:
             h_old = checkpoint["h_old_receiver"]
             expected_h_shape = (
                 (len(receiver_run_configs), 3) if multi_receiver_run else (3,)
@@ -8112,6 +8292,7 @@ def run_fetd_forward(
         if magnetic_receiver_mode == "biot_current" and _biot_h_required_for_step(
             magnetic_dbdt_mode,
             is_output=is_output,
+            diagnostic_methods=config.magnetic_diagnostic_methods,
         ):
             H_new_receiver = evaluate_biot_h_set(
                 E_new,
@@ -8120,6 +8301,7 @@ def run_fetd_forward(
         elif magnetic_receiver_mode == "biot_ohmic" and _biot_h_required_for_step(
             magnetic_dbdt_mode,
             is_output=is_output,
+            diagnostic_methods=config.magnetic_diagnostic_methods,
         ):
             H_new_receiver = evaluate_biot_h_set(
                 E_new,
@@ -8161,25 +8343,46 @@ def run_fetd_forward(
                         evaluator=evaluate_receivers,
                     )
                     for receiver_index, receiver_record in enumerate(receiver_records):
-                        receiver_record["dBzdt_curl"] = float(
-                            receiver_record.get("dBzdt", np.nan)
+                        methods = evaluate_magnetic_receiver_methods(
+                            E_new,
+                            dbdt,
+                            msh,
+                            materials,
+                            receiver_run_configs[receiver_index],
+                            source_current=_source_current(float(t), config),
+                            config=config,
+                            h_new=(
+                                H_new_receiver[receiver_index]
+                                if H_new_receiver is not None
+                                else None
+                            ),
+                            h_old=(
+                                H_old_receiver[receiver_index]
+                                if H_old_receiver is not None
+                                else None
+                            ),
+                            dt=dt,
+                            debye=debye,
+                            memories=memories,
                         )
-                        receiver_record["dBzdt_biot_rate"] = float("nan")
-                        if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
-                            _assign_biot_receiver_hz(
-                                receiver_record,
-                                H_new_receiver[receiver_index],
-                            )
-                            if magnetic_dbdt_mode == "biot_rate":
-                                biot_rate = float(
-                                    _biot_receiver_dbdt_from_h(
-                                        H_new_receiver[receiver_index],
-                                        H_old_receiver[receiver_index],
-                                        dt=dt,
-                                    )[2]
-                                )
-                                receiver_record["dBzdt_biot_rate"] = biot_rate
-                                receiver_record["dBzdt"] = biot_rate
+                        selected = _select_magnetic_receiver_outputs(
+                            {"Ex": receiver_record["Ex"], **methods},
+                            magnetic_dbdt_mode=magnetic_dbdt_mode,
+                            biot_current_integration=config.biot_current_integration,
+                        )
+                        receiver_record.update(methods)
+                        receiver_record.update(selected)
+                        magnetic_receiver_diagnostic_rows.append(
+                            {
+                                "receiver_id": receiver_record["receiver_id"],
+                                "receiver_x_m": receiver_record["receiver_x_m"],
+                                "receiver_y_m": receiver_record["receiver_y_m"],
+                                "receiver_z_m": receiver_record["receiver_z_m"],
+                                "time_obs": float(observation_time_by_step[step]),
+                                **methods,
+                                "provenance": receiver_record["provenance"],
+                            }
+                        )
                     rows.append(records_to_array(receiver_records, components).tolist())
                     row_times.append(float(observation_time_by_step[step]))
                     for receiver_record, receiver_config in zip(
@@ -8240,10 +8443,7 @@ def run_fetd_forward(
                         )
                     )
 
-        if (
-            magnetic_receiver_mode in {"biot_current", "biot_ohmic"}
-            and magnetic_dbdt_mode == "biot_rate"
-        ):
+        if biot_history_required and H_new_receiver is not None:
             H_old_receiver = H_new_receiver
         log_item = {
             "step": step,
@@ -8370,7 +8570,10 @@ def run_fetd_forward(
             ["explicit_full_domain"] * len(receiver_run_configs)
         )
         if msh.comm.rank == 0 and completed_times.size:
-            from seepage_channel_full_domain import write_predictions_5rx
+            from seepage_channel_full_domain import (
+                write_magnetic_receiver_diagnostics_csv,
+                write_predictions_5rx,
+            )
 
             write_predictions_5rx(
                 config.workdir / "predictions_5rx.csv",
@@ -8378,6 +8581,10 @@ def run_fetd_forward(
                 receiver_locations=receiver_locations,
                 data=receiver_data,
                 components=components,
+            )
+            write_magnetic_receiver_diagnostics_csv(
+                config.workdir / "magnetic_receiver_diagnostics.csv",
+                magnetic_receiver_diagnostic_rows,
             )
         return {
             "times": completed_times,
@@ -8387,6 +8594,7 @@ def run_fetd_forward(
             "receiver_provenance": receiver_provenance,
             "solver_log": solver_log,
             "receiver_diagnostic_rows": receiver_diagnostic_rows,
+            "magnetic_receiver_diagnostic_rows": magnetic_receiver_diagnostic_rows,
         }
     return {
         "times": completed_times,

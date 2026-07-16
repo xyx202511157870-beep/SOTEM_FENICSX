@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 def _load_pipeline_module():
@@ -116,6 +117,91 @@ def test_biot_receiver_preserves_instantaneous_dbdt():
     assert receiver["dBzdt"] == 3.0
 
 
+def test_selected_magnetic_outputs_do_not_modify_electric_component():
+    sp = _load_pipeline_module()
+    methods = {
+        "Ex": 3.0,
+        "dBzdt_curl": 1.0,
+        "dBzdt_biot_rate": 2.0,
+        "dBzdt_faraday_loop": 4.0,
+        "Hz_biot_center": 5.0,
+        "Hz_biot_tetra4": 6.0,
+    }
+
+    selected = sp._select_magnetic_receiver_outputs(
+        methods,
+        magnetic_dbdt_mode="faraday_loop",
+        biot_current_integration="tetra4",
+    )
+
+    assert selected == {"Ex": 3.0, "dBzdt": 4.0, "Hz": 6.0}
+
+
+def test_selected_magnetic_outputs_name_missing_diagnostic():
+    import pytest
+
+    sp = _load_pipeline_module()
+    with pytest.raises(KeyError, match="dBzdt_faraday_loop"):
+        sp._select_magnetic_receiver_outputs(
+            {"Ex": 3.0, "Hz_biot_center": 5.0},
+            magnetic_dbdt_mode="faraday_loop",
+            biot_current_integration="cell_center",
+        )
+
+
+def test_evaluate_magnetic_receiver_methods_records_named_methods(monkeypatch):
+    sp = _load_pipeline_module()
+    calls = []
+    config = sp.PipelineConfig(
+        receiver=(1.0, 2.0, 3.0),
+        faraday_loop_radius=1.5,
+        faraday_loop_quadrature_points=16,
+    )
+
+    monkeypatch.setattr(
+        sp,
+        "evaluate_receivers",
+        lambda *_args: {"Ex": 7.0, "dBzdt": 11.0},
+    )
+    monkeypatch.setattr(
+        sp,
+        "evaluate_faraday_loop_field",
+        lambda *_args, **kwargs: (
+            13.0,
+            {"method": "faraday_loop", "radius_m": kwargs["radius"]},
+        ),
+        raising=False,
+    )
+
+    def fake_biot(*_args, integration, return_audit=False, **_kwargs):
+        calls.append((integration, return_audit))
+        value = np.asarray([0.0, 0.0, 17.0 if integration == "cell_center" else 19.0])
+        return (value, {"method": "biot_tetra4"}) if return_audit else value
+
+    monkeypatch.setattr(sp, "_biot_savart_total_h_at_receiver", fake_biot)
+    methods = sp.evaluate_magnetic_receiver_methods(
+        object(),
+        object(),
+        object(),
+        {},
+        config,
+        source_current=2.0,
+        config=config,
+        h_new=np.asarray([0.0, 0.0, 5.0]),
+        h_old=np.asarray([0.0, 0.0, 3.0]),
+        dt=0.5,
+    )
+
+    assert methods["dBzdt_curl"] == 11.0
+    assert methods["dBzdt_faraday_loop"] == 13.0
+    assert methods["Hz_biot_center"] == 17.0
+    assert methods["Hz_biot_tetra4"] == 19.0
+    assert methods["dBzdt_biot_rate"] == pytest.approx(1.2566370614359173e-6 * 4.0)
+    assert methods["faraday_audit"]["radius_m"] == 1.5
+    assert methods["biot_tetra4_audit"]["method"] == "biot_tetra4"
+    assert calls == [("cell_center", False), ("tetra4", True)]
+
+
 def test_faraday_receiver_hz_update_uses_backward_euler_dbdt():
     sp = _load_pipeline_module()
 
@@ -221,6 +307,45 @@ def test_biot_savart_cell_center_path_matches_function_current_path():
     assert fast.shape == (3,)
     assert np.all(np.isfinite(fast))
     np.testing.assert_allclose(fast[2], full[2], rtol=5.0e-3, atol=1.0e-12)
+
+
+def test_biot_total_tetra4_path_returns_finite_audit():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+    from types import SimpleNamespace
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    config = sp.PipelineConfig(receiver=(0.5, 1.5, 0.5), receiver_type="point")
+    spaces = sp.build_function_spaces(msh, config)
+    electric = fem.Function(spaces["V"], name="constant_electric")
+    electric.interpolate(
+        lambda x: np.vstack(
+            [np.ones(x.shape[1]), np.zeros(x.shape[1]), np.zeros(x.shape[1])]
+        )
+    )
+    electric.x.scatter_forward()
+    n_cells = msh.topology.index_map(msh.topology.dim).size_local
+    sigma = SimpleNamespace(x=SimpleNamespace(array=np.ones(n_cells)))
+
+    value, audit = sp._biot_savart_total_h_at_receiver(
+        electric,
+        msh,
+        {"sigma": sigma},
+        config,
+        0.0,
+        integration="tetra4",
+        return_audit=True,
+    )
+
+    assert value.shape == (3,)
+    assert np.all(np.isfinite(value))
+    assert value[2] > 0.0
+    assert audit["method"] == "biot_tetra4"
+    assert audit["samples"][0]["sample_count"] == 4 * n_cells
 
 
 def test_ampere_h_recovery_zero_current_returns_zero_receiver_h():

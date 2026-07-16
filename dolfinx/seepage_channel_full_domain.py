@@ -77,6 +77,7 @@ def evaluate_receiver_set(
     config: Any,
     *,
     evaluator: Any,
+    magnetic_evaluator: Any | None = None,
 ) -> list[dict[str, Any]]:
     raw_locations = getattr(config, "receiver_locations", ()) or (config.receiver,)
     records: list[dict[str, Any]] = []
@@ -85,6 +86,10 @@ def evaluate_receiver_set(
         local_config.receiver = receiver.receiver
         local_config.receiver_locations = ()
         record = dict(evaluator(electric_field, dbdt, mesh, local_config))
+        if magnetic_evaluator is not None:
+            record.update(
+                magnetic_evaluator(electric_field, dbdt, mesh, local_config)
+            )
         record.update(
             {
                 "receiver_id": receiver.receiver_id,
@@ -168,6 +173,48 @@ def write_predictions_5rx(
     return output_path
 
 
+def write_magnetic_receiver_diagnostics_csv(
+    path: str | Path,
+    records: Iterable[dict[str, Any]],
+) -> Path:
+    """Write named magnetic methods and numerical audits in long form."""
+
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "receiver_id",
+        "receiver_x_m",
+        "receiver_y_m",
+        "receiver_z_m",
+        "time_obs",
+        "dBzdt_curl",
+        "dBzdt_biot_rate",
+        "dBzdt_faraday_loop",
+        "Hz_biot_center",
+        "Hz_biot_tetra4",
+        "faraday_audit_json",
+        "biot_tetra4_audit_json",
+        "provenance",
+    ]
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in records:
+            row = {key: record.get(key, "") for key in fieldnames}
+            row["faraday_audit_json"] = json.dumps(
+                record.get("faraday_audit", {}),
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            row["biot_tetra4_audit_json"] = json.dumps(
+                record.get("biot_tetra4_audit", {}),
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            writer.writerow(row)
+    return output_path
+
+
 def write_receiver_set_npz(
     path: str | Path,
     *,
@@ -215,5 +262,6 @@ __all__ = [
     "receiver_configs",
     "records_to_array",
     "write_predictions_5rx",
+    "write_magnetic_receiver_diagnostics_csv",
     "write_receiver_set_npz",
 ]
