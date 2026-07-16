@@ -16,7 +16,7 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
     (magnetic_dir / "magnetic_symmetry_metrics.json").write_text(
         json.dumps(
             {
-                "faraday_loop_32": {
+                "biot_rate": {
                     "rx3_zero_ratio": 0.004,
                     "pair_24_residual": 0.003,
                     "pair_15_residual": 0.002,
@@ -26,7 +26,13 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
         encoding="utf-8",
     )
     (magnetic_dir / "magnetic_convergence_summary.json").write_text(
-        json.dumps({"passed": True, "selected": "faraday_loop_32", "rejected": {}}),
+        json.dumps(
+            {
+                "passed": True,
+                "selected": "biot_rate",
+                "rejected": {"faraday_loop_32": ["rx3_zero_ratio"]},
+            }
+        ),
         encoding="utf-8",
     )
     (magnetic_dir / "mesh_symmetry_audit.json").write_text(
@@ -64,6 +70,9 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
     assert "不使用单侧求解后对称镜像" in text
     assert "60 x 10 x 10 m" in text
     assert "Faraday 有限线圈" in text
+    assert "候选诊断" in text
+    assert "Biot-Savart Hz 时间差分（biot_rate）" in text
+    assert "正式方法\nbiot_rate" in text
     assert "四面体四点 Biot-Savart" in text
     assert "Rx3 对称理论零点" in text
     assert "2 m" in text and "32" in text and "tetra4" in text

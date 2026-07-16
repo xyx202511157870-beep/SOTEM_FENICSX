@@ -279,8 +279,14 @@ def select_formal_method(summary: Mapping[str, Mapping[str, Any]]) -> dict[str, 
     ranking = sorted(
         accepted,
         key=lambda name: (
-            summary[name]["strong_signal_median_error"],
+            max(
+                summary[name]["rx3_zero_ratio"],
+                summary[name]["pair_24_residual"],
+                summary[name]["pair_15_residual"],
+            ),
             summary[name]["rx3_zero_ratio"],
+            summary[name]["pair_24_residual"] + summary[name]["pair_15_residual"],
+            summary[name]["strong_signal_median_error"],
             name,
         ),
     )

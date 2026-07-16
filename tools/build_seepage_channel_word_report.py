@@ -424,13 +424,19 @@ def add_magnetic_stability_section(document: Document, result_dir: Path) -> None
     selected = decision.get("selected")
     selected_metrics = metrics.get(selected, {}) if selected else {}
     conclusion = "PASS" if decision.get("passed") else "FAIL"
+    selected_dbdt_operator = {
+        "biot_rate": "Biot-Savart Hz 时间差分（biot_rate）",
+        "curl": "单元 curl(E)",
+    }.get(selected, "Faraday 有限线圈" if str(selected).startswith("faraday_loop") else "未选择")
 
     add_heading(document, "磁场接收计算稳定性与 Rx3 对称残差", page_break=True)
     add_body(
         document,
         "问题根因是点式 -curl(E) 在材料界面和共享单元处对局部离散误差敏感，"
         "理论奇对称零点 Rx3 会把很小的绝对误差放大成异常曲线形态。"
-        "正式候选采用 Faraday 有限线圈计算 dBz/dt，并用四面体四点 Biot-Savart 计算 Hz。",
+        "候选诊断同时评估单元 curl(E)、Biot-Savart Hz 时间差分和 Faraday 有限线圈；"
+        "正式算子由对称残差门禁与强信号一致性审计的数据结果选择，而不是预先指定。"
+        "Hz 统一用四面体四点 Biot-Savart 计算。",
     )
     add_callout(
         document,
@@ -444,7 +450,8 @@ def add_magnetic_stability_section(document: Document, result_dir: Path) -> None
         ["参数", "设定"],
         [
             ("模型", "100 m 平行导线；60 x 10 x 10 m 渗流通道；埋深 20 m"),
-            ("dBz/dt 算子", "Faraday 有限线圈"),
+            ("正式 dBz/dt 算子", selected_dbdt_operator),
+            ("Faraday 候选诊断", "有限线圈，未通过时仅保留为对照"),
             ("线圈半径", "2 m"),
             ("线积分点数", "32"),
             ("Hz 算子", "四面体四点 Biot-Savart"),

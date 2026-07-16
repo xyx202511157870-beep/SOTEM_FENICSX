@@ -84,6 +84,32 @@ def test_formal_method_selection_requires_every_gate():
     assert "pair_24_residual" in selected["rejected"]["low_rx3_only"]
 
 
+def test_formal_method_selection_prioritizes_lower_symmetry_residual_over_curl_reference():
+    runner = load_runner()
+    curl = {
+        "rx3_zero_ratio": 0.008,
+        "pair_24_residual": 0.008,
+        "pair_15_residual": 0.007,
+        "strong_signal_error_increase_percentage_points": 0.0,
+        "ex_median_change": 0.0,
+        "strong_signal_median_error": 0.0,
+    }
+    biot_rate = {
+        **curl,
+        "rx3_zero_ratio": 0.003,
+        "pair_24_residual": 0.004,
+        "pair_15_residual": 0.004,
+        "strong_signal_error_increase_percentage_points": 1.5,
+        "strong_signal_median_error": 0.015,
+    }
+
+    selected = runner.select_formal_method(
+        {"curl": curl, "biot_rate": biot_rate}
+    )
+
+    assert selected["selected"] == "biot_rate"
+
+
 @pytest.mark.parametrize("case", ["missing", "shape", "nan", "provenance", "empty"])
 def test_invalid_audit_inputs_never_write_passing_manifest(tmp_path, case):
     runner = load_runner()
