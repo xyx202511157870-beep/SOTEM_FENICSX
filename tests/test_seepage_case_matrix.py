@@ -165,9 +165,18 @@ def test_matching_normalized_output_is_current(tmp_path: Path) -> None:
         path,
         values=np.ones((5, 31, 3)),
         case_fingerprint=np.asarray(case.case_fingerprint),
+        base_model_fingerprint=np.asarray(case.model_fingerprint),
+        material_relative_volume_error=np.asarray(0.0),
     )
 
     assert _output_is_current(path, case)
 
     different = _case("simpeg-conductivity-channel-sigma-0p01")
     assert not _output_is_current(path, different)
+
+    np.savez_compressed(
+        path,
+        values=np.ones((5, 31, 3)),
+        case_fingerprint=np.asarray(case.case_fingerprint),
+    )
+    assert not _output_is_current(path, case)

@@ -171,9 +171,80 @@ def _output_is_current(path: Path, case: VerificationCase) -> bool:
         return False
     try:
         with np.load(path, allow_pickle=False) as stored:
-            return str(np.asarray(stored["case_fingerprint"]).item()) == case.case_fingerprint
+            required = {
+                "values",
+                "case_fingerprint",
+                "base_model_fingerprint",
+                "material_relative_volume_error",
+            }
+            return required.issubset(stored.files) and (
+                str(np.asarray(stored["case_fingerprint"]).item())
+                == case.case_fingerprint
+            )
     except (KeyError, OSError, ValueError):
         return False
+
+
+def _raw_output_is_available(case: VerificationCase, output_root: str | Path) -> bool:
+    case_dir = _case_dir(output_root, case)
+    if case.solver == "simpeg":
+        return (case_dir / "result.h5").is_file() and (
+            case_dir / "simpeg_config.yaml"
+        ).is_file()
+    return all(
+        (case_dir / name).is_file()
+        for name in (
+            "predictions_5rx.csv",
+            "run_config_resolved.yaml",
+            "fenicsx_run_summary.json",
+        )
+    )
+
+
+def _normalize_case(case: VerificationCase, output_root: str | Path) -> Path:
+    case_dir = _case_dir(output_root, case)
+    normalized = _normalized_output(output_root, case)
+    model = case_model(case)
+    if case.solver == "simpeg":
+        config_path = case_dir / "simpeg_config.yaml"
+        provenance = verify_simpeg_config_contract(
+            config_path,
+            model=model,
+            case=case.role,
+            expected_local_mesh_size=case.local_mesh_size_m,
+        )
+        payload = simpeg_payload_from_h5(case_dir / "result.h5", model=model)
+    else:
+        provenance = verify_fenicsx_run_contract(
+            case_dir,
+            model=model,
+            case=case.role,
+            expected_local_mesh_size=case.local_mesh_size_m,
+        )
+        payload = fenicsx_payload_from_csv(
+            case_dir / "predictions_5rx.csv", model=model
+        )
+    payload = dict(payload)
+    payload["base_model_fingerprint"] = np.asarray(case.model_fingerprint)
+    payload["case_fingerprint"] = np.asarray(case.case_fingerprint)
+    payload["execution_fingerprint"] = np.asarray(case.execution_fingerprint)
+    payload["study"] = np.asarray(case.study)
+    payload["role"] = np.asarray(case.role)
+    material_audit = provenance["material_audit"]
+    payload["material_theoretical_volume_m3"] = np.asarray(
+        material_audit["theoretical_volume_m3"]
+    )
+    payload["material_discrete_volume_m3"] = np.asarray(
+        material_audit["global_discrete_volume_m3"]
+    )
+    payload["material_relative_volume_error"] = np.asarray(
+        material_audit["relative_volume_error"]
+    )
+    (case_dir / "verified_provenance.json").write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    np.savez_compressed(normalized, **payload)
+    return normalized
 
 
 def reuse_case_output(
@@ -216,6 +287,8 @@ def run_case(
     normalized = _normalized_output(output_root, case)
     if not force and _output_is_current(normalized, case):
         return normalized
+    if not force and _raw_output_is_available(case, output_root):
+        return _normalize_case(case, output_root)
     if not force:
         reused = reuse_case_output(case, output_root)
         if reused is not None:
@@ -236,34 +309,7 @@ def run_case(
             text=True,
         )
 
-    model = case_model(case)
-    if case.solver == "simpeg":
-        config_path = case_dir / "simpeg_config.yaml"
-        verify_simpeg_config_contract(
-            config_path,
-            model=model,
-            case=case.role,
-            expected_local_mesh_size=case.local_mesh_size_m,
-        )
-        payload = simpeg_payload_from_h5(case_dir / "result.h5", model=model)
-    else:
-        verify_fenicsx_run_contract(
-            case_dir,
-            model=model,
-            case=case.role,
-            expected_local_mesh_size=case.local_mesh_size_m,
-        )
-        payload = fenicsx_payload_from_csv(
-            case_dir / "predictions_5rx.csv", model=model
-        )
-    payload = dict(payload)
-    payload["base_model_fingerprint"] = np.asarray(case.model_fingerprint)
-    payload["case_fingerprint"] = np.asarray(case.case_fingerprint)
-    payload["execution_fingerprint"] = np.asarray(case.execution_fingerprint)
-    payload["study"] = np.asarray(case.study)
-    payload["role"] = np.asarray(case.role)
-    np.savez_compressed(normalized, **payload)
-    return normalized
+    return _normalize_case(case, output_root)
 
 
 def _selected_cases(solver: str | None, case_ids: list[str]) -> list[VerificationCase]:

@@ -15,6 +15,7 @@ from atem3d.seepage_verification import (
     build_verification_summary,
     canonical_model_contract,
     cross_solver_agreement,
+    discrete_volume_metrics,
     model_fingerprint,
     parity_metrics,
     require_consistent_fingerprints,
@@ -137,6 +138,7 @@ def test_simpeg_thin_configs_match_the_same_model_contract() -> None:
         )
         assert provenance["model_fingerprint"] == model_fingerprint(thin)
         assert provenance["case"] == case
+        assert provenance["material_audit"]["relative_volume_error"] <= 0.02
 
 
 def test_zero_contrast_metrics_exclude_center_and_normalize_by_background() -> None:
@@ -212,6 +214,19 @@ def test_cross_solver_agreement_uses_formal_strong_signal_percentiles() -> None:
 
     assert summary["pass"] is True
     assert all(item["median"] < 0.20 for item in summary["components"].values())
+
+
+def test_discrete_volume_gate_requires_every_solver_case_within_two_percent() -> None:
+    passed = discrete_volume_metrics(
+        {"simpeg": [0.0, 0.01], "fenicsx": [0.005, 0.019]}, threshold=0.02
+    )
+    failed = discrete_volume_metrics(
+        {"simpeg": [0.0], "fenicsx": [0.021]}, threshold=0.02
+    )
+
+    assert passed["pass"] is True
+    assert failed["pass"] is False
+    assert failed["solvers"]["fenicsx"]["maximum_relative_error"] == pytest.approx(0.021)
 
 
 def test_verification_summary_fails_closed_on_missing_or_failed_gate() -> None:

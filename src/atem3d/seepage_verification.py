@@ -270,12 +270,39 @@ def verify_simpeg_config_contract(
         if expected_local_mesh_size is None and minimum > 0.25:
             raise ModelContractMismatch(f"SimPEG {axis} does not resolve the 1 m channel")
 
+    from .config import _build_mesh
+
+    mesh = _build_mesh(config["mesh"])
+    bounds = np.asarray(model.channel.to_z_up_bounds(), dtype=float)
+    centers = np.asarray(mesh.cell_centers, dtype=float)
+    mask = np.logical_and.reduce(
+        [
+            (centers[:, axis] >= bounds[axis, 0])
+            & (centers[:, axis] <= bounds[axis, 1])
+            for axis in range(3)
+        ]
+    )
+    if not np.any(mask):
+        raise ModelContractMismatch("SimPEG conductivity-box geometry marks no cells")
+    discrete_volume = float(np.sum(np.asarray(mesh.cell_volumes)[mask]))
+    theoretical_volume = float(model.channel.volume_m3)
+    material_audit = {
+        "bounds": bounds.tolist(),
+        "theoretical_volume_m3": theoretical_volume,
+        "global_discrete_volume_m3": discrete_volume,
+        "relative_volume_error": abs(discrete_volume - theoretical_volume)
+        / theoretical_volume,
+        "marked_cell_count": int(np.count_nonzero(mask)),
+        "mesh_size_m": expected_local_mesh_size,
+    }
+
     return {
         "method": "SimPEG",
         "case": str(case),
         "model_fingerprint": model_fingerprint(model),
         "config_path": str(path),
         "config_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "material_audit": material_audit,
     }
 
 
@@ -491,6 +518,38 @@ def cross_solver_agreement(
     }
 
 
+def discrete_volume_metrics(
+    relative_errors: Mapping[str, list[float] | tuple[float, ...]],
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    """Require every solver's discrete anomaly volume to meet the threshold."""
+
+    solvers: dict[str, Any] = {}
+    passed = bool(relative_errors)
+    for solver, raw_values in relative_errors.items():
+        values = np.asarray(raw_values, dtype=float)
+        if values.size == 0 or not np.all(np.isfinite(values)) or np.any(values < 0.0):
+            item_pass = False
+            maximum = None
+        else:
+            maximum = float(np.max(values))
+            item_pass = maximum <= threshold
+        passed &= item_pass
+        solvers[str(solver)] = {
+            "case_count": int(values.size),
+            "maximum_relative_error": maximum,
+            "pass": bool(item_pass),
+        }
+    return {
+        "available": bool(relative_errors)
+        and all(item["case_count"] > 0 for item in solvers.values()),
+        "pass": bool(passed),
+        "threshold": float(threshold),
+        "solvers": solvers,
+    }
+
+
 def build_verification_summary(
     *,
     model_fingerprint_value: str,
@@ -536,6 +595,7 @@ __all__ = [
     "require_consistent_fingerprints",
     "three_level_convergence",
     "cross_solver_agreement",
+    "discrete_volume_metrics",
     "verify_fenicsx_run_contract",
     "verify_simpeg_config_contract",
     "zero_contrast_metrics",
