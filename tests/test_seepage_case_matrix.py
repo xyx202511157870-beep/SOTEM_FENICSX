@@ -12,11 +12,13 @@ from atem3d.seepage_verification import (
 )
 from tools.run_seepage_verification_matrix import (
     _output_is_current,
+    _simpeg_h5_matches_config,
     build_case_command,
     reuse_case_output,
     write_simpeg_case_config,
 )
 
+import h5py
 import yaml
 import numpy as np
 
@@ -180,3 +182,21 @@ def test_matching_normalized_output_is_current(tmp_path: Path) -> None:
         case_fingerprint=np.asarray(case.case_fingerprint),
     )
     assert not _output_is_current(path, case)
+
+
+def test_legacy_simpeg_h5_is_reused_only_for_semantically_identical_config(
+    tmp_path: Path,
+) -> None:
+    case = _case("simpeg-conductivity-channel-sigma-1")
+    config_path = write_simpeg_case_config(case, tmp_path)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    h5_path = tmp_path / "legacy.h5"
+    with h5py.File(h5_path, "w") as handle:
+        handle.attrs["config_yaml"] = yaml.safe_dump(config, sort_keys=False)
+
+    assert _simpeg_h5_matches_config(h5_path, config_path)
+
+    config["source"]["current"] = 2.0
+    with h5py.File(h5_path, "w") as handle:
+        handle.attrs["config_yaml"] = yaml.safe_dump(config, sort_keys=False)
+    assert not _simpeg_h5_matches_config(h5_path, config_path)

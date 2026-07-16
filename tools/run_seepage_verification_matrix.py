@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 from typing import Any
 
+import h5py
 import numpy as np
 import yaml
 
@@ -201,6 +204,63 @@ def _raw_output_is_available(case: VerificationCase, output_root: str | Path) ->
     )
 
 
+def _simpeg_h5_matches_config(h5_path: Path, config_path: Path) -> bool:
+    """Return whether an HDF5 result embeds the same semantic YAML config."""
+
+    try:
+        expected = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        with h5py.File(h5_path, "r") as handle:
+            raw = handle.attrs.get("config_yaml")
+        return raw is not None and yaml.safe_load(raw) == expected
+    except (KeyError, OSError, TypeError, ValueError, yaml.YAMLError):
+        return False
+
+
+def _reuse_legacy_simpeg_output(
+    case: VerificationCase, output_root: str | Path
+) -> Path | None:
+    """Import a previously solved canonical base run after exact config proof."""
+
+    if case.solver != "simpeg":
+        return None
+    canonical_ids = {
+        next(
+            item.execution_fingerprint
+            for item in build_case_matrix()
+            if item.case_id == "simpeg-conductivity-background-reference"
+        ): "simpeg_background.h5",
+        next(
+            item.execution_fingerprint
+            for item in build_case_matrix()
+            if item.case_id == "simpeg-conductivity-channel-sigma-1"
+        ): "simpeg_channel.h5",
+    }
+    filename = canonical_ids.get(case.execution_fingerprint)
+    if filename is None:
+        return None
+    source = Path(output_root) / filename
+    if not source.is_file():
+        return None
+    config_path = write_simpeg_case_config(case, output_root)
+    if not _simpeg_h5_matches_config(source, config_path):
+        return None
+
+    case_dir = _case_dir(output_root, case)
+    target = case_dir / "result.h5"
+    shutil.copy2(source, target)
+    provenance = {
+        "method": "verified_legacy_base_import",
+        "source": str(source),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "semantic_config_match": True,
+        "execution_fingerprint": case.execution_fingerprint,
+    }
+    (case_dir / "legacy_import.json").write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return _normalize_case(case, output_root)
+
+
 def _normalize_case(case: VerificationCase, output_root: str | Path) -> Path:
     case_dir = _case_dir(output_root, case)
     normalized = _normalized_output(output_root, case)
@@ -289,6 +349,10 @@ def run_case(
         return normalized
     if not force and _raw_output_is_available(case, output_root):
         return _normalize_case(case, output_root)
+    if not force:
+        legacy = _reuse_legacy_simpeg_output(case, output_root)
+        if legacy is not None:
+            return legacy
     if not force:
         reused = reuse_case_output(case, output_root)
         if reused is not None:
