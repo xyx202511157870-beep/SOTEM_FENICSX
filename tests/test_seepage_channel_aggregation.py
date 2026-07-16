@@ -1,14 +1,17 @@
 import numpy as np
 from pathlib import Path
 import json
+import pytest
+import atem3d.seepage_channel_validation as validation
 
-from atem3d.seepage_channel_model import benchmark_model
+from atem3d.seepage_channel_model import MODEL, benchmark_model
 from atem3d.seepage_channel_validation import (
     aggregate_payloads,
     channel_delta,
     strong_signal_mask,
     summarize_convergence,
 )
+from atem3d.seepage_verification import ModelContractMismatch, model_fingerprint
 
 
 def test_channel_delta_preserves_sign() -> None:
@@ -53,6 +56,7 @@ def test_aggregate_writes_canonical_artifacts_without_channel_empymod_error(
             "receiver_locations": locations,
             "components": np.asarray(("Ex", "dBzdt", "Hz")),
             "values": np.full((5, 31, 3), value),
+            "model_fingerprint": model_fingerprint(MODEL),
         }
         if empymod:
             result["background_only_1d"] = True
@@ -92,6 +96,7 @@ def test_aggregate_writes_thin_variant_model_audit(tmp_path: Path) -> None:
             "receiver_locations": np.asarray(model.receiver_locations),
             "components": np.asarray(("Ex", "dBzdt", "Hz")),
             "values": np.full((5, 31, 3), value),
+            "model_fingerprint": model_fingerprint(model),
         }
         if empymod:
             result["background_only_1d"] = True
@@ -111,3 +116,79 @@ def test_aggregate_writes_thin_variant_model_audit(tmp_path: Path) -> None:
     assert audit["variant"] == "thin_60x1x1"
     assert audit["channel"]["size_m"] == [60.0, 1.0, 1.0]
     assert audit["channel"]["theoretical_volume_m3"] == 60.0
+    assert audit["model_fingerprint"] == model_fingerprint(model)
+
+
+def test_aggregate_rejects_payload_from_a_different_model(tmp_path: Path) -> None:
+    thin = benchmark_model("thin_60x1x1")
+    thin_hash = model_fingerprint(thin)
+    thick_hash = model_fingerprint(MODEL)
+
+    def payload(value: float, fingerprint: str, *, empymod: bool = False):
+        result = {
+            "times": thin.times,
+            "receiver_locations": np.asarray(thin.receiver_locations),
+            "components": np.asarray(("Ex", "dBzdt", "Hz")),
+            "values": np.full((5, 31, 3), value),
+            "model_fingerprint": fingerprint,
+        }
+        if empymod:
+            result["background_only_1d"] = True
+        return result
+
+    with pytest.raises(ModelContractMismatch, match="mixed model fingerprints"):
+        aggregate_payloads(
+            tmp_path,
+            empymod_background=payload(1.0, thin_hash, empymod=True),
+            simpeg_background=payload(1.1, thin_hash),
+            simpeg_channel=payload(1.2, thin_hash),
+            fenicsx_background=payload(0.9, thin_hash),
+            fenicsx_channel=payload(1.15, thick_hash),
+            model=thin,
+            variant="thin_60x1x1",
+        )
+
+
+def test_directory_aggregation_verifies_both_fenicsx_run_contracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thin = benchmark_model("thin_60x1x1")
+    fingerprint = model_fingerprint(thin)
+    payload = {
+        "times": thin.times,
+        "receiver_locations": np.asarray(thin.receiver_locations),
+        "components": np.asarray(("Ex", "dBzdt", "Hz")),
+        "values": np.ones((5, 31, 3)),
+        "model_fingerprint": np.asarray(fingerprint),
+    }
+    for name in ("empymod_background", "simpeg_background", "simpeg_channel"):
+        np.savez_compressed(tmp_path / f"{name}.npz", **payload)
+
+    calls: list[str] = []
+
+    def verify(run_dir, *, model, case):
+        calls.append(case)
+        return {"model_fingerprint": model_fingerprint(model), "case": case}
+
+    monkeypatch.setattr(validation, "verify_fenicsx_run_contract", verify, raising=False)
+    monkeypatch.setattr(
+        validation,
+        "fenicsx_payload_from_csv",
+        lambda path, model=thin: dict(payload),
+    )
+    monkeypatch.setattr(
+        validation,
+        "aggregate_payloads",
+        lambda *args, **kwargs: {"model_fingerprint": fingerprint},
+    )
+
+    validation.aggregate_result_directory(
+        tmp_path, model=thin, variant="thin_60x1x1"
+    )
+
+    assert calls == ["background", "channel"]
+    for case in calls:
+        provenance_path = tmp_path / f"fenicsx_{case}_provenance.json"
+        assert json.loads(provenance_path.read_text(encoding="utf-8"))[
+            "model_fingerprint"
+        ] == fingerprint

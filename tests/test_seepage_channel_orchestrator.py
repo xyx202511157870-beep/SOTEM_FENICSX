@@ -27,5 +27,6 @@ def test_thin_run_plan_selects_thin_configs_scripts_and_variant_argument() -> No
     assert "simpeg_thin_channel.yaml" in inputs["simpeg_channel"]
     assert "run_fenicsx_seepage_thin_background.sh" in commands["fenicsx_background"]
     assert "run_fenicsx_seepage_thin_channel.sh" in commands["fenicsx_channel"]
+    assert "--variant thin_60x1x1" in commands["empymod_background"]
     assert "--variant thin_60x1x1" in commands["aggregate"]
     assert all("mirror" not in command.lower() for command in commands.values())

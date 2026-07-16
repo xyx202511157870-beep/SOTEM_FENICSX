@@ -28,6 +28,7 @@ from atem3d.seepage_channel_validation import (  # noqa: E402
     validate_result_payload,
 )
 from atem3d.seepage_channel_model import benchmark_model  # noqa: E402
+from atem3d.seepage_verification import verify_simpeg_config_contract  # noqa: E402
 
 
 VARIANT_CONFIGS = {
@@ -96,7 +97,7 @@ def build_run_plan(
     return [
         python_job(
             "empymod_background",
-            ["empymod", "--output-root", str(output)],
+            ["empymod", "--variant", variant, "--output-root", str(output)],
             [output / "empymod_background.npz"],
         ),
         python_job(
@@ -226,9 +227,11 @@ def execute_run_plan(
             raise RuntimeError(f"job {job.name} failed contract validation: {event}")
 
 
-def _run_empymod(output_root: Path, *, srcpts: int) -> Path:
+def _run_empymod(output_root: Path, *, srcpts: int, variant: str) -> Path:
     output = output_root / "empymod_background.npz"
-    save_empymod_background(output, srcpts=srcpts)
+    save_empymod_background(
+        output, srcpts=srcpts, model=benchmark_model(variant)
+    )
     with np.load(output, allow_pickle=False) as stored:
         validate_result_payload("empymod", stored)
     return output
@@ -244,6 +247,10 @@ def _run_simpeg(
     output_h5 = output_root / f"simpeg_{case}.h5"
     output_npz = output_root / f"simpeg_{case}.npz"
     output_root.mkdir(parents=True, exist_ok=True)
+    model = benchmark_model(variant)
+    contract_provenance = verify_simpeg_config_contract(
+        config_path, model=model, case=case
+    )
     subprocess.run(
         [
             sys.executable,
@@ -258,9 +265,12 @@ def _run_simpeg(
         cwd=ROOT,
         check=True,
     )
-    payload = simpeg_payload_from_h5(output_h5)
+    payload = simpeg_payload_from_h5(
+        output_h5, model=model
+    )
     np.savez_compressed(output_npz, **payload)
     provenance = {
+        **contract_provenance,
         "method": "SimPEG",
         "case": case,
         "variant": variant,
@@ -271,6 +281,7 @@ def _run_simpeg(
         "normalized_npz": output_npz.name,
         "value_shape": list(np.asarray(payload["values"]).shape),
         "coordinate_adapter": "physical_z_down_to_internal_z_up",
+        "model_fingerprint": str(np.asarray(payload["model_fingerprint"]).item()),
     }
     (output_root / f"simpeg_{case}_provenance.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True),
@@ -286,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     empymod_parser = subparsers.add_parser("empymod")
     empymod_parser.add_argument("--output-root", type=Path, required=True)
     empymod_parser.add_argument("--srcpts", type=int, default=129)
+    empymod_parser.add_argument("--variant", choices=VARIANT_CHOICES, default="baseline_60x10x10")
 
     simpeg_parser = subparsers.add_parser("simpeg")
     simpeg_parser.add_argument("--case", choices=tuple(SIMPEG_CONFIGS), required=True)
@@ -304,7 +316,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     output_root = args.output_root.resolve()
     if args.solver == "empymod":
-        output = _run_empymod(output_root, srcpts=args.srcpts)
+        output = _run_empymod(
+            output_root, srcpts=args.srcpts, variant=args.variant
+        )
     elif args.solver == "simpeg":
         output = _run_simpeg(output_root, case=args.case, variant=args.variant)
     elif args.solver == "aggregate":

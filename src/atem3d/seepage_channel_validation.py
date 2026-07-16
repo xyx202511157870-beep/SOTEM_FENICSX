@@ -12,6 +12,12 @@ import numpy as np
 
 from .seepage_reference import load_simpeg_values, run_empymod_reference
 from .seepage_channel_model import MODEL, SeepageChannelBenchmark
+from .seepage_verification import (
+    canonical_model_contract,
+    model_fingerprint,
+    require_consistent_fingerprints,
+    verify_fenicsx_run_contract,
+)
 
 
 COMPONENTS = ("Ex", "dBzdt", "Hz")
@@ -155,6 +161,14 @@ def aggregate_payloads(
         ("FEniCSx", "background"): fenicsx_background,
         ("FEniCSx", "channel"): fenicsx_channel,
     }
+    expected_fingerprint = model_fingerprint(model)
+    common_fingerprint = require_consistent_fingerprints(
+        {
+            f"{method}_{case}": payload
+            for (method, case), payload in payloads.items()
+        }
+        | {"requested_model": {"model_fingerprint": expected_fingerprint}}
+    )
     for (method, _case), payload in payloads.items():
         validate_result_payload(method, payload)
 
@@ -313,6 +327,8 @@ def aggregate_payloads(
 
     model_audit = {
         "variant": str(variant),
+        "model_fingerprint": common_fingerprint,
+        "model_contract": canonical_model_contract(model),
         "coordinate_convention": model.coordinate_convention,
         "source_endpoints_m": model.source_endpoints,
         "receiver_locations_m": model.receiver_locations,
@@ -332,6 +348,7 @@ def aggregate_payloads(
     background_targets = {"Ex": 0.10, "dBzdt": 0.20, "Hz": 0.10}
     delta_targets = {component: 0.20 for component in COMPONENTS}
     benchmark_summary = {
+        "model_fingerprint": common_fingerprint,
         "background": {
             method: _error_summary(
                 values[(method, "background")],
@@ -369,6 +386,7 @@ def aggregate_payloads(
         fenicsx_channel=values[("FEniCSx", "channel")],
         simpeg_delta=simpeg_delta,
         fenicsx_delta=fenicsx_delta,
+        model_fingerprint=np.asarray(common_fingerprint),
     )
     return benchmark_summary
 
@@ -408,39 +426,54 @@ def validate_result_payload(method: str, payload: Mapping[str, Any]) -> None:
             raise ValueError("empymod payload requires background_only_1d=true")
 
 
-def empymod_background_payload(*, srcpts: int = 129) -> dict[str, Any]:
-    values = run_empymod_reference(MODEL.times, srcpts=srcpts)
+def empymod_background_payload(
+    *, srcpts: int = 129, model: SeepageChannelBenchmark = MODEL
+) -> dict[str, Any]:
+    values = run_empymod_reference(model.times, srcpts=srcpts)
     payload = {
-        "times": np.asarray(MODEL.times, dtype=float),
-        "receiver_locations": np.asarray(MODEL.receiver_locations, dtype=float),
+        "times": np.asarray(model.times, dtype=float),
+        "receiver_locations": np.asarray(model.receiver_locations, dtype=float),
         "components": np.asarray(COMPONENTS),
         "values": np.asarray(values, dtype=float),
         "background_only_1d": np.asarray(True),
         "reference_role": np.asarray("layered_background_only"),
+        "model_fingerprint": np.asarray(model_fingerprint(model)),
     }
     validate_result_payload("empymod", payload)
     return payload
 
 
-def save_empymod_background(path: str | Path, *, srcpts: int = 129) -> Path:
+def save_empymod_background(
+    path: str | Path,
+    *,
+    srcpts: int = 129,
+    model: SeepageChannelBenchmark = MODEL,
+) -> Path:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(output, **empymod_background_payload(srcpts=srcpts))
+    np.savez_compressed(
+        output, **empymod_background_payload(srcpts=srcpts, model=model)
+    )
     return output
 
 
-def simpeg_payload_from_h5(path: str | Path) -> dict[str, Any]:
+def simpeg_payload_from_h5(
+    path: str | Path, *, model: SeepageChannelBenchmark = MODEL
+) -> dict[str, Any]:
     payload = {
-        "times": np.asarray(MODEL.times, dtype=float),
-        "receiver_locations": np.asarray(MODEL.receiver_locations, dtype=float),
+        "times": np.asarray(model.times, dtype=float),
+        "receiver_locations": np.asarray(model.receiver_locations, dtype=float),
         "components": np.asarray(COMPONENTS),
-        "values": load_simpeg_values(path, target_times=MODEL.times),
+        "values": load_simpeg_values(path, target_times=model.times),
+        "model_fingerprint": np.asarray(model_fingerprint(model)),
     }
     validate_result_payload("SimPEG", payload)
     return payload
 
 
-def fenicsx_payload_from_csv(path: str | Path) -> dict[str, Any]:
+def fenicsx_payload_from_csv(
+    path: str | Path, *, model: SeepageChannelBenchmark = MODEL
+) -> dict[str, Any]:
     with Path(path).open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     if not rows:
@@ -457,7 +490,7 @@ def fenicsx_payload_from_csv(path: str | Path) -> dict[str, Any]:
     if not required.issubset(rows[0]):
         raise ValueError("FEniCSx predictions_5rx.csv lacks required columns")
     values = np.full(EXPECTED_SHAPE, np.nan, dtype=float)
-    expected_locations = np.asarray(MODEL.receiver_locations, dtype=float)
+    expected_locations = np.asarray(model.receiver_locations, dtype=float)
     for row in rows:
         if row["provenance"] != "explicit_full_domain":
             raise ValueError("every FEniCSx receiver row must be explicit_full_domain")
@@ -480,7 +513,7 @@ def fenicsx_payload_from_csv(path: str | Path) -> dict[str, Any]:
             raise ValueError("FEniCSx receiver coordinate adapter does not match contract")
         time_value = float(row["time_obs"])
         matches = np.flatnonzero(
-            np.isclose(MODEL.times, time_value, rtol=1.0e-10, atol=1.0e-15)
+            np.isclose(model.times, time_value, rtol=1.0e-10, atol=1.0e-15)
         )
         if matches.size != 1:
             raise ValueError(f"FEniCSx time is outside the approved grid: {time_value}")
@@ -489,11 +522,12 @@ def fenicsx_payload_from_csv(path: str | Path) -> dict[str, Any]:
             raise ValueError("duplicate FEniCSx receiver/time row")
         values[receiver_index, time_index] = [float(row[name]) for name in COMPONENTS]
     payload = {
-        "times": np.asarray(MODEL.times, dtype=float),
+        "times": np.asarray(model.times, dtype=float),
         "receiver_locations": expected_locations,
         "components": np.asarray(COMPONENTS),
         "values": values,
         "receiver_provenance": np.asarray(["explicit_full_domain"] * 5),
+        "model_fingerprint": np.asarray(model_fingerprint(model)),
     }
     validate_result_payload("FEniCSx", payload)
     return payload
@@ -514,11 +548,18 @@ def aggregate_result_directory(
     empymod = _payload_from_npz(output / "empymod_background.npz")
     simpeg_background = _payload_from_npz(output / "simpeg_background.npz")
     simpeg_channel = _payload_from_npz(output / "simpeg_channel.npz")
+    for case in ("background", "channel"):
+        provenance = verify_fenicsx_run_contract(
+            output / f"fenicsx_{case}", model=model, case=case
+        )
+        (output / f"fenicsx_{case}_provenance.json").write_text(
+            json.dumps(provenance, indent=2, sort_keys=True), encoding="utf-8"
+        )
     fenicsx_background = fenicsx_payload_from_csv(
-        output / "fenicsx_background" / "predictions_5rx.csv"
+        output / "fenicsx_background" / "predictions_5rx.csv", model=model
     )
     fenicsx_channel = fenicsx_payload_from_csv(
-        output / "fenicsx_channel" / "predictions_5rx.csv"
+        output / "fenicsx_channel" / "predictions_5rx.csv", model=model
     )
     convergence_cases: dict[str, tuple[Any, Any]] = {}
     optional_cases = {

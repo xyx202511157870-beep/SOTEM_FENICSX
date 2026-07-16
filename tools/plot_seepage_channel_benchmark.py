@@ -95,6 +95,7 @@ def load_geometry_contract(result_dir: str | Path) -> dict[str, Any]:
 
     audit = json.loads((Path(result_dir) / "model_audit.json").read_text(encoding="utf-8"))
     return {
+        "model_fingerprint": audit["model_fingerprint"],
         "variant": audit.get("variant", "baseline_60x10x10"),
         "coordinate_convention": audit["coordinate_convention"],
         "source_endpoints_m": audit["source_endpoints_m"],

@@ -189,6 +189,7 @@ def test_report_geometry_draws_four_receivers_with_depth_down(
     (tmp_path / "model_audit.json").write_text(
         json.dumps(
             {
+                "model_fingerprint": "a" * 64,
                 "coordinate_convention": "z_down",
                 "source_endpoints_m": [[-50.0, 0.0, 0.1], [50.0, 0.0, 0.1]],
                 "receiver_locations_m": [
@@ -351,6 +352,7 @@ def test_all_formal_response_plots_enable_magnitude_decay() -> None:
 
 def test_geometry_contract_is_loaded_from_result_audit(tmp_path: Path) -> None:
     audit = {
+        "model_fingerprint": "a" * 64,
         "coordinate_convention": "z_down",
         "source_endpoints_m": [[-50.0, 0.0, 0.1], [50.0, 0.0, 0.1]],
         "receiver_locations_m": [[0.0, y, -0.1] for y in (-20, -10, 0, 10, 20)],
@@ -365,3 +367,4 @@ def test_geometry_contract_is_loaded_from_result_audit(tmp_path: Path) -> None:
     (tmp_path / "model_audit.json").write_text(json.dumps(audit), encoding="utf-8")
     contract = load_geometry_contract(tmp_path)
     assert contract["channel_bounds_m"] == audit["channel"]["bounds_m"]
+    assert contract["model_fingerprint"] == "a" * 64
