@@ -11,6 +11,7 @@ from atem3d.seepage_verification import (
     verify_simpeg_config_contract,
 )
 from tools.run_seepage_verification_matrix import (
+    _output_is_current,
     build_case_command,
     reuse_case_output,
     write_simpeg_case_config,
@@ -154,3 +155,19 @@ def test_duplicate_execution_reuses_normalized_arrays_with_new_case_provenance(
         assert str(stored["case_fingerprint"].item()) == target.case_fingerprint
         assert str(stored["execution_fingerprint"].item()) == target.execution_fingerprint
         assert str(stored["reused_from"].item()) == source.case_id
+
+
+def test_matching_normalized_output_is_current(tmp_path: Path) -> None:
+    case = _case("simpeg-conductivity-background-reference")
+    path = tmp_path / case.expected_output
+    path.parent.mkdir(parents=True)
+    np.savez_compressed(
+        path,
+        values=np.ones((5, 31, 3)),
+        case_fingerprint=np.asarray(case.case_fingerprint),
+    )
+
+    assert _output_is_current(path, case)
+
+    different = _case("simpeg-conductivity-channel-sigma-0p01")
+    assert not _output_is_current(path, different)

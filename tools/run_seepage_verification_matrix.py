@@ -169,6 +169,11 @@ def _normalized_output(output_root: str | Path, case: VerificationCase) -> Path:
 def _output_is_current(path: Path, case: VerificationCase) -> bool:
     if not path.is_file():
         return False
+    try:
+        with np.load(path, allow_pickle=False) as stored:
+            return str(np.asarray(stored["case_fingerprint"]).item()) == case.case_fingerprint
+    except (KeyError, OSError, ValueError):
+        return False
 
 
 def reuse_case_output(
@@ -198,11 +203,6 @@ def reuse_case_output(
         np.savez_compressed(target, **payload)
         return target
     return None
-    try:
-        with np.load(path, allow_pickle=False) as stored:
-            return str(np.asarray(stored["case_fingerprint"]).item()) == case.case_fingerprint
-    except (KeyError, OSError, ValueError):
-        return False
 
 
 def run_case(
