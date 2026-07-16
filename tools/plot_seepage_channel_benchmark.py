@@ -41,6 +41,8 @@ FIGURE_STEMS = (
     "convergence",
 )
 
+REPORT_RECEIVER_INDICES = (0, 1, 3, 4)
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -89,11 +91,19 @@ def plot_model_geometry(output_root: Path) -> None:
     fig = plt.figure(figsize=(12, 4.2))
     axis_3d = fig.add_subplot(131, projection="3d")
     source = np.asarray(MODEL.source_endpoints)
-    receivers = np.asarray(MODEL.receiver_locations)
+    receivers = np.asarray(MODEL.receiver_locations)[list(REPORT_RECEIVER_INDICES)]
     axis_3d.plot(source[:, 0], source[:, 1], source[:, 2], color="crimson", lw=3, label="100 m wire")
-    axis_3d.scatter(receivers[:, 0], receivers[:, 1], receivers[:, 2], color="navy", s=28, label="Rx1-Rx5")
+    axis_3d.scatter(
+        receivers[:, 0],
+        receivers[:, 1],
+        receivers[:, 2],
+        color="navy",
+        s=28,
+        label="Rx1, Rx2, Rx4, Rx5",
+    )
     _draw_box_edges(axis_3d, MODEL.channel.bounds, color="teal", lw=1.5)
     axis_3d.set(xlabel="x (m)", ylabel="y (m)", zlabel="physical z-down (m)")
+    axis_3d.invert_zaxis()
     axis_3d.legend(fontsize=7)
     axis_3d.set_title("Full 3D geometry")
 
@@ -130,15 +140,15 @@ def _plot_response_grid(
     title: str,
 ) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.4), sharex=True)
-    colors = plt.cm.viridis(np.linspace(0.1, 0.9, 5))
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(REPORT_RECEIVER_INDICES)))
     linthresh = _symlog_limit(list(series.values()))
     for component_index, (axis, component) in enumerate(zip(axes, COMPONENTS)):
         for method, values in series.items():
-            for receiver_index in range(5):
+            for color_index, receiver_index in enumerate(REPORT_RECEIVER_INDICES):
                 axis.plot(
                     times,
                     values[receiver_index, :, component_index],
-                    color=colors[receiver_index],
+                    color=colors[color_index],
                     ls={"empymod": ":", "SimPEG": "--", "FEniCSx": "-"}.get(method, "-"),
                     lw=1.1,
                     label=f"{method} Rx{receiver_index + 1}" if component_index == 0 else None,
@@ -167,7 +177,7 @@ def _plot_error_grid(
     for component_index, (axis, component) in enumerate(zip(axes, COMPONENTS)):
         for method, values in series.items():
             errors = ordinary_relative_error(values, reference)
-            for receiver_index in range(5):
+            for receiver_index in REPORT_RECEIVER_INDICES:
                 axis.plot(times, errors[receiver_index, :, component_index], lw=1, label=f"{method} Rx{receiver_index + 1}")
         axis.set_xscale("log")
         axis.set_yscale("log")
