@@ -14,6 +14,7 @@ from atem3d.comsol_seepage_channel_3d import (
 )
 from atem3d.seepage_channel_model import model_for_variant
 from atem3d.seepage_verification import model_fingerprint
+from tools.run_comsol_seepage_channel_3d import build_case_paths, build_commands
 
 
 def test_comsol_channel_contract_matches_the_canonical_thin_3d_model() -> None:
@@ -83,3 +84,18 @@ def test_comsol_wide_export_normalizes_five_receivers_and_31_times(
     assert np.array_equal(payload["times"], np.asarray(model.times))
     assert payload["components"].tolist() == ["Ex", "dBzdt", "Hz"]
     assert payload["values"][4, 30].tolist() == [34.0, 134.0, 234.0]
+
+
+def test_comsol_batch_spec_uses_distinct_case_output_and_read_only_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "uniform.mph"
+    paths = build_case_paths(tmp_path / "results", "channel", source)
+    compile_command, batch_command = build_commands(tmp_path / "bin", paths)
+
+    assert paths["source_model"] == source
+    assert paths["output_model"] != source
+    assert paths["output_model"].name == "seepage_channel_3d_channel.mph"
+    assert compile_command[0].endswith("comsolcompile.exe")
+    assert "-inputfile" in batch_command
+    assert paths["log"] == Path(batch_command[batch_command.index("-batchlog") + 1])
