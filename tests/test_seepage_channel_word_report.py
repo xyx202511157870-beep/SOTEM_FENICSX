@@ -56,6 +56,10 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
 
     assert built == report_path
     document = Document(report_path)
+    report_source = Path("tools/build_seepage_channel_word_report.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'add_heading(document, "4. 结果对比")' in report_source
     paragraph_text = [paragraph.text for paragraph in document.paragraphs]
     table_text = [
         cell.text

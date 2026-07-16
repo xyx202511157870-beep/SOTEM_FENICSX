@@ -348,7 +348,7 @@ def add_methods(document: Document, result_dir: Path, fenics_background: dict, f
 
 
 def add_results(document: Document, result_dir: Path, summary: dict) -> None:
-    add_heading(document, "4. 结果对比", page_break=True)
+    add_heading(document, "4. 结果对比")
     add_heading(document, "4.1 均匀背景与 empymod 参考", level=2)
     add_figure(document, result_dir / "background_response.png", "图 2  均匀背景三算法 Ex、dBz/dt 和 Hz 响应")
     add_figure(document, result_dir / "background_error.png", "图 3  SimPEG 和 FEniCSx 背景相对 empymod 的逐点误差")
