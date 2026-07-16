@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -125,9 +126,8 @@ def build_case_command(
     if case.solver == "simpeg":
         config = write_simpeg_case_config(case, output_root)
         return (
-            sys.executable,
-            "-m",
-            "atem3d.cli",
+            os.environ.get("ATEM3D_SIMPEG_PYTHON", sys.executable),
+            str(ROOT / "tools" / "run_atem3d_with_runtime.py"),
             "run",
             str(config),
             "--output",
