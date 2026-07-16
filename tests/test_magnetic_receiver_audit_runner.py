@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
+import json
 
 
 def load_runner():
@@ -80,3 +82,36 @@ def test_formal_method_selection_requires_every_gate():
     assert selected["passed"] is True
     assert selected["selected"] == "stable"
     assert "pair_24_residual" in selected["rejected"]["low_rx3_only"]
+
+
+@pytest.mark.parametrize("case", ["missing", "shape", "nan", "provenance", "empty"])
+def test_invalid_audit_inputs_never_write_passing_manifest(tmp_path, case):
+    runner = load_runner()
+    payload_path = tmp_path / "payload.npz"
+    output_dir = tmp_path / "audit"
+    if case != "missing":
+        values = exact_values()
+        provenance = np.asarray(["explicit_full_domain"] * 5)
+        payload = {
+            "times": np.arange(4, dtype=float),
+            "receiver_locations": np.asarray([(0.0, y, 0.1) for y in (-20, -10, 0, 10, 20)]),
+            "components": np.asarray(("Ex", "dBzdt", "Hz")),
+            "receiver_provenance": provenance,
+        }
+        if case != "empty":
+            payload["background__curl"] = values
+            payload["channel__curl"] = values.copy()
+        if case == "shape":
+            payload["channel__curl"] = values[:4]
+        elif case == "nan":
+            payload["background__curl"] = values.copy()
+            payload["background__curl"][0, 0, 0] = np.nan
+        elif case == "provenance":
+            payload["receiver_provenance"] = np.asarray(["mirrored"] * 5)
+        np.savez_compressed(payload_path, **payload)
+
+    with pytest.raises((FileNotFoundError, ValueError, RuntimeError)):
+        runner.run_audit(payload_path, output_dir)
+    manifest = output_dir / "run_manifest.json"
+    if manifest.exists():
+        assert json.loads(manifest.read_text(encoding="utf-8"))["passed"] is False
