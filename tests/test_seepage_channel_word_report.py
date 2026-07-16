@@ -92,3 +92,17 @@ def test_build_seepage_channel_report_contains_required_sections(tmp_path: Path)
     assert "2 m" in text and "32" in text and "tetra4" in text
     assert len(document.tables) >= 3
     assert len(document.inline_shapes) == 1
+
+
+def test_report_source_adds_channel_anomaly_diagnostic_figures() -> None:
+    source = Path("tools/build_seepage_channel_word_report.py").read_text(
+        encoding="utf-8"
+    )
+    for filename in (
+        "channel_relative_anomaly.png",
+        "channel_delta_signed.png",
+        "channel_relative_anomaly_profiles.png",
+    ):
+        assert f'result_dir / "{filename}"' in source
+    assert "100 x |F_channel - F_background| / |F_background|" in source
+    assert 'result_dir / "channel_delta_error.png", "图 9' in source

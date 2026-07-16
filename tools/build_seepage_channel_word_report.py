@@ -383,7 +383,46 @@ def add_results(document: Document, result_dir: Path, summary: dict) -> None:
         result_dir / "channel_delta.png",
         "图 5  通道异常绝对幅值常规衰减曲线",
     )
-    add_figure(document, result_dir / "channel_delta_error.png", "图 6  SimPEG 与 FEniCSx 通道差分的逐点误差")
+    add_body(
+        document,
+        "含通道总场仍呈现近似均匀半空间衰减，是因为背景场占总场主导；这不表示通道未进入模型。"
+        "下面分别用相对异常、带符号异常和接收点空间剖面显示通道扰动。",
+    )
+    add_heading(document, "4.4 通道相对异常百分比", level=2, page_break=True)
+    add_body(
+        document,
+        "相对异常定义为 100 x |F_channel - F_background| / |F_background|；"
+        "分母仅在零值处采用每个接收点和分量背景峰值 1e-12 倍的数值下限保护。",
+    )
+    add_figure(
+        document,
+        result_dir / "channel_relative_anomaly.png",
+        "图 6  SimPEG 与 FEniCSx 通道相对异常百分比衰减曲线",
+    )
+    add_heading(document, "4.5 通道带符号异常响应", level=2, page_break=True)
+    add_body(
+        document,
+        "带符号异常定义为 F_channel - F_background，采用对称对数纵轴，"
+        "用于保留极性、反号和过零信息。",
+    )
+    add_figure(
+        document,
+        result_dir / "channel_delta_signed.png",
+        "图 7  保留极性和过零信息的通道带符号异常",
+    )
+    add_heading(document, "4.6 典型时刻接收点空间剖面", level=2, page_break=True)
+    add_body(
+        document,
+        "空间剖面使用 1e-5 s、3.162e-4 s 和 1e-2 s 附近输出时刻，"
+        "仅绘制正式接收点 Rx1、Rx2、Rx4、Rx5，不插值补入中心点。",
+    )
+    add_figure(
+        document,
+        result_dir / "channel_relative_anomaly_profiles.png",
+        "图 8  三个典型时刻的四接收点相对异常空间剖面",
+    )
+    add_heading(document, "4.7 通道差分算法误差", level=2, page_break=True)
+    add_figure(document, result_dir / "channel_delta_error.png", "图 9  SimPEG 与 FEniCSx 通道差分的逐点误差")
     add_callout(
         document,
         "异常对比结果",
