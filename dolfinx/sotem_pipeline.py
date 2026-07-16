@@ -156,7 +156,11 @@ class PipelineConfig:
     formulation: str = "e"  # e, h
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
     magnetic_receiver_mode: str = "curl"  # curl, biot_current, biot_ohmic, faraday_integrated
-    magnetic_dbdt_mode: str = "curl"  # curl, biot_rate, ampere_rate
+    magnetic_dbdt_mode: str = "curl"  # curl, biot_rate, ampere_rate, faraday_loop
+    biot_current_integration: str = "cell_center"  # cell_center, tetra4
+    faraday_loop_radius: float = 2.0
+    faraday_loop_quadrature_points: int = 32
+    magnetic_diagnostic_methods: tuple[str, ...] = ()
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest, local_lsq
     magnetic_dbdt_evaluation_mode: str = "same"  # same, first_cell, mean, median, nearest_center, shallowest, local_lsq
     divergence_cleaning: str = "none"  # none, conductivity
@@ -741,8 +745,39 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "magnetic_receiver_mode must be 'curl', 'biot_current', 'biot_ohmic', or 'faraday_integrated'"
         )
     magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
-    if magnetic_dbdt_mode not in {"curl", "biot_rate", "ampere_rate"}:
-        raise ValueError("magnetic_dbdt_mode must be 'curl', 'biot_rate', or 'ampere_rate'")
+    if magnetic_dbdt_mode not in {"curl", "biot_rate", "ampere_rate", "faraday_loop"}:
+        raise ValueError(
+            "magnetic_dbdt_mode must be 'curl', 'biot_rate', 'ampere_rate', or 'faraday_loop'"
+        )
+    biot_current_integration = str(config.biot_current_integration).strip().lower()
+    if biot_current_integration not in {"cell_center", "tetra4"}:
+        raise ValueError(
+            "biot_current_integration must be 'cell_center' or 'tetra4'"
+        )
+    faraday_loop_radius = float(config.faraday_loop_radius)
+    if not math.isfinite(faraday_loop_radius) or faraday_loop_radius <= 0.0:
+        raise ValueError("faraday_loop_radius must be positive and finite")
+    faraday_loop_quadrature_points = int(config.faraday_loop_quadrature_points)
+    if faraday_loop_quadrature_points < 8 or faraday_loop_quadrature_points % 4:
+        raise ValueError(
+            "faraday_loop_quadrature_points must be a multiple of 4 and at least 8"
+        )
+    magnetic_diagnostic_methods = tuple(
+        str(name).strip().lower() for name in config.magnetic_diagnostic_methods
+    )
+    allowed_magnetic_diagnostics = {
+        "curl",
+        "biot_rate",
+        "faraday_loop",
+        "biot_center",
+        "biot_tetra4",
+    }
+    unknown_magnetic_diagnostics = set(magnetic_diagnostic_methods) - allowed_magnetic_diagnostics
+    if unknown_magnetic_diagnostics:
+        raise ValueError(
+            "unknown magnetic diagnostic methods: "
+            f"{sorted(unknown_magnetic_diagnostics)}"
+        )
     if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     if magnetic_dbdt_mode == "ampere_rate" and source_term_mode != "primary_secondary":
@@ -1079,6 +1114,10 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "initial_dc_mode": initial_dc_mode,
             "magnetic_receiver_mode": magnetic_receiver_mode,
             "magnetic_dbdt_mode": magnetic_dbdt_mode,
+            "biot_current_integration": biot_current_integration,
+            "faraday_loop_radius": faraday_loop_radius,
+            "faraday_loop_quadrature_points": faraday_loop_quadrature_points,
+            "magnetic_diagnostic_methods": list(magnetic_diagnostic_methods),
             "outer_boundary_mode": outer_boundary_mode,
             "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
             "receiver_evaluation_mode": receiver_evaluation_mode,
@@ -10216,6 +10255,10 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "initial_dc_mode": str(config.initial_dc_mode),
         "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
         "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
+        "biot_current_integration": str(config.biot_current_integration),
+        "faraday_loop_radius": float(config.faraday_loop_radius),
+        "faraday_loop_quadrature_points": int(config.faraday_loop_quadrature_points),
+        "magnetic_diagnostic_methods": list(config.magnetic_diagnostic_methods),
         "divergence_cleaning": str(config.divergence_cleaning),
         "divergence_cleaning_strength": float(config.divergence_cleaning_strength),
         "divergence_cleaning_t_obs_min": float(config.divergence_cleaning_t_obs_min),
@@ -10246,7 +10289,10 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
     lines = []
     for key, value in values.items():
         if isinstance(value, list):
-            rendered = "[" + ", ".join(f"{float(item):.16g}" for item in value) + "]"
+            if all(isinstance(item, str) for item in value):
+                rendered = "[" + ", ".join(json.dumps(item, ensure_ascii=False) for item in value) + "]"
+            else:
+                rendered = "[" + ", ".join(f"{float(item):.16g}" for item in value) + "]"
         elif isinstance(value, str):
             rendered = value
         else:
@@ -12210,6 +12256,16 @@ def _parse_string_csv(value: str | None) -> tuple[str, ...]:
     return tuple(raw.strip() for raw in str(value).split(",") if raw.strip())
 
 
+def _parse_magnetic_diagnostic_methods(value: str | None) -> tuple[str, ...]:
+    if value is None or str(value).strip() == "":
+        return ()
+    raw_items = str(value).split(",")
+    items = [raw.strip().lower() for raw in raw_items]
+    if any(not item for item in items):
+        raise ValueError("magnetic diagnostic methods contain an empty item")
+    return tuple(dict.fromkeys(items))
+
+
 def _parse_receiver_locations(
     values: list[str] | tuple[str, ...] | None,
 ) -> tuple[tuple[float, float, float], ...]:
@@ -12404,7 +12460,23 @@ def main(argv: list[str] | None = None) -> int:
         choices=["curl", "biot_current", "biot_ohmic", "faraday_integrated"],
         default="curl",
     )
-    parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate", "ampere_rate"], default="curl")
+    parser.add_argument(
+        "--magnetic-dbdt-mode",
+        choices=["curl", "biot_rate", "ampere_rate", "faraday_loop"],
+        default="curl",
+    )
+    parser.add_argument(
+        "--biot-current-integration",
+        choices=["cell_center", "tetra4"],
+        default="cell_center",
+    )
+    parser.add_argument("--faraday-loop-radius", type=float, default=2.0)
+    parser.add_argument("--faraday-loop-quadrature-points", type=int, default=32)
+    parser.add_argument(
+        "--magnetic-diagnostic-methods",
+        default="",
+        help="Comma-separated magnetic methods evaluated from the same E trajectory.",
+    )
     parser.add_argument("--outer-boundary-mode", choices=["pec", "natural", "robin"], default="pec")
     parser.add_argument("--outer-boundary-robin-scale", type=float, default=1.0)
     parser.add_argument("--receiver-type", choices=["point", "volume_average", "disk_average"], default="point")
@@ -12671,6 +12743,12 @@ def main(argv: list[str] | None = None) -> int:
         initial_dc_mode=args.initial_dc_mode,
         magnetic_receiver_mode=args.magnetic_receiver_mode,
         magnetic_dbdt_mode=args.magnetic_dbdt_mode,
+        biot_current_integration=args.biot_current_integration,
+        faraday_loop_radius=args.faraday_loop_radius,
+        faraday_loop_quadrature_points=args.faraday_loop_quadrature_points,
+        magnetic_diagnostic_methods=_parse_magnetic_diagnostic_methods(
+            args.magnetic_diagnostic_methods
+        ),
         outer_boundary_mode=args.outer_boundary_mode,
         outer_boundary_robin_scale=args.outer_boundary_robin_scale,
         receiver_type=args.receiver_type,
