@@ -974,6 +974,24 @@ def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     assert (tmp_path / "run_config_resolved.yaml").is_file()
 
 
+def test_write_source_diagnostics_marks_full_forward_contract(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, source_only=False)
+
+    sp.write_source_only_diagnostics(
+        config,
+        env={"python": "test-python"},
+        source_info={"mode": "manual_line"},
+        source_only=False,
+    )
+
+    diagnostics = json.loads((tmp_path / "source_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["source_only"] is False
+    assert (tmp_path / "run_config_resolved.yaml").is_file()
+    report_text = (tmp_path / "source_diagnostics_report.txt").read_text(encoding="utf-8")
+    assert report_text.startswith("SOTEM source diagnostics\n")
+
+
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():
     sp = _load_pipeline_module()
     times = np.asarray([1.0, 3.0, 6.0])

@@ -10758,8 +10758,9 @@ def write_source_only_diagnostics(
     *,
     runtime: dict[str, Any] | None = None,
     receiver_location: dict[str, Any] | None = None,
+    source_only: bool = True,
 ) -> dict[str, Any]:
-    """Write source-only diagnostics without running the transient forward solve."""
+    """Write source diagnostics and the resolved run contract."""
 
     runtime = {} if runtime is None else dict(runtime)
     workdir = Path(config.workdir)
@@ -10770,7 +10771,7 @@ def write_source_only_diagnostics(
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
     initial_field_diagnostics = _source_initial_field_diagnostics_from_info(source_info)
     diagnostics: dict[str, Any] = {
-        "source_only": True,
+        "source_only": bool(source_only),
         "source_mode": str(source_info.get("mode")) if isinstance(source_info, dict) else None,
         "source_consistency": diagnose_source_consistency(
             config,
@@ -10793,7 +10794,8 @@ def write_source_only_diagnostics(
     (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
 
-    lines = ["SOTEM source-only diagnostics", "============================", ""]
+    title = "SOTEM source-only diagnostics" if source_only else "SOTEM source diagnostics"
+    lines = [title, "=" * len(title), ""]
     lines.append(f"python: {env.get('python', sys.executable)}")
     lines.append(f"source mode: {diagnostics['source_mode']}")
     lines.append(f"source projection mode: {config.source_projection_mode}")
@@ -12829,6 +12831,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--mesh-only", action="store_true")
     parser.add_argument("--source-only", action="store_true", help="Assemble mesh/materials/source diagnostics and exit before time stepping.")
+    parser.add_argument(
+        "--source-contract-only",
+        action="store_true",
+        help="Write source diagnostics for a full-forward configuration and exit before time stepping.",
+    )
     parser.add_argument("--postprocess-partial", action="store_true", help="Postprocess workdir/forward_partial.npz without rerunning FEM.")
     parser.add_argument("--checkpoint-forward", action="store_true", help="Save forward_checkpoint.npz at each output time for long-run restart.")
     parser.add_argument(
@@ -13438,16 +13445,19 @@ def main(argv: list[str] | None = None) -> int:
     _record_timing_event(config, "source_done", run_t0)
     runtime["setup_seconds"] = time.perf_counter() - t0
     _record_timing_event(config, "setup_done", run_t0, seconds=runtime["setup_seconds"])
-    if config.source_only:
-        if msh.comm.rank == 0:
-            runtime["total_seconds"] = time.perf_counter() - run_t0
-            write_source_only_diagnostics(
-                config,
-                env,
-                source,
-                runtime=runtime,
-                receiver_location=_receiver_location_preflight(msh, config),
-            )
+    if msh.comm.rank == 0:
+        source_runtime = dict(runtime)
+        if config.source_only:
+            source_runtime["total_seconds"] = time.perf_counter() - run_t0
+        write_source_only_diagnostics(
+            config,
+            env,
+            source,
+            runtime=source_runtime,
+            receiver_location=_receiver_location_preflight(msh, config),
+            source_only=bool(config.source_only),
+        )
+    if config.source_only or args.source_contract_only:
         return 0
     times = generate_time_array(config)
     _record_timing_event(config, "forward_start", run_t0, output_count=int(len(times)))
