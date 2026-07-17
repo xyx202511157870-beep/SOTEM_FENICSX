@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from tools.run_seepage_channel_benchmark import build_run_plan
 
 
@@ -30,3 +32,12 @@ def test_thin_run_plan_selects_thin_configs_scripts_and_variant_argument() -> No
     assert "--variant thin_60x1x1" in commands["empymod_background"]
     assert "--variant thin_60x1x1" in commands["aggregate"]
     assert all("mirror" not in command.lower() for command in commands.values())
+
+
+def test_fenicsx_shell_entrypoints_use_lf_line_endings() -> None:
+    for name in (
+        "run_fenicsx_seepage_thin_background.sh",
+        "run_fenicsx_seepage_thin_channel.sh",
+    ):
+        payload = (Path("tools") / name).read_bytes()
+        assert b"\r\n" not in payload, f"{name} must stay LF-only for WSL bash"

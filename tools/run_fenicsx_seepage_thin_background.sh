@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Keep LF line endings: this entrypoint is executed by WSL bash.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
