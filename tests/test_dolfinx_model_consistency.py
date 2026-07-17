@@ -118,10 +118,9 @@ def test_model_consistency_rejects_nonpositive_material_parameters(field, value)
     [
         {"source_start": (-50.0, 0.0, 0.0)},
         {"source_end": (50.0, 0.0, 0.1)},
-        {"receiver": (500.0, 50.0, 0.1)},
     ],
 )
-def test_model_consistency_rejects_air_or_interface_electrodes(kwargs):
+def test_model_consistency_rejects_air_or_interface_source_electrodes(kwargs):
     sp = _load_pipeline_module()
 
     with pytest.raises(ValueError, match="z=0 earth surface"):
@@ -134,6 +133,16 @@ def test_model_consistency_allows_surface_receiver_for_survey_line():
     diagnostics = sp.validate_model_consistency(sp.PipelineConfig(receiver=(0.0, -300.0, 0.0)))
 
     assert diagnostics["receiver_depth"] == 0.0
+
+
+def test_model_consistency_allows_air_receiver_for_survey_line():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(
+        sp.PipelineConfig(receiver=(0.0, -300.0, 0.1))
+    )
+
+    assert diagnostics["receiver_depth"] == -0.1
 
 
 @pytest.mark.parametrize(
