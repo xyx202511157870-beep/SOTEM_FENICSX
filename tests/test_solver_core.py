@@ -1123,6 +1123,41 @@ def test_pardiso_linear_solver_mode_matches_direct_solution_for_small_problem():
     np.testing.assert_allclose(pardiso.e, direct.e, rtol=1.0e-8, atol=1.0e-10)
 
 
+def test_pardiso_initial_dc_field_does_not_call_superlu(monkeypatch):
+    mesh = _mesh()
+    source = GroundedWireSource(
+        start=(-1.5, 0.0, 0.0),
+        end=(1.5, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(off_time=0.0, on_value=1.0),
+    )
+    sim = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+        linear_solver="pardiso",
+    )
+    factorized_shapes: list[tuple[int, int]] = []
+
+    def fake_factorize(matrix):
+        factorized_shapes.append(matrix.shape)
+        dense = matrix.toarray()
+        return lambda rhs: np.linalg.solve(dense, rhs)
+
+    monkeypatch.setattr(sim, "_factorize_pardiso", fake_factorize)
+    monkeypatch.setattr(
+        simulation_module.spla,
+        "spsolve",
+        lambda *_args, **_kwargs: pytest.fail("SuperLU must not solve Pardiso DC fields"),
+    )
+
+    initial = sim.initial_electric_field()
+
+    assert factorized_shapes == [(mesh.n_nodes - 1, mesh.n_nodes - 1)]
+    assert np.all(np.isfinite(initial))
+
+
 def test_pardiso_linear_solver_supports_active_cpml_for_small_problem():
     pytest.importorskip("pydiso")
     mesh = TensorMesh([np.ones(5), np.ones(5), np.ones(4)], origin=(-2.5, -2.5, -2.0))

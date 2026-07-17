@@ -273,7 +273,12 @@ class TDEMIPSimulation:
         # Fix one scalar-potential gauge node to remove the null space.
         keep = np.arange(adc.shape[0] - 1)
         phi = np.zeros(adc.shape[0], dtype=float)
-        phi[keep] = spla.spsolve(adc[keep][:, keep].tocsc(), rhs[keep])
+        reduced = adc[keep][:, keep]
+        if self.linear_solver == "pardiso":
+            solve = self._factorize_pardiso(reduced.tocsr())
+            phi[keep] = solve(rhs[keep])
+        else:
+            phi[keep] = spla.spsolve(reduced.tocsc(), rhs[keep])
         return -gradient @ phi
 
     def initial_magnetic_flux_density(self, e_initial: np.ndarray | None = None) -> np.ndarray:
