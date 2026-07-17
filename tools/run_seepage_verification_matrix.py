@@ -202,6 +202,10 @@ def build_case_command(
                 "curl,biot_center,biot_tetra4,faraday_loop",
             ]
         )
+    if case.receiver_evaluation_mode != "median":
+        overrides.extend(
+            ["--receiver-evaluation-mode", case.receiver_evaluation_mode]
+        )
     shell_command = (
         f"cd {shlex.quote(_windows_to_wsl(ROOT))} && bash {shlex.quote(script)} "
         + " ".join(shlex.quote(item) for item in overrides)

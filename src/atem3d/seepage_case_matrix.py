@@ -26,6 +26,7 @@ class VerificationCase:
     execution_fingerprint: str
     receiver_count: int = 5
     output_time_count: int = 31
+    receiver_evaluation_mode: str = "median"
 
     @property
     def expected_output(self) -> str:
@@ -61,6 +62,7 @@ def _make_case(
     cross_section: float = 1.0,
     mesh_size: float = 0.25,
     time_factor: float = 1.0,
+    receiver_evaluation_mode: str = "median",
 ) -> VerificationCase:
     model = model_for_variant("thin_60x1x1")
     base_fingerprint = model_fingerprint(model)
@@ -74,6 +76,8 @@ def _make_case(
         "local_mesh_size_m": float(mesh_size),
         "time_step_factor": float(time_factor),
     }
+    if receiver_evaluation_mode != "median":
+        controlled["receiver_evaluation_mode"] = receiver_evaluation_mode
     execution = {
         key: value for key, value in controlled.items() if key != "study"
     }
@@ -89,6 +93,7 @@ def _make_case(
         model_fingerprint=base_fingerprint,
         case_fingerprint=_case_fingerprint(controlled),
         execution_fingerprint=_case_fingerprint(execution),
+        receiver_evaluation_mode=receiver_evaluation_mode,
     )
 
 
@@ -145,6 +150,9 @@ def build_case_matrix() -> tuple[VerificationCase, ...]:
                         suffix=f"h-{_slug(mesh_size)}",
                         conductivity=0.01 if role == "background" else 1.0,
                         mesh_size=mesh_size,
+                        receiver_evaluation_mode=(
+                            "local_lsq_interface" if solver == "fenicsx" else "median"
+                        ),
                     )
                 )
 

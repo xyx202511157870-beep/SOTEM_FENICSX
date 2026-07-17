@@ -83,6 +83,22 @@ def test_fenicsx_cross_10_volume_case_uses_memory_safe_twenty_cell_resolution() 
     assert simpeg.local_mesh_size_m == 0.25
 
 
+def test_fenicsx_spatial_cases_use_interface_local_lsq_point_recovery(
+    tmp_path: Path,
+) -> None:
+    spatial = _case("fenicsx-spatial-channel-h-0p125")
+    conductivity = _case("fenicsx-conductivity-channel-sigma-1")
+
+    assert spatial.receiver_evaluation_mode == "local_lsq_interface"
+    assert conductivity.receiver_evaluation_mode == "median"
+    assert "--receiver-evaluation-mode local_lsq_interface" in " ".join(
+        build_case_command(spatial, tmp_path)
+    )
+    assert "--receiver-evaluation-mode" not in " ".join(
+        build_case_command(conductivity, tmp_path)
+    )
+
+
 def test_case_manifest_is_deterministic_and_records_expected_artifacts(
     tmp_path: Path,
 ) -> None:
