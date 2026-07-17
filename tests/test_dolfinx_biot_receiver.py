@@ -202,6 +202,38 @@ def test_evaluate_magnetic_receiver_methods_records_named_methods(monkeypatch):
     assert calls == [("cell_center", False), ("tetra4", True)]
 
 
+def test_evaluate_magnetic_receiver_methods_reuses_selected_biot_field(monkeypatch):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig()
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("unrequested magnetic diagnostic was recomputed")
+
+    monkeypatch.setattr(sp, "evaluate_receivers", unexpected)
+    monkeypatch.setattr(sp, "evaluate_faraday_loop_field", unexpected)
+    monkeypatch.setattr(sp, "_biot_savart_total_h_at_receiver", unexpected)
+
+    methods = sp.evaluate_magnetic_receiver_methods(
+        object(),
+        object(),
+        object(),
+        {},
+        config,
+        source_current=0.0,
+        config=config,
+        h_new=np.asarray([0.0, 0.0, 5.0]),
+        h_old=np.asarray([0.0, 0.0, 3.0]),
+        dt=0.5,
+        diagnostic_methods=(),
+        selected_integration="tetra4",
+    )
+
+    assert methods == {
+        "Hz_biot_tetra4": 5.0,
+        "dBzdt_biot_rate": pytest.approx(1.2566370614359173e-6 * 4.0),
+    }
+
+
 def test_faraday_receiver_hz_update_uses_backward_euler_dbdt():
     sp = _load_pipeline_module()
 

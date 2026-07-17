@@ -5832,47 +5832,76 @@ def evaluate_magnetic_receiver_methods(
     dt: float | None = None,
     debye=None,
     memories=None,
+    diagnostic_methods: tuple[str, ...] | None = None,
+    selected_integration: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate named magnetic diagnostics at one explicit receiver."""
 
-    curl_record = evaluate_receivers(E, dbdt, msh, receiver_config)
-    faraday_value, faraday_audit = evaluate_faraday_loop_field(
-        E,
-        msh,
-        center=receiver_config.receiver,
-        radius=config.faraday_loop_radius,
-        point_count=config.faraday_loop_quadrature_points,
-        find_cells=_find_cells_for_point,
+    import numpy as np
+
+    requested = (
+        {"curl", "faraday_loop", "biot_center", "biot_tetra4"}
+        if diagnostic_methods is None
+        else {str(item).strip().lower() for item in diagnostic_methods}
     )
-    center_h = _biot_savart_total_h_at_receiver(
-        E,
-        msh,
-        materials,
-        receiver_config,
-        source_current,
-        debye=debye,
-        memories=memories,
-        integration="cell_center",
-    )
-    tetra_h, tetra_audit = _biot_savart_total_h_at_receiver(
-        E,
-        msh,
-        materials,
-        receiver_config,
-        source_current,
-        debye=debye,
-        memories=memories,
-        integration="tetra4",
-        return_audit=True,
-    )
-    result: dict[str, Any] = {
-        "dBzdt_curl": float(curl_record["dBzdt"]),
-        "dBzdt_faraday_loop": float(faraday_value),
-        "Hz_biot_center": float(center_h[2]),
-        "Hz_biot_tetra4": float(tetra_h[2]),
-        "faraday_audit": faraday_audit,
-        "biot_tetra4_audit": tetra_audit,
-    }
+    selected = None if selected_integration is None else str(selected_integration).strip().lower()
+    if selected not in {None, "cell_center", "tetra4"}:
+        raise ValueError(f"unknown selected Biot integration: {selected_integration!r}")
+
+    result: dict[str, Any] = {}
+    if "curl" in requested:
+        curl_record = evaluate_receivers(E, dbdt, msh, receiver_config)
+        result["dBzdt_curl"] = float(curl_record["dBzdt"])
+    if "faraday_loop" in requested:
+        faraday_value, faraday_audit = evaluate_faraday_loop_field(
+            E,
+            msh,
+            center=receiver_config.receiver,
+            radius=config.faraday_loop_radius,
+            point_count=config.faraday_loop_quadrature_points,
+            find_cells=_find_cells_for_point,
+        )
+        result["dBzdt_faraday_loop"] = float(faraday_value)
+        result["faraday_audit"] = faraday_audit
+
+    selected_key = {
+        "cell_center": "Hz_biot_center",
+        "tetra4": "Hz_biot_tetra4",
+    }.get(selected)
+    if selected_key is not None and h_new is not None:
+        result[selected_key] = float(np.asarray(h_new, dtype=float).reshape(3)[2])
+
+    if "biot_center" in requested and "Hz_biot_center" not in result:
+        center_h = _biot_savart_total_h_at_receiver(
+            E,
+            msh,
+            materials,
+            receiver_config,
+            source_current,
+            debye=debye,
+            memories=memories,
+            integration="cell_center",
+        )
+        result["Hz_biot_center"] = float(center_h[2])
+    if "biot_tetra4" in requested and "Hz_biot_tetra4" not in result:
+        tetra_h, tetra_audit = _biot_savart_total_h_at_receiver(
+            E,
+            msh,
+            materials,
+            receiver_config,
+            source_current,
+            debye=debye,
+            memories=memories,
+            integration="tetra4",
+            return_audit=True,
+        )
+        result["Hz_biot_tetra4"] = float(tetra_h[2])
+        result["biot_tetra4_audit"] = tetra_audit
+    elif "biot_tetra4" in requested and "Hz_biot_tetra4" in result:
+        result["biot_tetra4_audit"] = {
+            "method": "biot_tetra4",
+            "reused_selected_field": True,
+        }
     if h_new is not None and h_old is not None and dt is not None:
         result["dBzdt_biot_rate"] = float(
             _biot_receiver_dbdt_from_h(h_new, h_old, dt=dt)[2]
@@ -5926,13 +5955,23 @@ def _biot_h_required_for_step(
     *,
     is_output: bool,
     diagnostic_methods: tuple[str, ...] = (),
+    can_recompute_previous: bool = False,
 ) -> bool:
-    """Biot H is needed every step only for a finite-difference Biot dB/dt."""
+    """Return whether the current-step Biot field must be evaluated.
 
+    When the previous finite-element field can be evaluated on demand, a
+    finite-difference Biot rate needs the two Biot fields only at output
+    steps.  Stateful polarization currents still require the historical
+    field to be retained at every internal step.
+    """
+
+    rate_requested = (
+        str(magnetic_dbdt_mode).strip().lower() == "biot_rate"
+        or "biot_rate" in diagnostic_methods
+    )
     return (
         bool(is_output)
-        or str(magnetic_dbdt_mode).strip().lower() == "biot_rate"
-        or "biot_rate" in diagnostic_methods
+        or (rate_requested and not bool(can_recompute_previous))
     )
 
 
@@ -8230,12 +8269,21 @@ def run_fetd_forward(
 
     H_old_receiver = None
     faraday_receiver_hz = None
+    biot_rate_requested = (
+        magnetic_dbdt_mode == "biot_rate"
+        or "biot_rate" in config.magnetic_diagnostic_methods
+    )
+    can_recompute_previous_biot = (
+        magnetic_receiver_mode == "biot_ohmic"
+        or (magnetic_receiver_mode == "biot_current" and not memories)
+    )
     biot_history_required = (
         magnetic_receiver_mode in {"biot_current", "biot_ohmic"}
         and _biot_h_required_for_step(
             magnetic_dbdt_mode,
             is_output=False,
             diagnostic_methods=config.magnetic_diagnostic_methods,
+            can_recompute_previous=can_recompute_previous_biot,
         )
     )
     if biot_history_required:
@@ -8470,6 +8518,7 @@ def run_fetd_forward(
             magnetic_dbdt_mode,
             is_output=is_output,
             diagnostic_methods=config.magnetic_diagnostic_methods,
+            can_recompute_previous=can_recompute_previous_biot,
         ):
             H_new_receiver = evaluate_biot_h_set(
                 E_new,
@@ -8479,6 +8528,7 @@ def run_fetd_forward(
             magnetic_dbdt_mode,
             is_output=is_output,
             diagnostic_methods=config.magnetic_diagnostic_methods,
+            can_recompute_previous=can_recompute_previous_biot,
         ):
             H_new_receiver = evaluate_biot_h_set(
                 E_new,
@@ -8486,6 +8536,17 @@ def run_fetd_forward(
             )
         else:
             H_new_receiver = None
+
+        if (
+            is_output
+            and biot_rate_requested
+            and can_recompute_previous_biot
+            and H_new_receiver is not None
+        ):
+            H_old_receiver = evaluate_biot_h_set(
+                E_old,
+                _source_current(previous_time, config),
+            )
 
         faraday_step_dbdt = None
         faraday_step_record = None
@@ -8541,6 +8602,8 @@ def run_fetd_forward(
                             dt=dt,
                             debye=debye,
                             memories=memories,
+                            diagnostic_methods=config.magnetic_diagnostic_methods,
+                            selected_integration=config.biot_current_integration,
                         )
                         selected = _select_magnetic_receiver_outputs(
                             {"Ex": receiver_record["Ex"], **methods},

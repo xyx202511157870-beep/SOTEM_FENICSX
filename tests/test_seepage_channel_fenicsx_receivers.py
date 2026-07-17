@@ -197,19 +197,35 @@ def test_receiver_set_npz_preserves_three_dimensional_data(tmp_path) -> None:
         ] * 5
 
 
-def test_biot_h_is_only_recomputed_at_outputs_when_dbdt_uses_curl() -> None:
+def test_biot_h_is_only_recomputed_at_outputs_when_previous_field_is_available() -> None:
     module = load_pipeline_module()
     assert not module._biot_h_required_for_step("curl", is_output=False)
     assert module._biot_h_required_for_step("curl", is_output=True)
     assert module._biot_h_required_for_step("biot_rate", is_output=False)
+    assert not module._biot_h_required_for_step(
+        "biot_rate",
+        is_output=False,
+        can_recompute_previous=True,
+    )
+    assert module._biot_h_required_for_step(
+        "biot_rate",
+        is_output=True,
+        can_recompute_previous=True,
+    )
 
 
-def test_biot_rate_diagnostic_keeps_history_on_internal_steps() -> None:
+def test_biot_rate_diagnostic_skips_internal_history_when_previous_field_is_available() -> None:
     module = load_pipeline_module()
     assert module._biot_h_required_for_step(
         "faraday_loop",
         is_output=False,
         diagnostic_methods=("biot_rate",),
+    )
+    assert not module._biot_h_required_for_step(
+        "faraday_loop",
+        is_output=False,
+        diagnostic_methods=("biot_rate",),
+        can_recompute_previous=True,
     )
     assert not module._biot_h_required_for_step(
         "faraday_loop",
