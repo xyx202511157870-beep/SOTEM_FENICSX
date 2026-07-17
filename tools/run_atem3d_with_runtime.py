@@ -45,6 +45,20 @@ def _pardiso_threads() -> int | None:
     return value
 
 
+def _pardiso_ooc_settings() -> dict[str, Any]:
+    def optional_int(name: str) -> int | None:
+        raw = os.environ.get(name, "").strip()
+        return None if not raw else int(raw)
+
+    return {
+        "path": os.environ.get("MKL_PARDISO_OOC_PATH", "").strip() or None,
+        "max_core_size_mb": optional_int("MKL_PARDISO_OOC_MAX_CORE_SIZE"),
+        "max_swap_size_mb": optional_int("MKL_PARDISO_OOC_MAX_SWAP_SIZE"),
+        "keep_file": os.environ.get("MKL_PARDISO_OOC_KEEP_FILE", "").strip().lower()
+        in {"1", "true", "yes", "on"},
+    }
+
+
 def _preflight_pardiso() -> None:
     import numpy as np
     from pymatsolver import Pardiso
@@ -97,6 +111,7 @@ def _write_runtime_audit(arguments: list[str]) -> Path | None:
             item for item in os.environ.get("ATEM3D_DLL_DIRS", "").split(os.pathsep) if item
         ],
         "pardiso_out_of_core": _out_of_core_enabled(),
+        "pardiso_ooc": _pardiso_ooc_settings(),
         "pardiso_threads": _pardiso_threads(),
         "pardiso_preflight": "passed",
     }
