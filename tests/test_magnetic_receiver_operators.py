@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 from pathlib import Path
 import sys
 
@@ -148,11 +149,33 @@ def test_neumaier_vector_sum_retains_small_residual_after_cancellation() -> None
             [-1.0e16, 1.0e16, 0.0],
         ]
     )
-
     np.testing.assert_allclose(
         module.neumaier_vector_sum(values),
         [1.0, -2.0, 3.0],
     )
+
+
+def test_compensated_vector_sum_matches_fsum_for_wide_dynamic_range() -> None:
+    module = load_module()
+    values = np.array(
+        [
+            -1e207, -1e65, -1e262, 1e-96, -1e83, 1e205, 1e12, 1e-46,
+            -1e89, -1e-161, -1e266, -1e102, -1e-250, -1e-106, -1e27,
+            -1e179, 1e112, 1e-278, -1e80, -1e145, -1e-152, 1e4, -1e-251,
+            -1e74, 1e296, -1e254, -1e53, -1e-112, 1e-54, -1e75, 1e182,
+            -1e53, -1e121, 1e234, -1e296, -1e-189, -1e68, 1e-186, 1e-60,
+            -1e115,
+        ],
+        dtype=float,
+    )
+    vectors = np.column_stack([values, -values, np.ones(values.size)])
+
+    result = module.neumaier_vector_sum(vectors)
+    expected = np.array(
+        [math.fsum(vectors[:, component]) for component in range(3)]
+    )
+
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_biot_volume_integral_has_expected_sign_for_x_current_above_receiver() -> None:

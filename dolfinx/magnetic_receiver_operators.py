@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import math
 from typing import Any
 
 import numpy as np
@@ -116,7 +117,7 @@ def tetra4_rule(
 
 
 def neumaier_vector_sum(values: ArrayLike) -> NDArray[np.float64]:
-    """Accumulate three-component vectors with Neumaier compensation."""
+    """Accumulate vectors with faithfully rounded componentwise compensation."""
 
     vectors = np.asarray(values, dtype=float)
     if vectors.ndim != 2 or vectors.shape[1] != 3:
@@ -124,17 +125,10 @@ def neumaier_vector_sum(values: ArrayLike) -> NDArray[np.float64]:
     if not np.all(np.isfinite(vectors)):
         raise ValueError("values must be finite")
 
-    total = np.zeros(3, dtype=float)
-    correction = np.zeros(3, dtype=float)
-    for value in vectors:
-        updated = total + value
-        correction += np.where(
-            np.abs(total) >= np.abs(value),
-            (total - updated) + value,
-            (value - updated) + total,
-        )
-        total = updated
-    return total + correction
+    return np.asarray(
+        [math.fsum(vectors[:, component]) for component in range(3)],
+        dtype=float,
+    )
 
 
 def biot_savart_volume_h(
