@@ -144,3 +144,20 @@ def test_dolfinx_constant_current_adapter_is_finite() -> None:
     assert np.all(np.isfinite(value))
     assert value[2] > 0.0
     assert audit["sample_count"] == len(points)
+
+
+def test_tetra4_biot_quadrature_geometry_is_cached_per_mesh() -> None:
+    pytest.importorskip("dolfinx.mesh")
+
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+
+    first = sp._cell_biot_quadrature_points_weights(msh)
+    second = sp._cell_biot_quadrature_points_weights(msh)
+
+    assert second[0] is first[0]
+    assert second[1] is first[1]
+    assert second[2] is first[2]

@@ -5676,10 +5676,13 @@ def _tetrahedron_quadrature_points_weights(coords, volume: float):
 
 
 def _cell_biot_quadrature_points_weights(msh):
-    """Return cell-wise points, owning cells, and weights for Biot integration."""
+    """Return cached cell-wise points, owning cells, and Biot weights."""
 
     import numpy as np
 
+    cached = getattr(msh, "_atem3d_cell_biot_quadrature_points_weights", None)
+    if cached is not None:
+        return cached
     tdim = msh.topology.dim
     msh.topology.create_connectivity(tdim, 0)
     c_to_v = msh.topology.connectivity(tdim, 0)
@@ -5702,12 +5705,19 @@ def _cell_biot_quadrature_points_weights(msh):
         cell_blocks.append(np.full(q_points.shape[0], cell, dtype=np.int32))
         weight_blocks.append(q_weights)
     if not point_blocks:
-        return (
+        cached = (
             np.zeros((0, 3), dtype=float),
             np.zeros(0, dtype=np.int32),
             np.zeros(0, dtype=float),
         )
-    return np.vstack(point_blocks), np.concatenate(cell_blocks), np.concatenate(weight_blocks)
+    else:
+        cached = (
+            np.vstack(point_blocks),
+            np.concatenate(cell_blocks),
+            np.concatenate(weight_blocks),
+        )
+    setattr(msh, "_atem3d_cell_biot_quadrature_points_weights", cached)
+    return cached
 
 
 def _biot_savart_line_h_at_receiver(config: PipelineConfig, *, current: float, n_quad: int = 201):
@@ -5725,6 +5735,77 @@ def _biot_savart_line_h_at_receiver(config: PipelineConfig, *, current: float, n
         ),
         axis=0,
     )
+
+
+def _biot_savart_total_h_at_receiver_set(
+    E,
+    msh,
+    materials: dict[str, Any],
+    receiver_configs,
+    source_current: float,
+    *,
+    debye=None,
+    memories=None,
+    integration: str = "tetra4",
+):
+    """Return tetra4 Biot H for multiple receivers after one field evaluation."""
+
+    import numpy as np
+
+    integration_mode = str(integration).strip().lower()
+    if integration_mode != "tetra4":
+        raise ValueError("batched Biot receiver evaluation currently requires 'tetra4'")
+    configs = tuple(receiver_configs)
+    if not configs:
+        return np.empty((0, 3), dtype=float)
+
+    points, cells, weights = _cell_biot_quadrature_points_weights(msh)
+    e_values = np.asarray(E.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
+    use_debye_current = (
+        debye is not None
+        and memories is not None
+        and bool(debye.get("terms", []))
+    )
+    if use_debye_current:
+        sigma_source = materials.get(
+            "sigma_infinity_physical", materials["sigma_infinity"]
+        )
+    else:
+        sigma_source = materials.get("sigma_physical", materials["sigma"])
+    sigma = np.asarray(sigma_source.x.array, dtype=float)[cells]
+    if use_debye_current:
+        delta_values = [
+            np.asarray(delta_fn.x.array, dtype=float)[cells]
+            for delta_fn in debye["delta_functions"]
+        ]
+        memory_values = [
+            np.asarray(memory.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
+            for memory in memories
+        ]
+        currents = _cell_current_density_from_debye_values(
+            e_values, sigma, delta_values, memory_values
+        )
+    else:
+        currents = _cell_current_density_from_debye_values(e_values, sigma)
+
+    values = []
+    for receiver_config in configs:
+        sampled_h = [
+            biot_savart_volume_h(
+                receiver=receiver,
+                points=points,
+                current_density=currents,
+                weights=weights,
+            )[0]
+            for receiver in _receiver_sampling_points(receiver_config)
+        ]
+        volume_h = np.mean(np.vstack(sampled_h), axis=0)
+        line_h = _biot_savart_line_h_at_receiver(
+            receiver_config,
+            current=float(source_current),
+        )
+        values.append(volume_h + line_h)
+    return np.asarray(values, dtype=float)
 
 
 def _biot_savart_total_h_at_receiver(
@@ -8241,6 +8322,21 @@ def run_fetd_forward(
             "'nearest_center', 'shallowest', 'local_lsq', 'local_lsq_earth', 'local_lsq_air', or 'local_lsq_interface'"
         )
     def evaluate_biot_h_set(field, source_current_value: float):
+        if (
+            magnetic_receiver_mode == "biot_current"
+            and str(config.biot_current_integration).strip().lower() == "tetra4"
+        ):
+            result = _biot_savart_total_h_at_receiver_set(
+                field,
+                msh,
+                materials,
+                receiver_run_configs,
+                source_current_value,
+                debye=debye,
+                memories=memories,
+                integration="tetra4",
+            )
+            return result if multi_receiver_run else result[0]
         values = []
         for receiver_config in receiver_run_configs:
             if magnetic_receiver_mode == "biot_current":

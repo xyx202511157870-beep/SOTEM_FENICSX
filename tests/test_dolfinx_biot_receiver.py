@@ -380,6 +380,67 @@ def test_biot_total_tetra4_path_returns_finite_audit():
     assert audit["samples"][0]["sample_count"] == 4 * n_cells
 
 
+def test_biot_total_tetra4_receiver_set_evaluates_field_once_and_matches_scalar_path():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+    from types import SimpleNamespace
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    configs = (
+        sp.PipelineConfig(receiver=(0.5, 1.5, 0.5), receiver_type="point"),
+        sp.PipelineConfig(receiver=(0.5, 2.0, 0.5), receiver_type="point"),
+    )
+    spaces = sp.build_function_spaces(msh, configs[0])
+    electric = fem.Function(spaces["V"], name="varying_electric_set")
+    electric.interpolate(
+        lambda x: np.vstack(
+            [1.0 + x[1], 0.5 * x[2], x[0]]
+        )
+    )
+    electric.x.scatter_forward()
+    n_cells = msh.topology.index_map(msh.topology.dim).size_local
+    materials = {"sigma": SimpleNamespace(x=SimpleNamespace(array=np.ones(n_cells)))}
+
+    class CountingField:
+        def __init__(self, field):
+            self.field = field
+            self.eval_calls = 0
+
+        def eval(self, points, cells):
+            self.eval_calls += 1
+            return self.field.eval(points, cells)
+
+    counting = CountingField(electric)
+    batched = sp._biot_savart_total_h_at_receiver_set(
+        counting,
+        msh,
+        materials,
+        configs,
+        0.0,
+        integration="tetra4",
+    )
+    scalar = np.vstack(
+        [
+            sp._biot_savart_total_h_at_receiver(
+                electric,
+                msh,
+                materials,
+                config,
+                0.0,
+                integration="tetra4",
+            )
+            for config in configs
+        ]
+    )
+
+    assert counting.eval_calls == 1
+    np.testing.assert_allclose(batched, scalar, rtol=0.0, atol=0.0)
+
+
 def test_ampere_h_recovery_zero_current_returns_zero_receiver_h():
     import pytest
 
