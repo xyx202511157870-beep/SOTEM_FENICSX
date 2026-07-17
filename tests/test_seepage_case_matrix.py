@@ -72,6 +72,17 @@ def test_every_case_inherits_canonical_contract_and_one_controlled_study() -> No
     assert conductivity_base.execution_fingerprint == volume_base.execution_fingerprint
 
 
+def test_fenicsx_cross_10_volume_case_uses_memory_safe_twenty_cell_resolution() -> None:
+    fenicsx = _case("fenicsx-volume-channel-cross-10")
+    fenicsx_background = _case("fenicsx-volume-background-cross-10")
+    simpeg = _case("simpeg-volume-channel-cross-10")
+
+    assert fenicsx.local_mesh_size_m == 0.5
+    assert fenicsx_background.local_mesh_size_m == 0.5
+    assert fenicsx.cross_section_m / fenicsx.local_mesh_size_m == 20.0
+    assert simpeg.local_mesh_size_m == 0.25
+
+
 def test_case_manifest_is_deterministic_and_records_expected_artifacts(
     tmp_path: Path,
 ) -> None:

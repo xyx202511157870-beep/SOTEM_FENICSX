@@ -127,6 +127,11 @@ def build_case_matrix() -> tuple[VerificationCase, ...]:
                         suffix=f"cross-{_slug(cross_section)}",
                         conductivity=0.01 if role == "background" else 1.0,
                         cross_section=cross_section,
+                        mesh_size=(
+                            0.5
+                            if solver == "fenicsx" and cross_section == 10.0
+                            else 0.25
+                        ),
                     )
                 )
 
