@@ -59,6 +59,35 @@ def _replace_local_segment(
     segments[matches[0]][:2] = [float(mesh_size), count]
 
 
+def _shorten_subsurface_segment_to_surface(
+    segments: list[list[Any]], *, contraction: float
+) -> None:
+    """Keep z=0 fixed after a channel-centred local segment is widened."""
+
+    if np.isclose(contraction, 0.0):
+        return
+    matches = [
+        index
+        for index in range(len(segments) - 1)
+        if segments[index][:2] == [1.0, 10]
+        and segments[index + 1][:2] == [1.0, 10]
+    ]
+    if len(matches) != 1:
+        raise ValueError("expected the canonical subsurface/surface 1 m segments")
+    target_width = 10.0 - float(contraction)
+    whole_cells = int(np.floor(target_width + 1.0e-12))
+    remainder = target_width - whole_cells
+    replacement: list[list[Any]] = []
+    if whole_cells:
+        replacement.append([1.0, whole_cells])
+    if not np.isclose(remainder, 0.0):
+        replacement.append([float(remainder), 1])
+    if not replacement:
+        raise ValueError("volume expansion leaves no cells below the surface")
+    index = matches[0]
+    segments[index : index + 1] = replacement
+
+
 def write_simpeg_case_config(
     case: VerificationCase, output_root: str | Path
 ) -> Path:
@@ -83,6 +112,9 @@ def write_simpeg_case_config(
     expansion = cross - 1.0
     config["mesh"]["origin"][1] = float(config["mesh"]["origin"][1]) - expansion / 2.0
     config["mesh"]["origin"][2] = float(config["mesh"]["origin"][2]) - expansion / 2.0
+    _shorten_subsurface_segment_to_surface(
+        config["mesh"]["hz"], contraction=expansion / 2.0
+    )
 
     if case.role == "channel":
         half = cross / 2.0

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from atem3d.config import _build_mesh
 from atem3d.seepage_case_matrix import build_case_matrix, write_case_manifest
 from atem3d.seepage_channel_model import model_for_variant
 from atem3d.seepage_verification import (
@@ -121,6 +122,20 @@ def test_simpeg_generated_config_changes_only_the_declared_case_controls(
         case="channel",
         expected_local_mesh_size=0.5,
     )
+
+
+@pytest.mark.parametrize("cross_section", [2, 10])
+def test_simpeg_volume_mesh_keeps_surface_and_channel_on_mesh_nodes(
+    tmp_path: Path, cross_section: int
+) -> None:
+    case = _case(f"simpeg-volume-channel-cross-{cross_section}")
+    path = write_simpeg_case_config(case, tmp_path)
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    mesh = _build_mesh(config["mesh"])
+
+    half = cross_section / 2.0
+    for coordinate in (0.0, -20.0 - half, -20.0 + half):
+        assert np.min(np.abs(mesh.nodes_z - coordinate)) < 1.0e-10
 
 
 def test_fenicsx_case_command_overrides_geometry_time_and_stable_magnetic_mode(
