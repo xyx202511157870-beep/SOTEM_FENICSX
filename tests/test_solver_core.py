@@ -1,4 +1,5 @@
 import sys
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -1202,6 +1203,45 @@ def test_pardiso_out_of_core_runtime_sets_iparm_59(monkeypatch):
 
     assert configured == [(59, 2)]
     np.testing.assert_allclose(solve(np.array([1.0, 2.0])), [1.0, 2.0])
+
+
+def test_pardiso_out_of_core_releases_previous_time_step_factor(monkeypatch):
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+        time_steps=[0.01, 0.01, 0.02],
+        linear_solver="pardiso",
+        initial_magnetic_mode="zero",
+    )
+    monkeypatch.setenv("ATEM3D_PARDISO_OUT_OF_CORE", "1")
+    monkeypatch.setattr(
+        simulation,
+        "initial_electric_field",
+        lambda: np.zeros(mesh.n_edges, dtype=float),
+    )
+
+    factor_references: list[weakref.ReferenceType[object]] = []
+    alive_before_creation: list[int] = []
+
+    class FakeFactor:
+        def __call__(self, rhs):
+            return np.asarray(rhs, dtype=float)
+
+    def fake_factorize(_matrix):
+        alive_before_creation.append(
+            sum(reference() is not None for reference in factor_references)
+        )
+        factor = FakeFactor()
+        factor_references.append(weakref.ref(factor))
+        return factor
+
+    monkeypatch.setattr(simulation, "_factorize_pardiso", fake_factorize)
+
+    simulation.run_data_only()
+
+    assert alive_before_creation == [0, 0]
+    assert len(simulation._factor_cache) == 1
 
 
 def test_pardiso_runtime_limits_native_threads(monkeypatch):

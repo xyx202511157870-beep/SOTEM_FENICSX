@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gc
 import os
 from typing import Sequence
 
@@ -434,14 +435,13 @@ class TDEMIPSimulation:
 
         curl = self.mesh.edge_curl
         for step_index, dt in enumerate(self.time_steps):
-            solver = self._solver_for_step(step_index)
             if cpml_state is None:
                 rhs = self.history_rhs(e[step_index], memories, step_index) + self.source_rhs(
                     step_index
                 )
             else:
                 rhs = self.magnetic_history_rhs(b[step_index], memories, step_index, cpml_state)
-            e_new = solver(rhs)
+            e_new = self._solve_step(step_index, rhs)
             if cpml_state is None:
                 b_new = b[step_index] - float(dt) * (curl @ e_new)
             else:
@@ -519,14 +519,13 @@ class TDEMIPSimulation:
 
         curl = self.mesh.edge_curl
         for step_index, dt in enumerate(self.time_steps):
-            solver = self._solver_for_step(step_index)
             if cpml_state is None:
                 rhs = self.history_rhs(e_old, memories, step_index) + self.source_rhs(
                     step_index
                 )
             else:
                 rhs = self.magnetic_history_rhs(b_old, memories, step_index, cpml_state)
-            e_new = solver(rhs)
+            e_new = self._solve_step(step_index, rhs)
             if cpml_state is None:
                 b_new = b_old - float(dt) * (curl @ e_new)
             else:
@@ -894,6 +893,9 @@ class TDEMIPSimulation:
         if self.linear_solver == "pardiso":
             key = self._time_step_cache_key(step_index)
             if key not in self._factor_cache:
+                if self._pardiso_out_of_core_enabled():
+                    self._factor_cache.clear()
+                    gc.collect()
                 self._factor_cache[key] = self._factorize_pardiso(self.system_matrix(step_index))
             return self._factor_cache[key]
 
@@ -901,6 +903,20 @@ class TDEMIPSimulation:
         if key not in self._factor_cache:
             self._factor_cache[key] = self._factorize(self.system_matrix(step_index))
         return self._factor_cache[key]
+
+    def _solve_step(self, step_index: int, rhs: np.ndarray) -> np.ndarray:
+        """Solve one time step without retaining a caller-side factor reference."""
+
+        return self._solver_for_step(step_index)(rhs)
+
+    @staticmethod
+    def _pardiso_out_of_core_enabled() -> bool:
+        return os.environ.get("ATEM3D_PARDISO_OUT_OF_CORE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     def _cg_preconditioner(self, matrix: sp.spmatrix):
         if self.cg_preconditioner == "none":
@@ -933,12 +949,7 @@ class TDEMIPSimulation:
             is_symmetric=False if active_cpml else True,
             is_positive_definite=False if active_cpml else True,
         )
-        if os.environ.get("ATEM3D_PARDISO_OUT_OF_CORE", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
+        if TDEMIPSimulation._pardiso_out_of_core_enabled():
             solver.solver.set_iparm(59, 2)
         return solver.solve
 
