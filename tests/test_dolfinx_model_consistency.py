@@ -738,6 +738,23 @@ def test_explicit_observation_times_reject_invalid_values(observation_times):
     assert str(exc_info.value) == "observation_times must be finite, positive, and strictly increasing"
 
 
+@pytest.mark.parametrize(
+    "observation_times",
+    [
+        np.asarray(1.0e-5),
+        np.empty((0, 1)),
+    ],
+)
+def test_explicit_observation_times_reject_non_one_dimensional_inputs(observation_times):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(observation_times=observation_times)
+
+    with pytest.raises(ValueError) as exc_info:
+        sp.generate_time_array(config)
+
+    assert str(exc_info.value) == "observation_times must be finite, positive, and strictly increasing"
+
+
 def test_ideal_step_off_schedule_has_no_synthetic_ramp_steps():
     sp = _load_pipeline_module()
     times = np.array([1.0e-5, 1.0e-4, 1.0e-3])

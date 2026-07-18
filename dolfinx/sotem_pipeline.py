@@ -894,10 +894,12 @@ def generate_time_array(config: PipelineConfig):
 
     import numpy as np
 
-    if len(config.observation_times) > 0:
+    uses_legacy_grid = isinstance(config.observation_times, tuple) and config.observation_times == ()
+    if not uses_legacy_grid:
         values = np.asarray(config.observation_times, dtype=float)
         if (
             values.ndim != 1
+            or values.size == 0
             or not np.all(np.isfinite(values))
             or np.any(values <= 0.0)
             or np.any(np.diff(values) <= 0.0)
