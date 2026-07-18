@@ -42,11 +42,16 @@ def _load_payload(tmp_path, payload):
 
 def test_lei_case_matches_approved_design():
     case = load_benchmark_case(ROOT / "benchmarks/sotem/lei2023_noip.yaml")
+    assert case.case_id == "lei2023_noip"
+    assert case.coordinates == "z_down"
     assert case.source_start_down == (-500.0, 0.0, 0.1)
     assert case.source_end_down == (500.0, 0.0, 0.1)
     assert case.receiver_down == (0.0, 800.0, 0.1)
     assert case.current_a == 1.0
     assert case.rho_air_ohm_m == 1.0e8
+    assert case.earth == {"rho_ohm_m": 100.0}
+    assert case.polarization is None
+    assert case.components == ["Ex", "Ey", "Hz", "dBzdt"]
     assert case.observation_times.size == 41
     assert case.observation_times[[0, -1]].tolist() == pytest.approx(
         [1.0e-5, 1.0e-1]
@@ -55,12 +60,24 @@ def test_lei_case_matches_approved_design():
 
 def test_song_pair_changes_only_polarization():
     case = load_benchmark_case(ROOT / "benchmarks/sotem/song2025_layered_pair.yaml")
+    assert case.case_id == "song2025_layered_pair"
+    assert case.coordinates == "z_down"
     assert case.source_start_down == (-500.0, 0.0, 0.1)
     assert case.source_end_down == (500.0, 0.0, 0.1)
     assert case.receiver_down == (0.0, -500.0, 0.1)
     assert case.current_a == 10.0
     assert case.rho_air_ohm_m == 1.0e6
+    assert case.earth == {
+        "layers": [
+            {"top_m": 0.0, "bottom_m": 300.0, "rho_ohm_m": 100.0},
+            {"top_m": 300.0, "bottom_m": None, "rho_ohm_m": 100.0},
+        ]
+    }
+    assert case.components == ["Ex", "Ey", "Hz", "dBzdt"]
     assert case.observation_times.size == 51
+    assert case.observation_times[[0, -1]].tolist() == pytest.approx(
+        [1.0e-5, 1.0]
+    )
     assert case.polarization == {
         "top_m": 0.0,
         "bottom_m": 300.0,
