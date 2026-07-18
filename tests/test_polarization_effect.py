@@ -40,13 +40,23 @@ def test_write_polarization_effect_artifacts_computes_ip_minus_noip(tmp_path):
         "dBzdt": 0.015,
     }
     assert set(summary["max_robust_error_by_component"]) == {"Ex", "Ey", "dBzdt"}
+    assert set(summary["max_acceptance_error_by_component"]) == {"Ex", "Ey", "dBzdt"}
     assert set(summary["zero_crossings"]) == {"Ex", "Ey", "dBzdt"}
+    assert summary["legacy_pass_5pct_is_threshold_alias"] is True
+    assert summary["zero_crossing_time_tolerance"] == 0.05
     pred_rows = list(csv.DictReader((tmp_path / "effect" / "polarization_effect_predictions.csv").open()))
     ref_rows = list(csv.DictReader((tmp_path / "effect" / "polarization_effect_reference.csv").open()))
     assert float(pred_rows[0]["Ex"]) == 0.5
     assert float(pred_rows[1]["dBzdt"]) == 2.0
     assert float(ref_rows[0]["Ex"]) == 0.25
     assert float(ref_rows[1]["dBzdt"]) == 1.0
+    error_rows = list(
+        csv.DictReader((tmp_path / "effect" / "polarization_effect_errors.csv").open())
+    )
+    assert {"response_strength", "acceptance_error", "pass_threshold", "pass_5pct"} <= set(
+        error_rows[0]
+    )
+    assert error_rows[0]["pass_threshold"] == error_rows[0]["pass_5pct"]
     for name in (
         "polarization_effect_reference.csv",
         "polarization_effect_errors.csv",
@@ -116,3 +126,5 @@ def test_polarization_effect_serializes_crossing_count_mismatch_without_nonfinit
     assert "Infinity" not in payload_text
     assert payload["zero_crossings"]["Ex"]["count_match"] is False
     assert payload["zero_crossings"]["Ex"]["max_relative_time_error"] == "count_mismatch"
+    assert payload["zero_crossings"]["Ex"]["passed"] is False
+    assert payload["zero_crossings_pass_all_components"] is False

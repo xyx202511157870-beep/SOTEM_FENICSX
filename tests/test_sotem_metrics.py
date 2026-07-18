@@ -52,6 +52,28 @@ def test_signed_response_uses_one_percent_peak_floor():
     assert result["max_robust_error_by_component"]["Ex"] == pytest.approx(0.5)
 
 
+def test_signed_response_weak_sample_uses_only_peak_normalized_acceptance_error():
+    result = compare_signed_response(
+        np.array([1.0, 2.0]),
+        np.array([[1.0], [0.05]]),
+        np.array([[1.0], [0.0]]),
+        ["Ex"],
+        threshold=0.10,
+    )
+
+    weak_row = result["rows"][1]
+    assert weak_row["response_strength"] == "weak"
+    assert weak_row["relative_error_with_floor"] == pytest.approx(5.0)
+    assert weak_row["peak_normalized_error"] == pytest.approx(0.05)
+    assert weak_row["acceptance_error"] == pytest.approx(0.05)
+    assert weak_row["pass_threshold"]
+    assert weak_row["pass_5pct"]
+    assert result["max_acceptance_error_by_component"]["Ex"] == pytest.approx(0.05)
+    assert result["summary"]["amplitude_pass_all_components"] is True
+    assert result["summary"]["pass_all_components"] is True
+    assert result["summary"]["legacy_pass_5pct_is_threshold_alias"] is True
+
+
 @pytest.mark.parametrize(
     ("values", "expected"),
     [
@@ -119,6 +141,7 @@ def test_signed_response_reports_matched_crossing_time_error():
     assert crossing["reference"] == pytest.approx([1.25])
     assert crossing["count_match"] is True
     assert crossing["max_relative_time_error"] == pytest.approx(0.2)
+    assert crossing["passed"] is False
 
 
 def test_signed_response_reports_crossing_count_mismatch_as_infinity():
@@ -133,6 +156,8 @@ def test_signed_response_reports_crossing_count_mismatch_as_infinity():
     crossing = result["zero_crossings"]["Ex"]
     assert crossing["count_match"] is False
     assert crossing["max_relative_time_error"] == float("inf")
+    assert crossing["passed"] is False
+    assert result["summary"]["zero_crossings_pass_all_components"] is False
 
 
 def test_signed_response_reports_zero_error_when_neither_curve_crosses_zero():
@@ -150,7 +175,42 @@ def test_signed_response_reports_zero_error_when_neither_curve_crosses_zero():
         "reference": [],
         "count_match": True,
         "max_relative_time_error": 0.0,
+        "passed": True,
     }
+
+
+def test_signed_response_zero_crossing_count_is_hard_gate_after_amplitude_passes():
+    result = compare_signed_response(
+        np.array([1.0, 2.0]),
+        np.array([[1.0], [-0.0004]]),
+        np.array([[1.0], [0.0004]]),
+        ["Ex"],
+        threshold=0.10,
+    )
+
+    assert result["summary"]["amplitude_pass_all_components"] is True
+    assert result["summary"]["zero_crossings_pass_all_components"] is False
+    assert result["summary"]["zero_crossing_failed_components"] == ["Ex"]
+    assert result["summary"]["pass_all_components"] is False
+    assert result["summary"]["failed_components"] == ["Ex"]
+
+
+def test_signed_response_crossing_time_over_five_percent_is_hard_gate():
+    result = compare_signed_response(
+        np.array([1.0, 2.0, 3.0]),
+        np.array([[1.0], [-0.009], [-0.01]]),
+        np.array([[1.0], [0.009], [-0.01]]),
+        ["Ex"],
+        threshold=0.10,
+    )
+
+    crossing = result["zero_crossings"]["Ex"]
+    assert result["summary"]["amplitude_pass_all_components"] is True
+    assert crossing["count_match"] is True
+    assert crossing["max_relative_time_error"] > 0.05
+    assert crossing["passed"] is False
+    assert result["summary"]["zero_crossing_time_tolerance"] == 0.05
+    assert result["summary"]["pass_all_components"] is False
 
 
 def test_signed_response_preserves_negative_and_near_zero_signed_samples():
@@ -201,6 +261,9 @@ def test_signed_response_rejects_zero_reference_peak():
         ([1.0], [[1.0]], [[1.0]], [1], 0.10),
         ([1.0], [[1.0]], [[1.0]], ["Ex"], 0.0),
         ([1.0], [[1.0]], [[1.0]], ["Ex"], np.inf),
+        ([1.0], [[1.0]], [[1.0]], ["Ex"], True),
+        ([1.0], [[1.0, 1.0]], [[1.0, 1.0]], "Ex", 0.10),
+        ([1.0], [[1.0, 1.0]], [[1.0, 1.0]], b"Ex", 0.10),
     ],
 )
 def test_signed_response_rejects_invalid_inputs(

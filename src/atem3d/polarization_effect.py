@@ -55,6 +55,9 @@ def write_polarization_effect_artifacts(
         "threshold": float(threshold),
         "floor_by_component": comparison["floor_by_component"],
         "max_robust_error_by_component": comparison["max_robust_error_by_component"],
+        "max_acceptance_error_by_component": comparison[
+            "max_acceptance_error_by_component"
+        ],
         "zero_crossings": _json_safe_zero_crossings(comparison["zero_crossings"]),
     }
     _write_response_csv(output / "polarization_effect_predictions.csv", pred_times, effect_pred, components)
@@ -89,6 +92,7 @@ def _json_safe_zero_crossings(zero_crossings: dict) -> dict:
             "prediction": list(item["prediction"]),
             "reference": list(item["reference"]),
             "count_match": bool(item["count_match"]),
+            "passed": bool(item["passed"]),
             "max_relative_time_error": (
                 float(item["max_relative_time_error"])
                 if item["count_match"]

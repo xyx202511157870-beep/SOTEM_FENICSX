@@ -7,6 +7,9 @@ import numpy as np
 from atem3d.metrics import robust_component_errors
 
 
+_ZERO_CROSSING_TIME_TOLERANCE = 0.05
+
+
 def linear_zero_crossings(times, values) -> np.ndarray:
     """Return times where a signed curve crosses zero.
 
@@ -89,6 +92,8 @@ def compare_signed_response(
     if not np.all(np.isfinite(reference_values)):
         raise ValueError("reference must be finite")
 
+    if isinstance(components, (str, bytes)):
+        raise ValueError("components must be a sequence of strings, not str or bytes")
     try:
         component_names = list(components)
     except TypeError as exc:
@@ -103,6 +108,8 @@ def compare_signed_response(
     if len(component_names) != prediction_values.shape[1]:
         raise ValueError("components must match response columns")
 
+    if isinstance(threshold, (bool, np.bool_)):
+        raise ValueError("threshold must be finite and positive, not boolean")
     try:
         threshold_value = float(threshold)
     except (TypeError, ValueError, OverflowError) as exc:
@@ -118,7 +125,7 @@ def compare_signed_response(
                 f"reference peak for component {component!r} must be finite and positive"
             )
         floor_by_component[component] = 0.01 * reference_peak
-    rows, summary = robust_component_errors(
+    diagnostic_rows, summary = robust_component_errors(
         time_values,
         prediction_values,
         reference_values,
@@ -126,11 +133,30 @@ def compare_signed_response(
         threshold=threshold_value,
         floor_overrides=floor_by_component,
     )
+    rows = _acceptance_rows(
+        diagnostic_rows,
+        floor_by_component=floor_by_component,
+        threshold=threshold_value,
+    )
     max_robust_error_by_component = {
         component: float(summary[f"max_error_{component}"])
         for component in component_names
     }
+    max_acceptance_error_by_component: dict[str, float] = {}
+    amplitude_failed_components: list[str] = []
+    amplitude_failed_times: set[float] = set()
+    for component in component_names:
+        component_rows = rows[rows["component"] == component]
+        max_acceptance_error_by_component[component] = float(
+            np.max(component_rows["acceptance_error"])
+        )
+        failed_rows = component_rows[~component_rows["pass_threshold"]]
+        if failed_rows.size:
+            amplitude_failed_components.append(component)
+            amplitude_failed_times.update(float(time) for time in failed_rows["time_obs"])
+
     zero_crossings = {}
+    zero_crossing_failed_components: list[str] = []
     for index, component in enumerate(component_names):
         prediction_crossings = linear_zero_crossings(
             time_values, prediction_values[:, index]
@@ -150,19 +176,87 @@ def compare_signed_response(
                     / np.abs(reference_crossings)
                 )
             )
+        crossing_passed = bool(
+            count_match and max_error <= _ZERO_CROSSING_TIME_TOLERANCE
+        )
+        if not crossing_passed:
+            zero_crossing_failed_components.append(component)
         zero_crossings[component] = {
             "prediction": prediction_crossings.tolist(),
             "reference": reference_crossings.tolist(),
             "count_match": bool(count_match),
             "max_relative_time_error": max_error,
+            "passed": crossing_passed,
         }
+
+    robust_failed_components = list(summary["failed_components"])
+    robust_failed_times = list(summary["failed_times"])
+    amplitude_passed = not amplitude_failed_components
+    zero_crossings_passed = not zero_crossing_failed_components
+    failed_components = sorted(
+        set(amplitude_failed_components) | set(zero_crossing_failed_components)
+    )
+    summary.update(
+        {
+            "robust_diagnostic_pass_all_components": bool(summary["pass_all_components"]),
+            "robust_diagnostic_failed_components": robust_failed_components,
+            "robust_diagnostic_failed_times": robust_failed_times,
+            "legacy_pass_5pct_is_threshold_alias": True,
+            "amplitude_threshold": threshold_value,
+            "amplitude_pass_all_components": amplitude_passed,
+            "amplitude_failed_components": amplitude_failed_components,
+            "amplitude_failed_times": sorted(amplitude_failed_times),
+            "max_acceptance_error_by_component": max_acceptance_error_by_component,
+            "zero_crossing_time_tolerance": _ZERO_CROSSING_TIME_TOLERANCE,
+            "zero_crossings_pass_all_components": zero_crossings_passed,
+            "zero_crossing_failed_components": zero_crossing_failed_components,
+            "pass_all_components": bool(amplitude_passed and zero_crossings_passed),
+            "failed_components": failed_components,
+            "failed_times": sorted(amplitude_failed_times),
+        }
+    )
     return {
         "rows": rows,
         "summary": summary,
         "floor_by_component": floor_by_component,
         "max_robust_error_by_component": max_robust_error_by_component,
+        "max_acceptance_error_by_component": max_acceptance_error_by_component,
         "zero_crossings": zero_crossings,
     }
+
+
+def _acceptance_rows(
+    diagnostic_rows: np.ndarray,
+    *,
+    floor_by_component: dict[str, float],
+    threshold: float,
+) -> np.ndarray:
+    dtype = np.dtype(
+        [
+            *diagnostic_rows.dtype.descr,
+            ("response_strength", "U6"),
+            ("acceptance_error", "f8"),
+            ("pass_threshold", "?"),
+        ]
+    )
+    rows = np.empty(diagnostic_rows.shape, dtype=dtype)
+    for field in diagnostic_rows.dtype.names:
+        rows[field] = diagnostic_rows[field]
+
+    for index, row in enumerate(diagnostic_rows):
+        component = str(row["component"])
+        strong = abs(float(row["ref"])) >= floor_by_component[component]
+        acceptance_error = float(
+            row["relative_error_with_floor"]
+            if strong
+            else row["peak_normalized_error"]
+        )
+        passed = bool(acceptance_error <= threshold)
+        rows[index]["response_strength"] = "strong" if strong else "weak"
+        rows[index]["acceptance_error"] = acceptance_error
+        rows[index]["pass_threshold"] = passed
+        rows[index]["pass_5pct"] = passed
+    return rows
 
 
 def _validated_times(times) -> np.ndarray:
