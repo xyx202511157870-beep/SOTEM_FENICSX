@@ -527,8 +527,8 @@ def test_corrected_model_run_cli_writes_acceptance_config_for_both_cases(tmp_pat
         offset = 1.0 if case_spec["case_type"] == "ip" else 0.0
         response_csv = (
             "time_obs,Ex,Ey,dBzdt\n"
-            f"1e-05,{1.0 + offset},0.0,{2.0 + offset}\n"
-            f"1.0,{2.0 + offset},0.0,{3.0 + offset}\n"
+            f"1e-05,{1.0 + offset},{0.5 + 0.1 * offset},{2.0 + offset}\n"
+            f"1.0,{2.0 + offset},{0.5 + 0.1 * offset},{3.0 + offset}\n"
         )
         (output_dir / "predictions.csv").write_text(response_csv, encoding="utf-8")
         (output_dir / "reference_empymod_or_1d.csv").write_text(response_csv, encoding="utf-8")
