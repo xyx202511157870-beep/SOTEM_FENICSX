@@ -37,7 +37,7 @@ FIGURE_NAMES = (
     "verified_volume_sweep.png",
     "verified_convergence.png",
     "verified_parity.png",
-    "verified_three_solver_anomaly.png",
+    "verified_two_solver_anomaly.png",
 )
 
 
@@ -142,7 +142,7 @@ def _plot_grid(
 ) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.3))
     colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(REPORT_RECEIVER_INDICES)))
-    styles = {"empymod": ":", "SimPEG": "--", "FEniCSx": "-", "COMSOL": "-."}
+    styles = {"empymod": ":", "SimPEG": "--", "FEniCSx": "-"}
     all_values = np.concatenate([np.ravel(np.abs(value)) for value in series.values()])
     linthresh = max(float(np.nanmax(all_values)) * 1e-7, np.finfo(float).tiny)
     for component_index, (axis, component, unit) in enumerate(zip(axes, COMPONENTS, UNITS)):
@@ -235,9 +235,9 @@ def _plot_parity(path: Path, summary: dict[str, Any]) -> None:
     _save(fig, path)
 
 
-def _plot_three_solver(path: Path, times: np.ndarray, deltas: Mapping[str, np.ndarray]) -> None:
+def _plot_two_solver(path: Path, times: np.ndarray, deltas: Mapping[str, np.ndarray]) -> None:
     fig, axes = plt.subplots(4, 3, figsize=(13.5, 12), sharex=True)
-    styles = {"SimPEG": "--", "FEniCSx": "-", "COMSOL": "-."}
+    styles = {"SimPEG": "--", "FEniCSx": "-"}
     for row, receiver_index in enumerate(REPORT_RECEIVER_INDICES):
         for column, (component, unit) in enumerate(zip(COMPONENTS, UNITS)):
             axis = axes[row, column]
@@ -267,17 +267,13 @@ def generate_verified_plots(result_dir: str | Path) -> list[Path]:
     for solver, label in (("simpeg", "SimPEG"), ("fenicsx", "FEniCSx")):
         backgrounds[label] = _case(root, solver, f"{solver}-conductivity-background-reference", fingerprint)["values"]
         channels[label] = _case(root, solver, f"{solver}-conductivity-channel-sigma-1", fingerprint)["values"]
-    comsol_background = _load(root / "comsol_3d" / "background" / "normalized.npz", fingerprint)
-    comsol_channel = _load(root / "comsol_3d" / "channel" / "normalized.npz", fingerprint)
-    backgrounds["COMSOL"] = comsol_background["values"]
-    channels["COMSOL"] = comsol_channel["values"]
     empymod = _load(root / "verification_empymod_background.npz", fingerprint)
     backgrounds["empymod"] = empymod["values"]
     times = np.asarray(empymod["times"], dtype=float)
 
     _plot_grid(root / FIGURE_NAMES[1], times, backgrounds, title="Verified uniform-background response", mode="decay")
     _plot_grid(root / FIGURE_NAMES[2], times, channels, title="Verified finite 60 x 1 x 1 m channel total response", mode="decay")
-    deltas = {name: channels[name] - backgrounds[name] for name in ("SimPEG", "FEniCSx", "COMSOL")}
+    deltas = {name: channels[name] - backgrounds[name] for name in ("SimPEG", "FEniCSx")}
     _plot_grid(root / FIGURE_NAMES[3], times, deltas, title="Signed channel anomaly (channel - background)", mode="signed")
     relative = {name: _relative(deltas[name], backgrounds[name]) for name in deltas}
     _plot_grid(root / FIGURE_NAMES[4], times, relative, title="Relative channel anomaly", mode="relative")
@@ -285,7 +281,7 @@ def generate_verified_plots(result_dir: str | Path) -> list[Path]:
     _plot_sweep(root / FIGURE_NAMES[6], summary, "volume", "channel cross-section width (m)")
     _plot_convergence(root / FIGURE_NAMES[7], summary)
     _plot_parity(root / FIGURE_NAMES[8], summary)
-    _plot_three_solver(root / FIGURE_NAMES[9], times, deltas)
+    _plot_two_solver(root / FIGURE_NAMES[9], times, deltas)
     return [root / name for name in FIGURE_NAMES]
 
 
