@@ -16,6 +16,7 @@ _CANONICAL_COLUMNS = (
     "Bz_T",
     "dBzdt_T_per_s",
 )
+_CANONICAL_INDEX = {name: index for index, name in enumerate(_CANONICAL_COLUMNS)}
 
 
 def _immutable_array(values: np.ndarray) -> np.ndarray:
@@ -33,6 +34,30 @@ def _real_array(values, *, name: str, ndim: int) -> np.ndarray:
     if array.ndim != ndim or array.dtype.kind not in "iuf":
         raise ValueError(f"{name} must be a real numeric {ndim}-D array")
     return np.array(array, dtype=float, copy=True)
+
+
+def _validated_times(times) -> np.ndarray:
+    normalized = _real_array(times, name="times", ndim=1)
+    if normalized.size == 0:
+        raise ValueError("times must be nonempty")
+    if not np.all(np.isfinite(normalized)):
+        raise ValueError("times must contain only finite values")
+    if np.any(normalized <= 0.0):
+        raise ValueError("times must contain only positive values")
+    if np.any(np.diff(normalized) <= 0.0):
+        raise ValueError("times must be strictly increasing")
+    return normalized
+
+
+def _validated_values(values, *, row_count: int, column_count: int) -> np.ndarray:
+    normalized = _real_array(values, name="values", ndim=2)
+    if normalized.shape[0] != row_count:
+        raise ValueError("values row count must equal times length")
+    if normalized.shape[1] != column_count:
+        raise ValueError(f"values must contain exactly {column_count} columns")
+    if not np.all(np.isfinite(normalized)):
+        raise ValueError("values must contain only finite values")
+    return normalized
 
 
 def _component_names(components) -> tuple[str, ...]:
@@ -55,22 +80,33 @@ def _component_names(components) -> tuple[str, ...]:
     return names
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class CanonicalResponse:
     times: np.ndarray
     values: np.ndarray
     columns: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "times", _immutable_array(self.times))
-        object.__setattr__(self, "values", _immutable_array(self.values))
-        object.__setattr__(self, "columns", tuple(self.columns))
+        if type(self.columns) is not tuple or self.columns != _CANONICAL_COLUMNS:
+            raise ValueError("columns must equal the canonical response columns")
+        times = _validated_times(self.times)
+        values = _validated_values(
+            self.values,
+            row_count=times.size,
+            column_count=len(_CANONICAL_COLUMNS),
+        )
+        object.__setattr__(self, "times", _immutable_array(times))
+        object.__setattr__(self, "values", _immutable_array(values))
 
     @property
     def ey_to_ex_peak_ratio(self) -> float:
         """Return the absolute peak ratio, defining zero/zero as no violation."""
-        ex_peak = float(np.max(np.abs(self.values[:, 0])))
-        ey_peak = float(np.max(np.abs(self.values[:, 1])))
+        ex_peak = float(
+            np.max(np.abs(self.values[:, _CANONICAL_INDEX["Ex_V_per_m"]]))
+        )
+        ey_peak = float(
+            np.max(np.abs(self.values[:, _CANONICAL_INDEX["Ey_V_per_m"]]))
+        )
         if ex_peak == 0.0:
             return 0.0 if ey_peak == 0.0 else float("inf")
         return ey_peak / ex_peak
@@ -87,22 +123,12 @@ class CanonicalResponse:
 
 def canonical_response(times, values, components) -> CanonicalResponse:
     names = _component_names(components)
-    normalized_times = _real_array(times, name="times", ndim=1)
-    source = _real_array(values, name="values", ndim=2)
-    if normalized_times.size == 0:
-        raise ValueError("times must be nonempty")
-    if not np.all(np.isfinite(normalized_times)):
-        raise ValueError("times must contain only finite values")
-    if np.any(normalized_times <= 0.0):
-        raise ValueError("times must contain only positive values")
-    if np.any(np.diff(normalized_times) <= 0.0):
-        raise ValueError("times must be strictly increasing")
-    if source.shape[0] != normalized_times.size:
-        raise ValueError("values row count must equal times length")
-    if source.shape[1] != len(names):
-        raise ValueError("values column count must equal components length")
-    if not np.all(np.isfinite(source)):
-        raise ValueError("values must contain only finite values")
+    normalized_times = _validated_times(times)
+    source = _validated_values(
+        values,
+        row_count=normalized_times.size,
+        column_count=len(names),
+    )
 
     component_indices = {name: index for index, name in enumerate(names)}
     hz = source[:, component_indices["Hz"]]
