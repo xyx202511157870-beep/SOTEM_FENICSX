@@ -65,6 +65,18 @@ def test_failed_ip_gate_preserves_noip_internal_validation():
     assert summary["reason_codes"] == ["missing_or_failed_gate:material_gate"]
 
 
+def test_exact_reference_remains_independent_when_a_required_gate_fails():
+    gates = passing_gates()
+    gates["lei_simpeg"] = False
+
+    summary = summarize_sotem_gates(gates)
+
+    assert summary["state"] == "failed_with_reproducible_evidence"
+    assert summary["noip_reference_independent"] is True
+    assert summary["ip_reference_independent"] is True
+    assert summary["reference_independent"] is True
+
+
 def test_noip_reference_cannot_validate_ip_when_all_gates_pass():
     summary = summarize_sotem_gates(passing_gates("empymod_noip_layered"))
 

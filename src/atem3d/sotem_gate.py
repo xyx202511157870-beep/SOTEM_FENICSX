@@ -112,8 +112,8 @@ def summarize_sotem_gates(gates: Mapping[str, Any]) -> dict[str, Any]:
         "state": state,
         "noip_internally_validated": noip_internally_validated,
         "ip_internally_validated": ip_internally_validated,
-        "reference_independent": state
-        in {"noip_internally_validated", "ip_internally_validated"},
+        "reference_independent": noip_reference_independent
+        or ip_reference_independent,
         "noip_reference_independent": noip_reference_independent,
         "ip_reference_independent": ip_reference_independent,
         "gates": gates_copy,
