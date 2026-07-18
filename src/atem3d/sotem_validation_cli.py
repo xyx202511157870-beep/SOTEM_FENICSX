@@ -13,8 +13,10 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 from types import ModuleType
 from typing import Any
 import uuid
@@ -679,45 +681,178 @@ def _simpeg(args: argparse.Namespace) -> int:
     return 0
 
 
-def _required_pair_files(directory: Path) -> list[Path]:
-    if not directory.is_dir():
-        raise FileNotFoundError(f"effect input directory does not exist: {directory}")
-    required = [
-        directory / "predictions.csv",
-        directory / "reference_empymod_or_1d.csv",
-    ]
-    for path in required:
-        if not path.is_file() or path.stat().st_size == 0:
-            raise FileNotFoundError(f"complete effect input is missing: {path}")
-    return required
+def _source_run_evidence(
+    run_dir: Path,
+    *,
+    effect_manifest: Mapping[str, Any],
+    role: str,
+    solver_id: str,
+    stage_name: str,
+    variant: str,
+    evidence_name: str,
+) -> tuple[Path, dict[str, Any]]:
+    manifest = _load_manifest(run_dir)
+    if manifest.get("schema") != MANIFEST_SCHEMA:
+        raise ValueError(f"{role} manifest schema mismatch")
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise ValueError(f"{role} manifest schema version mismatch")
+    if manifest.get("run_id") != run_dir.name:
+        raise ValueError(f"{role} manifest run_id mismatch")
+    if manifest.get("case_id") != effect_manifest.get("case_id"):
+        raise ValueError(f"{role} case_id does not match the effect run")
+    if manifest.get("case_hash") != effect_manifest.get("case_hash"):
+        raise ValueError(f"{role} case_hash does not match the effect run")
+    if manifest.get("level") != effect_manifest.get("level"):
+        raise ValueError(f"{role} level does not match the effect run")
+    if manifest.get("solver_id") != solver_id:
+        raise ValueError(f"{role} solver_id mismatch")
+    expected_inputs = {"variant": variant}
+    if stage_name == "simpeg":
+        expected_inputs["level"] = manifest.get("level")
+    if not _completed_stage_is_intact(
+        run_dir,
+        manifest,
+        stage_name,
+        expected_inputs,
+    ):
+        raise ValueError(f"{role} lacks a completed {stage_name} stage")
+    stage = manifest["stages"][stage_name]
+    evidence_path = run_dir / evidence_name
+    expected_hash = stage["file_sha256"].get(evidence_name)
+    if type(expected_hash) is not str:
+        raise ValueError(f"{role} stage does not hash {evidence_name}")
+    actual_hash = _sha256_file(evidence_path)
+    if actual_hash != expected_hash:
+        raise ValueError(f"{role} {evidence_name} evidence hash mismatch")
+    return evidence_path, {
+        "run_dir": str(run_dir),
+        "run_id": manifest["run_id"],
+        "case_id": manifest["case_id"],
+        "case_hash": manifest["case_hash"],
+        "level": manifest["level"],
+        "solver_id": solver_id,
+        "stage": stage_name,
+        "variant": variant,
+        "evidence_file": evidence_name,
+        "evidence_file_sha256": actual_hash,
+    }
+
+
+def _validated_effect_sources(
+    args: argparse.Namespace,
+    *,
+    effect_run_dir: Path,
+    effect_case: BenchmarkCase,
+    effect_manifest: Mapping[str, Any],
+) -> tuple[dict[str, Path], dict[str, Any]]:
+    if (
+        effect_case.case_id != "song2025_layered_pair"
+        or effect_case.polarization is None
+    ):
+        raise ValueError("polarization effect requires a polarizable Song benchmark case")
+    raw_paths = {
+        "noip_simpeg": args.noip_simpeg_run,
+        "noip_reference": args.noip_reference_run,
+        "ip_simpeg": args.ip_simpeg_run,
+        "ip_reference": args.ip_reference_run,
+    }
+    resolved: dict[str, Path] = {}
+    for role, value in raw_paths.items():
+        path = Path(value).expanduser().resolve(strict=True)
+        if not path.is_dir():
+            raise FileNotFoundError(f"{role} source run is not a directory: {path}")
+        resolved[role] = path
+    if len(set(resolved.values())) != len(resolved):
+        raise ValueError("the four polarization-effect source runs must be distinct")
+    if effect_run_dir in resolved.values():
+        raise ValueError("the effect output run cannot also be a source run")
+
+    specifications = {
+        "noip_simpeg": (
+            SIMPEG_SOLVER_ID,
+            "simpeg",
+            "noip",
+            "predictions.csv",
+        ),
+        "noip_reference": (
+            "empymod",
+            "reference",
+            "noip",
+            "reference_empymod_or_1d.csv",
+        ),
+        "ip_simpeg": (
+            SIMPEG_SOLVER_ID,
+            "simpeg",
+            "ip",
+            "predictions.csv",
+        ),
+        "ip_reference": (
+            "empymod",
+            "reference",
+            "cole-cole-exact",
+            "reference_empymod_or_1d.csv",
+        ),
+    }
+    evidence_paths: dict[str, Path] = {}
+    identities: dict[str, Any] = {}
+    for role, (solver_id, stage_name, variant, evidence_name) in specifications.items():
+        evidence_path, identity = _source_run_evidence(
+            resolved[role],
+            effect_manifest=effect_manifest,
+            role=role,
+            solver_id=solver_id,
+            stage_name=stage_name,
+            variant=variant,
+            evidence_name=evidence_name,
+        )
+        evidence_paths[role] = evidence_path
+        identities[role] = identity
+    return evidence_paths, {"source_runs": identities, "threshold": 0.10}
 
 
 def _effect(args: argparse.Namespace) -> int:
-    run_dir, _case, manifest = _open_run(args, expected_solver=EFFECT_SOLVER_ID)
-    noip_dir = Path(args.noip_dir).expanduser().resolve(strict=True)
-    ip_dir = Path(args.ip_dir).expanduser().resolve(strict=True)
-    pair_files = _required_pair_files(noip_dir) + _required_pair_files(ip_dir)
-    inputs = {
-        "noip_dir": str(noip_dir),
-        "ip_dir": str(ip_dir),
-        "input_file_sha256": {str(path): _sha256_file(path) for path in pair_files},
-        "threshold": 0.10,
-    }
+    run_dir, case, manifest = _open_run(args, expected_solver=EFFECT_SOLVER_ID)
+    evidence, inputs = _validated_effect_sources(
+        args,
+        effect_run_dir=run_dir,
+        effect_case=case,
+        effect_manifest=manifest,
+    )
     output_dir = run_dir / "effect"
     if _completed_stage_is_intact(run_dir, manifest, "effect", inputs):
         return 0
     _refuse_existing_outputs([output_dir])
 
-    summary = write_polarization_effect_artifacts(
-        noip_dir,
-        ip_dir,
-        output_dir,
-        threshold=0.10,
-    )
-    _json_value(summary)
+    with tempfile.TemporaryDirectory(
+        prefix=".effect-staging-", dir=run_dir
+    ) as temporary_text:
+        temporary = Path(temporary_text)
+        noip_staging = temporary / "noip"
+        ip_staging = temporary / "ip"
+        staged_output = temporary / "output"
+        noip_staging.mkdir()
+        ip_staging.mkdir()
+        shutil.copyfile(evidence["noip_simpeg"], noip_staging / "predictions.csv")
+        shutil.copyfile(
+            evidence["noip_reference"],
+            noip_staging / "reference_empymod_or_1d.csv",
+        )
+        shutil.copyfile(evidence["ip_simpeg"], ip_staging / "predictions.csv")
+        shutil.copyfile(
+            evidence["ip_reference"],
+            ip_staging / "reference_empymod_or_1d.csv",
+        )
+        summary = write_polarization_effect_artifacts(
+            noip_staging,
+            ip_staging,
+            staged_output,
+            threshold=0.10,
+        )
+        _json_value(summary)
+        if not staged_output.is_dir() or not any(staged_output.iterdir()):
+            raise RuntimeError("polarization effect API produced no evidence files")
+        os.replace(staged_output, output_dir)
     output_files = sorted(path for path in output_dir.rglob("*") if path.is_file())
-    if not output_files:
-        raise RuntimeError("polarization effect API produced no evidence files")
     _record_stage(
         run_dir,
         manifest,
@@ -804,8 +939,10 @@ def _parser() -> argparse.ArgumentParser:
 
     effect = subparsers.add_parser("effect", help="compare signed IP-minus-noIP evidence")
     add_run_arguments(effect)
-    effect.add_argument("--noip-dir", required=True)
-    effect.add_argument("--ip-dir", required=True)
+    effect.add_argument("--noip-simpeg-run", required=True)
+    effect.add_argument("--noip-reference-run", required=True)
+    effect.add_argument("--ip-simpeg-run", required=True)
+    effect.add_argument("--ip-reference-run", required=True)
     effect.set_defaults(handler=_effect)
 
     finalize = subparsers.add_parser("finalize", help="apply the fail-closed state machine")

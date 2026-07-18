@@ -16,8 +16,15 @@ SONG_CASE = ROOT / "benchmarks" / "sotem" / "song2025_layered_pair.yaml"
 SIMPEG_SOLVER = "atem3d_simpeg_discretize_debye"
 
 
-def _prepare(tmp_path, case=LEI_CASE, *, solver="empymod", level="S0T0B0"):
-    run_dir = tmp_path / "run"
+def _prepare(
+    tmp_path,
+    case=LEI_CASE,
+    *,
+    solver="empymod",
+    level="S0T0B0",
+    run_name="run",
+):
+    run_dir = tmp_path / run_name
     assert cli.main(
         [
             "prepare",
@@ -50,6 +57,112 @@ def _fake_response(case, scale=1.0):
         "data": np.column_stack((base, -base, 0.5 * base, -0.25 * base)),
         "components": ["Ex", "Ey", "Hz", "dBzdt"],
     }
+
+
+def _build_effect_source_runs(
+    tmp_path, monkeypatch, *, level="S0T0B0", case_path=SONG_CASE
+):
+    case = cli.load_benchmark_case(case_path)
+
+    def fake_reference(times, config, *, mode):
+        scale = 1.0 if mode == "noip" else 1.5
+        return {**_fake_response(case, scale=scale), "reference_mode": mode}
+
+    def fake_simpeg(case_value, **kwargs):
+        scale = 1.1 if kwargs["variant"] == "noip" else 1.6
+        return {
+            **_fake_response(case_value, scale=scale),
+            "solver_id": SIMPEG_SOLVER,
+            "mesh_hash": "a" * 64,
+            "time_hash": "b" * 64,
+            "mesh_stats": {"n_cells": 8, "n_edges": 54},
+            "variant": kwargs["variant"],
+            "material_fit": {"material_gate_pass": True},
+        }
+
+    monkeypatch.setattr(cli, "get_empymod_reference", fake_reference)
+    monkeypatch.setattr(cli, "run_simpeg_benchmark", fake_simpeg)
+    runs = {
+        "noip_reference": _prepare(
+            tmp_path,
+            case=case_path,
+            solver="empymod",
+            level=level,
+            run_name="noip-reference",
+        ),
+        "ip_reference": _prepare(
+            tmp_path,
+            case=case_path,
+            solver="empymod",
+            level=level,
+            run_name="ip-reference",
+        ),
+        "noip_simpeg": _prepare(
+            tmp_path,
+            case=case_path,
+            solver=SIMPEG_SOLVER,
+            level=level,
+            run_name="noip-simpeg",
+        ),
+        "ip_simpeg": _prepare(
+            tmp_path,
+            case=case_path,
+            solver=SIMPEG_SOLVER,
+            level=level,
+            run_name="ip-simpeg",
+        ),
+    }
+    assert cli.main(
+        _command(
+            "reference",
+            runs["noip_reference"],
+            case_path,
+            extra=("--variant", "noip"),
+        )
+    ) == 0
+    assert cli.main(
+        _command(
+            "reference",
+            runs["ip_reference"],
+            case_path,
+            extra=("--variant", "cole-cole-exact"),
+        )
+    ) == 0
+    assert cli.main(
+        _command(
+            "simpeg",
+            runs["noip_simpeg"],
+            case_path,
+            extra=("--variant", "noip"),
+        )
+    ) == 0
+    assert cli.main(
+        _command(
+            "simpeg",
+            runs["ip_simpeg"],
+            case_path,
+            extra=("--variant", "ip"),
+        )
+    ) == 0
+    return runs
+
+
+def _effect_args(effect_run, runs, *, case=SONG_CASE):
+    return _command(
+        "effect",
+        effect_run,
+        case,
+        extra=(
+            "--noip-simpeg-run",
+            str(runs["noip_simpeg"]),
+            "--noip-reference-run",
+            str(runs["noip_reference"]),
+            "--ip-simpeg-run",
+            str(runs["ip_simpeg"]),
+            "--ip-reference-run",
+            str(runs["ip_reference"]),
+        ),
+    )
 
 
 def test_prepare_writes_unique_complete_manifests(tmp_path):
@@ -262,67 +375,138 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
     assert manifest["status"] == "simpeg_complete"
 
 
-def test_effect_routes_complete_pair_without_transforming_paths(tmp_path, monkeypatch):
-    run_dir = _prepare(tmp_path, case=SONG_CASE, solver="polarization_effect")
-    noip_dir = tmp_path / "noip"
-    ip_dir = tmp_path / "ip"
-    noip_dir.mkdir()
-    ip_dir.mkdir()
-    for directory in (noip_dir, ip_dir):
-        (directory / "predictions.csv").write_text("complete", encoding="utf-8")
-        (directory / "reference_empymod_or_1d.csv").write_text("complete", encoding="utf-8")
-    captured = {}
-
-    def fake_effect(noip, ip, output, *, threshold):
-        captured.update(noip=Path(noip), ip=Path(ip), output=Path(output), threshold=threshold)
-        Path(output).mkdir(parents=True)
-        (Path(output) / "polarization_effect_summary.json").write_text(
-            json.dumps({"passed": False, "definition": "ip_minus_noip"}),
-            encoding="utf-8",
-        )
-        return {"passed": False, "definition": "ip_minus_noip"}
-
-    monkeypatch.setattr(cli, "write_polarization_effect_artifacts", fake_effect)
-    assert cli.main(
-        _command(
-            "effect",
-            run_dir,
-            SONG_CASE,
-            extra=("--noip-dir", str(noip_dir), "--ip-dir", str(ip_dir)),
-        )
-    ) == 0
-
-    assert captured == {
-        "noip": noip_dir.resolve(),
-        "ip": ip_dir.resolve(),
-        "output": (run_dir / "effect").resolve(),
-        "threshold": 0.10,
-    }
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["status"] == "effect_complete"
-
-
-def test_effect_requires_complete_noip_ip_pair_before_api_call(tmp_path, monkeypatch):
-    run_dir = _prepare(tmp_path, case=SONG_CASE, solver="polarization_effect")
-    noip_dir = tmp_path / "noip"
-    ip_dir = tmp_path / "ip"
-    noip_dir.mkdir()
-    ip_dir.mkdir()
-    monkeypatch.setattr(
-        cli,
-        "write_polarization_effect_artifacts",
-        lambda *args, **kwargs: pytest.fail("incomplete pair must not run"),
+def test_effect_composes_four_completed_cli_runs_end_to_end(tmp_path, monkeypatch):
+    runs = _build_effect_source_runs(tmp_path, monkeypatch)
+    effect_run = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver="polarization_effect",
+        run_name="effect-run",
     )
 
-    with pytest.raises(FileNotFoundError, match="predictions|reference"):
-        cli.main(
-            _command(
-                "effect",
-                run_dir,
-                SONG_CASE,
-                extra=("--noip-dir", str(noip_dir), "--ip-dir", str(ip_dir)),
-            )
+    assert cli.main(_effect_args(effect_run, runs)) == 0
+
+    output = effect_run / "effect"
+    summary = json.loads(
+        (output / "polarization_effect_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["definition"] == "ip_minus_noip"
+    assert summary["threshold"] == 0.10
+    assert (output / "polarization_effect_predictions.csv").is_file()
+    assert (output / "polarization_effect_reference.csv").is_file()
+    manifest = json.loads((effect_run / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "effect_complete"
+    stage_inputs = manifest["stages"]["effect"]["inputs"]
+    assert set(stage_inputs["source_runs"]) == {
+        "noip_simpeg",
+        "noip_reference",
+        "ip_simpeg",
+        "ip_reference",
+    }
+    assert all(
+        len(item["evidence_file_sha256"]) == 64
+        for item in stage_inputs["source_runs"].values()
+    )
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "missing_directory",
+        "same_directory",
+        "nonpolarizable_case",
+        "wrong_polarizable_case",
+        "case_id",
+        "case_hash",
+        "level",
+        "reference_solver",
+        "simpeg_solver",
+        "reference_variant",
+        "simpeg_variant",
+        "reference_stage",
+        "simpeg_stage",
+        "reference_file_hash",
+        "simpeg_file_hash",
+    ],
+)
+def test_effect_rejects_mixed_or_tampered_source_runs_before_writing(
+    tmp_path, monkeypatch, mismatch
+):
+    if mismatch == "wrong_polarizable_case":
+        effect_case = tmp_path / "other-polarizable.yaml"
+        effect_case.write_text(
+            SONG_CASE.read_text(encoding="utf-8").replace(
+                "case_id: song2025_layered_pair", "case_id: other_polarizable"
+            ),
+            encoding="utf-8",
         )
+    else:
+        effect_case = LEI_CASE if mismatch == "nonpolarizable_case" else SONG_CASE
+    source_case = effect_case if mismatch == "wrong_polarizable_case" else SONG_CASE
+    runs = _build_effect_source_runs(tmp_path, monkeypatch, case_path=source_case)
+    effect_run = _prepare(
+        tmp_path,
+        case=effect_case,
+        solver="polarization_effect",
+        run_name="effect-run",
+    )
+    if mismatch == "missing_directory":
+        runs["ip_reference"] = tmp_path / "missing-source-run"
+    elif mismatch == "same_directory":
+        runs["ip_reference"] = runs["noip_reference"]
+    elif mismatch not in {
+        "nonpolarizable_case",
+        "wrong_polarizable_case",
+        "reference_file_hash",
+        "simpeg_file_hash",
+    }:
+        role = "ip_simpeg" if mismatch.startswith("simpeg") else "ip_reference"
+        manifest_path = runs[role] / "manifest.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if mismatch == "case_id":
+            payload["case_id"] = "wrong_case"
+        elif mismatch == "case_hash":
+            payload["case_hash"] = "0" * 64
+        elif mismatch == "level":
+            payload["level"] = "S1T0B0"
+        elif mismatch == "reference_solver":
+            payload["solver_id"] = SIMPEG_SOLVER
+        elif mismatch == "simpeg_solver":
+            payload["solver_id"] = "empymod"
+        elif mismatch == "reference_variant":
+            payload["stages"]["reference"]["inputs"]["variant"] = "noip"
+        elif mismatch == "simpeg_variant":
+            payload["stages"]["simpeg"]["inputs"]["variant"] = "noip"
+        elif mismatch == "reference_stage":
+            del payload["stages"]["reference"]
+        elif mismatch == "simpeg_stage":
+            del payload["stages"]["simpeg"]
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    elif mismatch == "reference_file_hash":
+        with (runs["ip_reference"] / "reference_empymod_or_1d.csv").open(
+            "a", encoding="utf-8"
+        ) as stream:
+            stream.write("tampered\n")
+    elif mismatch == "simpeg_file_hash":
+        with (runs["ip_simpeg"] / "predictions.csv").open("a", encoding="utf-8") as stream:
+            stream.write("tampered\n")
+
+    manifest_before = (effect_run / "manifest.json").read_bytes()
+    called = False
+
+    def forbidden_effect(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("effect API must not run for invalid source identities")
+
+    monkeypatch.setattr(cli, "write_polarization_effect_artifacts", forbidden_effect)
+    with pytest.raises((FileNotFoundError, ValueError)):
+        cli.main(_effect_args(effect_run, runs, case=effect_case))
+
+    assert called is False
+    assert (effect_run / "manifest.json").read_bytes() == manifest_before
+    assert not (effect_run / "effect").exists()
+    assert not list(effect_run.glob(".effect-staging-*"))
 
 
 def test_effect_threshold_is_fixed_and_cannot_be_changed_from_cli(tmp_path):
@@ -335,10 +519,14 @@ def test_effect_threshold_is_fixed_and_cannot_be_changed_from_cli(tmp_path):
                 run_dir,
                 SONG_CASE,
                 extra=(
-                    "--noip-dir",
-                    str(tmp_path / "noip"),
-                    "--ip-dir",
-                    str(tmp_path / "ip"),
+                    "--noip-simpeg-run",
+                    str(tmp_path / "noip-simpeg"),
+                    "--noip-reference-run",
+                    str(tmp_path / "noip-reference"),
+                    "--ip-simpeg-run",
+                    str(tmp_path / "ip-simpeg"),
+                    "--ip-reference-run",
+                    str(tmp_path / "ip-reference"),
                     "--threshold",
                     "0.2",
                 ),
