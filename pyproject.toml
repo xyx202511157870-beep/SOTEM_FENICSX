@@ -44,6 +44,7 @@ atem3d-source-diffusion-amplitude-scale-audit = "atem3d.source_diffusion_amplitu
 atem3d-source-geometry-audit = "atem3d.source_geometry_audit_cli:main"
 atem3d-clean-delta-decomposition = "atem3d.clean_delta_decomposition_cli:main"
 atem3d-magnetic-recovery-decomposition = "atem3d.magnetic_recovery_decomposition_cli:main"
+atem3d-sotem-validate = "atem3d.sotem_validation_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
