@@ -1,0 +1,8 @@
+case_id: lei2023_noip
+coordinates: z_down
+source: {start_m: [-500.0, 0.0, 0.1], end_m: [500.0, 0.0, 0.1], current_a: 1.0, waveform: ideal_step_off}
+receiver: {location_m: [0.0, 800.0, 0.1]}
+earth: {rho_ohm_m: 100.0}
+air: {rho_ohm_m: 1.0e8}
+times: {kind: logspace, start_s: 1.0e-5, stop_s: 1.0e-1, count: 41}
+components: [Ex, Ey, Hz, dBzdt]
