@@ -8,7 +8,7 @@ import json
 
 import numpy as np
 
-from atem3d.metrics import robust_component_errors
+from atem3d.sotem_metrics import compare_signed_response
 from atem3d.validation_3comp import _plot_comparison, _plot_errors
 
 
@@ -17,7 +17,7 @@ def write_polarization_effect_artifacts(
     ip_dir: str | Path,
     output_dir: str | Path,
     *,
-    threshold: float = 0.05,
+    threshold: float = 0.10,
 ) -> dict:
     """Write IP-minus-noIP response, error, and plot artifacts."""
 
@@ -37,26 +37,31 @@ def write_polarization_effect_artifacts(
 
     effect_pred = ip_pred - noip_pred
     effect_ref = ip_ref - noip_ref
-    rows, summary = robust_component_errors(
+    comparison = compare_signed_response(
         pred_times,
         effect_pred,
         effect_ref,
         components,
         threshold=threshold,
     )
+    rows = comparison["rows"]
     summary = {
-        **summary,
+        **comparison["summary"],
         "artifact_type": "polarization_effect",
         "definition": "ip_minus_noip",
         "component_names": components,
         "time_min": float(np.min(pred_times)),
         "time_max": float(np.max(pred_times)),
+        "threshold": float(threshold),
+        "floor_by_component": comparison["floor_by_component"],
+        "max_robust_error_by_component": comparison["max_robust_error_by_component"],
+        "zero_crossings": _json_safe_zero_crossings(comparison["zero_crossings"]),
     }
     _write_response_csv(output / "polarization_effect_predictions.csv", pred_times, effect_pred, components)
     _write_response_csv(output / "polarization_effect_reference.csv", pred_times, effect_ref, components)
     _write_error_csv(output / "polarization_effect_errors.csv", rows)
     (output / "polarization_effect_summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True),
+        json.dumps(summary, indent=2, sort_keys=True, allow_nan=False),
         encoding="utf-8",
     )
     _plot_comparison(
@@ -73,6 +78,24 @@ def write_polarization_effect_artifacts(
         threshold=threshold,
     )
     return summary
+
+
+def _json_safe_zero_crossings(zero_crossings: dict) -> dict:
+    """Serialize Python ``inf`` count mismatches as ``"count_mismatch"``."""
+
+    safe = {}
+    for component, item in zero_crossings.items():
+        safe[component] = {
+            "prediction": list(item["prediction"]),
+            "reference": list(item["reference"]),
+            "count_match": bool(item["count_match"]),
+            "max_relative_time_error": (
+                float(item["max_relative_time_error"])
+                if item["count_match"]
+                else "count_mismatch"
+            ),
+        }
+    return safe
 
 
 def _read_response_csv(path: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
