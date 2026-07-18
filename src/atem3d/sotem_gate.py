@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
+import math
 from typing import Any
 
 
@@ -36,6 +38,94 @@ def _effective_provenance(
     if split_name in gates:
         return gates[split_name]
     return gates.get("reference_provenance")
+
+
+def _qualified_type_name(value: object) -> str:
+    value_type = type(value)
+    return f"{value_type.__module__}.{value_type.__qualname__}"
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _snapshot_mapping(
+    value: Mapping[Any, Any], active_ids: set[int]
+) -> dict[str, Any]:
+    entries: list[tuple[str, bool, str, Any]] = []
+    for key, item in value.items():
+        string_key = type(key) is str
+        if string_key:
+            snapshot_key = key
+        else:
+            key_snapshot = _snapshot_value(key, active_ids)
+            snapshot_key = (
+                f"__key__:{_qualified_type_name(key)}:"
+                f"{_canonical_json(key_snapshot)}"
+            )
+        item_snapshot = _snapshot_value(item, active_ids)
+        entries.append(
+            (
+                snapshot_key,
+                string_key,
+                _canonical_json(item_snapshot),
+                item_snapshot,
+            )
+        )
+
+    result: dict[str, Any] = {}
+    reserved_string_keys = {entry[0] for entry in entries if entry[1]}
+    for snapshot_key, string_key, _, item_snapshot in sorted(
+        entries, key=lambda entry: (entry[0], not entry[1], entry[2])
+    ):
+        if string_key:
+            result[snapshot_key] = item_snapshot
+            continue
+        unique_key = snapshot_key
+        suffix = 2
+        while unique_key in result or unique_key in reserved_string_keys:
+            unique_key = f"{snapshot_key}#{suffix}"
+            suffix += 1
+        result[unique_key] = item_snapshot
+    return result
+
+
+def _snapshot_value(value: Any, active_ids: set[int]) -> Any:
+    if value is None or type(value) in {bool, int, str}:
+        return value
+    if type(value) is float:
+        if math.isfinite(value):
+            return value
+        if math.isnan(value):
+            return {"__float__": "nan"}
+        return {"__float__": "+inf" if value > 0 else "-inf"}
+
+    is_container = isinstance(value, (Mapping, list, tuple, set, frozenset))
+    if is_container and id(value) in active_ids:
+        return {"__cycle__": True}
+    if is_container:
+        active_ids.add(id(value))
+        try:
+            if isinstance(value, Mapping):
+                return _snapshot_mapping(value, active_ids)
+            if isinstance(value, (list, tuple)):
+                return [_snapshot_value(item, active_ids) for item in value]
+            snapshots = [_snapshot_value(item, active_ids) for item in value]
+            return sorted(snapshots, key=_canonical_json)
+        finally:
+            active_ids.remove(id(value))
+
+    return {"__type__": _qualified_type_name(value)}
+
+
+def _snapshot_evidence(value: Mapping[Any, Any]) -> dict[str, Any]:
+    return _snapshot_value(value, set())
 
 
 def summarize_sotem_gates(gates: Mapping[str, Any]) -> dict[str, Any]:
@@ -116,7 +206,7 @@ def summarize_sotem_gates(gates: Mapping[str, Any]) -> dict[str, Any]:
         or ip_reference_independent,
         "noip_reference_independent": noip_reference_independent,
         "ip_reference_independent": ip_reference_independent,
-        "gates": gates_copy,
+        "gates": _snapshot_evidence(gates),
         "gate_results": gate_results,
         "failed_gates": failed_gates,
         "reason_codes": reason_codes,

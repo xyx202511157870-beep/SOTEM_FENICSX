@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -204,6 +205,111 @@ def test_only_literal_boolean_true_passes_and_input_is_not_mutated():
     assert summary["gates"] == original
     assert summary["gates"] is not gates
     assert gates == original
+
+
+def test_unsupported_values_are_stable_json_safe_evidence_and_still_fail():
+    unsupported = object()
+    gates = passing_gates()
+    gates["lei_simpeg"] = unsupported
+    gates["reference_provenance"] = unsupported
+    gates["extra"] = unsupported
+
+    summary = summarize_sotem_gates(gates)
+    encoded = json.dumps(summary, allow_nan=False, sort_keys=True)
+
+    assert summary["state"] == "failed_with_reproducible_evidence"
+    assert summary["gate_results"]["lei_simpeg"] is False
+    assert summary["noip_reference_independent"] is False
+    assert summary["ip_reference_independent"] is False
+    assert summary["gates"]["extra"] == {"__type__": "builtins.object"}
+    assert "0x" not in encoded
+
+
+def test_nested_evidence_is_isolated_in_both_directions():
+    nested = {"items": [{"value": 1}]}
+    gates = passing_gates()
+    gates["extra"] = nested
+
+    summary = summarize_sotem_gates(gates)
+    nested["items"][0]["value"] = 2
+    nested["items"].append("later")
+
+    assert summary["gates"]["extra"] == {"items": [{"value": 1}]}
+
+    summary["gates"]["extra"]["items"][0]["value"] = 3
+    assert nested == {"items": [{"value": 2}, "later"]}
+
+
+def test_self_referential_mapping_and_list_use_cycle_markers():
+    cyclic_mapping = {}
+    cyclic_mapping["self"] = cyclic_mapping
+    cyclic_list = []
+    cyclic_list.append(cyclic_list)
+    gates = passing_gates()
+    gates["cyclic_mapping"] = cyclic_mapping
+    gates["cyclic_list"] = cyclic_list
+
+    summary = summarize_sotem_gates(gates)
+
+    assert summary["gates"]["cyclic_mapping"] == {
+        "self": {"__cycle__": True}
+    }
+    assert summary["gates"]["cyclic_list"] == [{"__cycle__": True}]
+    json.dumps(summary, allow_nan=False)
+
+
+def test_nonfinite_float_evidence_serializes_strictly():
+    gates = passing_gates()
+    gates["nonfinite"] = [float("nan"), float("inf"), float("-inf")]
+
+    summary = summarize_sotem_gates(gates)
+
+    assert summary["gates"]["nonfinite"] == [
+        {"__float__": "nan"},
+        {"__float__": "+inf"},
+        {"__float__": "-inf"},
+    ]
+    json.dumps(summary, allow_nan=False)
+
+
+def test_sets_are_sorted_and_nonstring_mapping_keys_are_stable():
+    gates = passing_gates()
+    gates["set_value"] = {"z", "a", 3}
+    gates["mapping_keys"] = {2: "two", (1, 2): "tuple"}
+
+    first = summarize_sotem_gates(gates)
+    second = summarize_sotem_gates(gates)
+
+    assert first == second
+    assert first["gates"]["set_value"] == ["a", "z", 3]
+    assert first["gates"]["mapping_keys"] == {
+        "__key__:builtins.int:2": "two",
+        '__key__:builtins.tuple:[1,2]': "tuple",
+    }
+    json.dumps(first, allow_nan=False, sort_keys=True)
+
+
+def test_generated_key_markers_never_displace_original_string_keys():
+    marker = '__key__:builtins.object:{"__type__":"builtins.object"}#2'
+    gates = passing_gates()
+    gates["mapping_keys"] = {
+        object(): "first",
+        object(): "second",
+        marker: "original string key",
+    }
+
+    summary = summarize_sotem_gates(gates)
+
+    assert summary["gates"]["mapping_keys"][marker] == "original string key"
+
+
+def test_valid_gate_evidence_remains_an_ordinary_json_dict():
+    gates = passing_gates()
+
+    summary = summarize_sotem_gates(gates)
+
+    assert summary["gates"] == gates
+    json.dumps(summary, allow_nan=False)
 
 
 def test_split_provenance_fields_override_legacy_for_each_level():
