@@ -56,6 +56,7 @@ def test_plot_generation_does_not_read_comsol_results(
     values = np.ones((5, 31, 3), dtype=float)
     times = np.geomspace(1.0e-5, 1.0e-2, 31)
     loaded_paths: list[Path] = []
+    sweep_calls: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         verified_plots,
@@ -75,7 +76,11 @@ def test_plot_generation_does_not_read_comsol_results(
 
     monkeypatch.setattr(verified_plots, "_load", fake_load)
     monkeypatch.setattr(verified_plots, "_plot_grid", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(verified_plots, "_plot_sweep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        verified_plots,
+        "_plot_sweep",
+        lambda _path, _summary, stem, xlabel: sweep_calls.append((stem, xlabel)),
+    )
     monkeypatch.setattr(verified_plots, "_plot_convergence", lambda *_args: None)
     monkeypatch.setattr(verified_plots, "_plot_parity", lambda *_args: None)
     monkeypatch.setattr(verified_plots, "_plot_two_solver", lambda *_args: None, raising=False)
@@ -86,3 +91,7 @@ def test_plot_generation_does_not_read_comsol_results(
     assert paths == [tmp_path / name for name in FIGURE_NAMES]
     assert loaded_paths == [tmp_path / "verification_empymod_background.npz"]
     assert all("comsol" not in str(path).lower() for path in loaded_paths)
+    assert sweep_calls == [
+        ("conductivity", "channel conductivity (S/m)"),
+        ("volume", "channel volume (m^3)"),
+    ]

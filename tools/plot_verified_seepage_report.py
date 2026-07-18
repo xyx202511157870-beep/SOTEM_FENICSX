@@ -278,7 +278,7 @@ def generate_verified_plots(result_dir: str | Path) -> list[Path]:
     relative = {name: _relative(deltas[name], backgrounds[name]) for name in deltas}
     _plot_grid(root / FIGURE_NAMES[4], times, relative, title="Relative channel anomaly", mode="relative")
     _plot_sweep(root / FIGURE_NAMES[5], summary, "conductivity", "channel conductivity (S/m)")
-    _plot_sweep(root / FIGURE_NAMES[6], summary, "volume", "channel cross-section width (m)")
+    _plot_sweep(root / FIGURE_NAMES[6], summary, "volume", "channel volume (m^3)")
     _plot_convergence(root / FIGURE_NAMES[7], summary)
     _plot_parity(root / FIGURE_NAMES[8], summary)
     _plot_two_solver(root / FIGURE_NAMES[9], times, deltas)
