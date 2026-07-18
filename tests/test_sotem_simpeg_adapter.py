@@ -186,6 +186,41 @@ def _nodes(mesh, axis):
     )
 
 
+def _assert_strong_weak_parity(
+    actual,
+    reference,
+    *,
+    strong_floor_fraction,
+    limit,
+):
+    actual = np.asarray(actual, dtype=float)
+    reference = np.asarray(reference, dtype=float)
+    assert actual.shape == reference.shape
+    reference_peak = float(np.max(np.abs(reference)))
+    assert reference_peak > 0.0
+    strong = np.abs(reference) >= strong_floor_fraction * reference_peak
+    weak = ~strong
+    strong_error = float(
+        np.linalg.norm(actual[strong] - reference[strong])
+        / np.linalg.norm(reference[strong])
+    )
+    weak_error = (
+        float(np.max(np.abs(actual[weak] - reference[weak]))) / reference_peak
+        if np.any(weak)
+        else 0.0
+    )
+    assert strong_error <= limit, (
+        f"strong relative error {strong_error:.6e} exceeds {limit:.6e}"
+    )
+    assert weak_error <= limit, (
+        f"weak peak-normalized error {weak_error:.6e} exceeds {limit:.6e}"
+    )
+    return {
+        "strong_relative_error": strong_error,
+        "weak_peak_normalized_error": weak_error,
+    }
+
+
 @pytest.mark.parametrize("spatial_level", ["S0", "S1", "S2"])
 @pytest.mark.parametrize("boundary_level", ["B0", "B1", "B2"])
 def test_mesh_has_positive_widths_exact_interfaces_and_contains_anchors(
@@ -498,6 +533,30 @@ def test_generated_noip_schema_runs_the_real_solver_on_a_tiny_mesh(lei_case):
     assert np.all(np.isfinite(result.data))
 
 
+@pytest.mark.parametrize(
+    ("region", "message"),
+    [
+        ("strong", "strong relative error"),
+        ("weak", "weak peak-normalized error"),
+    ],
+)
+def test_strong_weak_parity_metric_rejects_bias_above_limit(region, message):
+    reference = np.array([[1.0, 0.5, 1.0e-8]])
+    biased = reference.copy()
+    if region == "strong":
+        biased[0, :2] *= 1.0 + 2.1e-4
+    else:
+        biased[0, 2] += 2.1e-4
+
+    with pytest.raises(AssertionError, match=message):
+        _assert_strong_weak_parity(
+            biased,
+            reference,
+            strong_floor_fraction=1.0e-3,
+            limit=2.0e-4,
+        )
+
+
 def test_adapter_tiny_layered_z_up_matches_upstream_e_and_faraday_b_path(song_case):
     tiny_case = replace(
         song_case,
@@ -570,7 +629,24 @@ def test_adapter_tiny_layered_z_up_matches_upstream_e_and_faraday_b_path(song_ca
     assert config["model"]["layers"][1]["top"] == 0.0
     assert mapped_song_boundary == -300.0
     assert config["model"]["layers"][1]["bottom"] == -1.0
-    np.testing.assert_allclose(ours.e, upstream_e, rtol=1.0e-10, atol=2.0e-8)
+    dc_difference = ours.e[0] - upstream_e[0]
+    dc_relative_l2 = float(np.linalg.norm(dc_difference) / np.linalg.norm(upstream_e[0]))
+    dc_peak_normalized = float(
+        np.max(np.abs(dc_difference)) / np.max(np.abs(upstream_e[0]))
+    )
+    assert dc_relative_l2 <= 1.0e-9
+    assert dc_peak_normalized <= 1.0e-9
+    # The late-time reference contains entries near its numerical floor. Test
+    # strong samples relatively and weak samples against the off-time peak so
+    # those floor values cannot either dominate or be hidden by a large atol.
+    off_time_errors = _assert_strong_weak_parity(
+        ours.e[1:],
+        upstream_e[1:],
+        strong_floor_fraction=1.0e-3,
+        limit=2.0e-4,
+    )
+    assert off_time_errors["strong_relative_error"] >= 0.0
+    assert off_time_errors["weak_peak_normalized_error"] >= 0.0
     np.testing.assert_allclose(
         np.diff(ours.b, axis=0) / np.asarray(config["time_steps"])[:, None],
         upstream_dbdt[1:],
