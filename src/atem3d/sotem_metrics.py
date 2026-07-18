@@ -37,18 +37,26 @@ def linear_zero_crossings(times, values) -> np.ndarray:
             if (
                 zero_start > 0
                 and zero_end < response_values.size
-                and response_values[zero_start - 1] * response_values[zero_end] < 0.0
+                and _opposite_nonzero_signs(
+                    response_values[zero_start - 1], response_values[zero_end]
+                )
             ):
                 crossings.append(
-                    0.5 * (time_values[zero_start] + time_values[zero_end - 1])
+                    time_values[zero_start]
+                    + 0.5 * (time_values[zero_end - 1] - time_values[zero_start])
                 )
             continue
 
         if index + 1 < response_values.size and response_values[index + 1] != 0.0:
             left = response_values[index]
             right = response_values[index + 1]
-            if left * right < 0.0:
-                fraction = -left / (right - left)
+            if _opposite_nonzero_signs(left, right):
+                left_magnitude = abs(float(left))
+                right_magnitude = abs(float(right))
+                scale = max(left_magnitude, right_magnitude)
+                left_scaled = left_magnitude / scale
+                right_scaled = right_magnitude / scale
+                fraction = left_scaled / (left_scaled + right_scaled)
                 crossings.append(
                     time_values[index]
                     + fraction * (time_values[index + 1] - time_values[index])
@@ -170,6 +178,14 @@ def _validated_times(times) -> np.ndarray:
     if np.any(np.diff(time_values) <= 0.0):
         raise ValueError("times must be strictly increasing")
     return time_values
+
+
+def _opposite_nonzero_signs(left: float, right: float) -> bool:
+    return bool(
+        left != 0.0
+        and right != 0.0
+        and np.signbit(left) != np.signbit(right)
+    )
 
 
 def _real_array(name: str, values) -> np.ndarray:

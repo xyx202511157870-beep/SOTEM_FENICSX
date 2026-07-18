@@ -11,6 +11,34 @@ def test_linear_zero_crossings_preserve_topology_and_interpolate_time():
     assert linear_zero_crossings(times, values).tolist() == pytest.approx([1.5])
 
 
+@pytest.mark.parametrize("amplitude", [1.0e-200, 1.0e-300, 1.0e308])
+def test_linear_zero_crossings_are_stable_for_finite_extremes(amplitude):
+    crossings = linear_zero_crossings(
+        np.array([1.0, 2.0]),
+        np.array([amplitude, -amplitude]),
+    )
+
+    assert crossings.tolist() == pytest.approx([1.5])
+
+
+def test_linear_zero_crossings_detect_tiny_zero_plateau_without_underflow():
+    crossings = linear_zero_crossings(
+        np.array([1.0, 2.0, 3.0]),
+        np.array([1.0e-200, 0.0, -1.0e-200]),
+    )
+
+    assert crossings.tolist() == pytest.approx([2.0])
+
+
+def test_linear_zero_crossings_ignore_same_sign_tiny_touch():
+    crossings = linear_zero_crossings(
+        np.array([1.0, 2.0, 3.0]),
+        np.array([1.0e-300, 0.0, 1.0e-300]),
+    )
+
+    assert crossings.tolist() == []
+
+
 def test_signed_response_uses_one_percent_peak_floor():
     result = compare_signed_response(
         np.array([1.0, 2.0]),
