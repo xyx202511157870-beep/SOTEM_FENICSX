@@ -3,8 +3,10 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 
 def _load_pipeline_module():
@@ -157,3 +159,222 @@ def test_cole_cole_debye_fit_preserves_dc_conductivity():
 
     sigma_dc = fit.sigma_infinity - sum(term.delta_sigma for term in fit.terms)
     np.testing.assert_allclose(sigma_dc, 1.0 / config.cole_rho0, rtol=1.0e-8, atol=1.0e-12)
+
+
+def test_song_prony_fit_passes_one_percent_material_gate():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+        cole_n_terms=16,
+        cole_f_min=1.0e-3,
+        cole_f_max=1.0e4,
+        cole_n_freq=81,
+        cole_fit_tolerance=0.01,
+    )
+
+    fit = sp.fit_cole_cole_to_debye(config)
+
+    assert fit.relative_l2 <= 0.01
+    assert fit.sigma_infinity == pytest.approx(1.0 / 70.0)
+    assert sum(term.delta_sigma for term in fit.terms) == pytest.approx(1.0 / 70.0 - 0.01)
+
+
+def test_cole_cole_debye_fit_rejects_material_error_above_tolerance():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+        cole_n_terms=16,
+        cole_f_min=1.0e-3,
+        cole_f_max=1.0e4,
+        cole_n_freq=81,
+        cole_fit_tolerance=1.0e-12,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        sp.fit_cole_cole_to_debye(config)
+
+    assert str(exc_info.value).startswith("Cole-Cole Debye fit relative L2 ")
+    assert " exceeds tolerance " in str(exc_info.value)
+
+
+def test_cole_cole_debye_fit_accepts_material_error_equal_to_tolerance():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+        cole_n_terms=16,
+        cole_f_min=1.0e-3,
+        cole_f_max=1.0e4,
+        cole_n_freq=81,
+        cole_fit_tolerance=1.0,
+    )
+    measured = sp.fit_cole_cole_to_debye(config).relative_l2
+    config.cole_fit_tolerance = measured
+
+    fit = sp.fit_cole_cole_to_debye(config)
+
+    assert fit.relative_l2 == measured
+
+
+def test_exact_empymod_material_uses_cole_cole_not_debye_fit(monkeypatch):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        layer_depths=(300.0,),
+        layer_resistivities=(100.0, 100.0),
+        cole_layer_top=0.0,
+        cole_layer_bottom=300.0,
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+    )
+    monkeypatch.setattr(
+        sp,
+        "fit_cole_cole_to_debye",
+        lambda _config: (_ for _ in ()).throw(AssertionError("exact reference must not use the Debye fit")),
+    )
+
+    depth, material = sp._exact_cole_cole_empymod_material(config)
+    frequencies = np.array([1.0e-3, 1.0, 1.0e4])
+    eta_h, eta_v = material["func_eta"](None, {"freq": frequencies})
+    expected = sp.cole_cole_complex_conductivity(frequencies, 100.0, 0.3, 1.0, 0.3)
+
+    assert depth == pytest.approx([0.0, 300.0])
+    np.testing.assert_allclose(eta_h[:, 1], expected)
+    np.testing.assert_allclose(eta_v[:, 1], expected)
+    np.testing.assert_allclose(eta_h[:, 0], 1.0 / config.rho_air)
+    np.testing.assert_allclose(eta_h[:, 2], 0.01)
+    assert eta_h is not eta_v
+    assert not np.shares_memory(eta_h, eta_v)
+
+
+def test_exact_empymod_material_changes_only_overlapping_earth_layers():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        layer_depths=(300.0, 600.0),
+        layer_resistivities=(100.0, 200.0, 300.0),
+        cole_layer_top=300.0,
+        cole_layer_bottom=600.0,
+        cole_rho0=200.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+    )
+
+    _depth, material = sp._exact_cole_cole_empymod_material(config)
+    frequencies = np.array([0.1, 10.0])
+    eta_h, eta_v = material["func_eta"](None, {"freq": frequencies})
+    expected = sp.cole_cole_complex_conductivity(frequencies, 200.0, 0.3, 1.0, 0.3)
+
+    np.testing.assert_allclose(eta_h[:, 0], 1.0 / config.rho_air)
+    np.testing.assert_allclose(eta_h[:, 1], 1.0 / 100.0)
+    np.testing.assert_allclose(eta_h[:, 2], expected)
+    np.testing.assert_allclose(eta_h[:, 3], 1.0 / 300.0)
+    np.testing.assert_allclose(eta_v, eta_h)
+    eta_h[0, 2] = -1.0
+    assert eta_v[0, 2] != -1.0
+
+
+def test_exact_empymod_material_rejects_interval_without_earth_overlap():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(cole_layer_top=-300.0, cole_layer_bottom=-100.0)
+
+    with pytest.raises(RuntimeError, match="^no empymod layer overlaps the Cole-Cole interval$"):
+        sp._exact_cole_cole_empymod_material(config)
+
+
+def test_empymod_reference_has_distinct_exact_and_debye_modes(monkeypatch):
+    sp = _load_pipeline_module()
+    seen_materials = []
+
+    def bipole(**kwargs):
+        seen_materials.append(kwargs["res"])
+        return np.zeros_like(np.asarray(kwargs["freqtime"], dtype=float))
+
+    monkeypatch.setitem(sys.modules, "empymod", SimpleNamespace(bipole=bipole))
+    config = sp.PipelineConfig(
+        layer_depths=(300.0,),
+        layer_resistivities=(100.0, 100.0),
+        cole_layer_top=0.0,
+        cole_layer_bottom=300.0,
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+        cole_n_terms=16,
+        cole_f_min=1.0e-3,
+        cole_f_max=1.0e4,
+        cole_n_freq=81,
+        cole_fit_tolerance=0.01,
+        ramp_off_time=0.0,
+    )
+
+    exact = sp.get_empymod_reference(np.array([1.0e-4, 1.0e-3]), config, mode="cole-cole-exact")
+    exact_materials = list(seen_materials)
+    seen_materials.clear()
+    debye = sp.get_empymod_reference(np.array([1.0e-4, 1.0e-3]), config, mode="cole-cole-debye")
+
+    assert exact["data"].shape == debye["data"].shape == (2, 3)
+    assert exact_materials and seen_materials
+    assert all(material["res"][1] == pytest.approx(100.0) for material in exact_materials)
+    assert all(material["res"][1] == pytest.approx(70.0) for material in seen_materials)
+
+
+def test_exact_empymod_reference_never_calls_debye_fit(monkeypatch):
+    sp = _load_pipeline_module()
+
+    def bipole(**kwargs):
+        return np.zeros_like(np.asarray(kwargs["freqtime"], dtype=float))
+
+    monkeypatch.setitem(sys.modules, "empymod", SimpleNamespace(bipole=bipole))
+    monkeypatch.setattr(
+        sp,
+        "fit_cole_cole_to_debye",
+        lambda _config: (_ for _ in ()).throw(AssertionError("exact reference called Debye fit")),
+    )
+    config = sp.PipelineConfig(ramp_off_time=0.0)
+
+    result = sp.get_empymod_reference(np.array([1.0e-4, 1.0e-3]), config, mode="cole-cole-exact")
+
+    assert result["data"].shape == (2, 3)
+
+
+def test_debye_empymod_reference_obeys_material_fit_gate(monkeypatch):
+    sp = _load_pipeline_module()
+    monkeypatch.setitem(
+        sys.modules,
+        "empymod",
+        SimpleNamespace(bipole=lambda **kwargs: np.zeros_like(np.asarray(kwargs["freqtime"], dtype=float))),
+    )
+    config = sp.PipelineConfig(
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+        cole_n_terms=16,
+        cole_f_min=1.0e-3,
+        cole_f_max=1.0e4,
+        cole_n_freq=81,
+        cole_fit_tolerance=1.0e-12,
+        ramp_off_time=0.0,
+    )
+
+    with pytest.raises(ValueError, match="^Cole-Cole Debye fit relative L2 "):
+        sp.get_empymod_reference(np.array([1.0e-4, 1.0e-3]), config, mode="cole-cole-debye")
+
+
+@pytest.mark.parametrize("mode", ["cole-cole", "unknown"])
+def test_empymod_reference_rejects_ambiguous_or_unknown_modes(monkeypatch, mode):
+    sp = _load_pipeline_module()
+    monkeypatch.setitem(sys.modules, "empymod", SimpleNamespace(bipole=lambda **_kwargs: np.zeros(1)))
+
+    with pytest.raises(ValueError, match="reference mode|migrat"):
+        sp.get_empymod_reference(np.array([1.0e-4]), sp.PipelineConfig(ramp_off_time=0.0), mode=mode)

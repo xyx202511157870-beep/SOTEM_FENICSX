@@ -1061,7 +1061,7 @@ def test_layered_cole_cole_model_accepts_explicit_polarizable_depth_window():
 
     diagnostics = sp.validate_model_consistency(config)
 
-    assert diagnostics["reference_mode"] == "cole-cole"
+    assert diagnostics["reference_mode"] == "cole-cole-exact"
     assert diagnostics["cole_layer_top"] == pytest.approx(350.0)
     assert diagnostics["cole_layer_bottom"] == pytest.approx(650.0)
 
@@ -1094,3 +1094,70 @@ def test_empymod_polarizable_layer_indices_select_middle_layer_only():
     )
 
     assert indices == [2]
+
+
+@pytest.mark.parametrize("value", [0.0, -0.01, float("nan"), float("inf"), -float("inf")])
+def test_model_consistency_rejects_invalid_cole_fit_tolerance(value):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(cole_fit_tolerance=value)
+
+    with pytest.raises(ValueError, match="cole_fit_tolerance"):
+        sp.validate_model_consistency(config)
+
+
+def test_cole_fit_tolerance_round_trips_through_cli_and_resolved_yaml(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    captured = {}
+    validate_model_consistency = sp.validate_model_consistency
+
+    def capture_config(config):
+        captured["config"] = config
+        return validate_model_consistency(config)
+
+    monkeypatch.setattr(sp, "validate_model_consistency", capture_config)
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+
+    result = sp.main(
+        [
+            "--workdir",
+            str(tmp_path),
+            "--cole-fit-tolerance",
+            "0.0075",
+            "--check-env-only",
+            "--no-install",
+        ]
+    )
+
+    assert result == 0
+    assert captured["config"].cole_fit_tolerance == pytest.approx(0.0075)
+    resolved = sp._resolved_config_yaml(captured["config"])
+    assert "cole_fit_tolerance: 0.0075\n" in resolved
+
+
+def test_postprocess_cli_selects_exact_cole_cole_reference(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    captured = {}
+
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+
+    def postprocess_saved_forward(config, env, *, ref_mode, runtime):
+        captured["config"] = config
+        captured["ref_mode"] = ref_mode
+        return {}
+
+    monkeypatch.setattr(sp, "postprocess_saved_forward", postprocess_saved_forward)
+
+    result = sp.main(
+        [
+            "--workdir",
+            str(tmp_path),
+            "--polarization",
+            "cole-cole",
+            "--postprocess-partial",
+            "--no-install",
+        ]
+    )
+
+    assert result == 0
+    assert captured["config"].polarization == "cole-cole"
+    assert captured["ref_mode"] == "cole-cole-exact"

@@ -3,8 +3,8 @@
 
 This script is intentionally self-contained.  The default run implements the
 stage-1 non-polarizable air-earth benchmark requested for DOLFINx/PETSc.  The
-Cole-Cole branch is opt-in and first fits the complex conductivity to Debye
-terms before any time-domain memory variables are used.
+Cole-Cole branch is opt-in.  The FEM time-domain memory variables use a gated
+Debye fit, while the production empymod reference evaluates Cole-Cole exactly.
 """
 
 from __future__ import annotations
@@ -135,6 +135,7 @@ class PipelineConfig:
     cole_f_min: float = 1.0e-2
     cole_f_max: float = 1.0e5
     cole_n_freq: int = 96
+    cole_fit_tolerance: float = 0.01
     empymod_srcpts: int = 5
     empymod_ht: str = "dlf"
     empymod_ft: str = "dlf"
@@ -448,6 +449,8 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             raise ValueError(f"{name} must be finite and positive; got {value:.12g}")
         return value
 
+    require_positive("cole_fit_tolerance", config.cole_fit_tolerance)
+
     def require_finite_point(name: str, point: tuple[float, float, float]) -> np.ndarray:
         arr = np.asarray(point, dtype=float)
         if arr.shape != (3,) or not np.all(np.isfinite(arr)):
@@ -738,13 +741,18 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
 
     ref_mode = reference_mode
     if ref_mode is None:
-        ref_mode = "cole-cole" if polarization == "cole-cole" else "noip"
-    if ref_mode not in {"noip", "cole-cole"}:
-        raise ValueError("reference_mode must be 'noip' or 'cole-cole'")
-    if ref_mode == "cole-cole" and polarization != "cole-cole":
-        raise ValueError("reference_mode='cole-cole' requires polarization='cole-cole'")
+        ref_mode = "cole-cole-exact" if polarization == "cole-cole" else "noip"
+    if ref_mode == "cole-cole":
+        raise ValueError(
+            "reference_mode='cole-cole' is ambiguous; migrate to 'cole-cole-exact' "
+            "or use 'cole-cole-debye' for diagnostics"
+        )
+    if ref_mode not in {"noip", "cole-cole-exact", "cole-cole-debye"}:
+        raise ValueError("reference_mode must be 'noip', 'cole-cole-exact', or 'cole-cole-debye'")
+    if ref_mode in {"cole-cole-exact", "cole-cole-debye"} and polarization != "cole-cole":
+        raise ValueError(f"reference_mode='{ref_mode}' requires polarization='cole-cole'")
     if ref_mode == "noip" and polarization == "cole-cole":
-        raise ValueError("polarization='cole-cole' requires reference_mode='cole-cole'")
+        raise ValueError("polarization='cole-cole' requires a Cole-Cole reference mode")
 
     diagnostics.update(validate_geometry_consistency(config))
     diagnostics.update(
@@ -763,6 +771,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "cole_layer_bottom": float(config.cole_layer_bottom)
             if math.isfinite(float(config.cole_layer_bottom))
             else float(config.earth_depth),
+            "cole_fit_tolerance": float(config.cole_fit_tolerance),
             "source_current": float(config.source_current),
             "source_rhs_sign": float(config.source_rhs_sign),
             "source_quadrature_points": source_quadrature_points,
@@ -3706,6 +3715,11 @@ def fit_cole_cole_to_debye(config: PipelineConfig) -> DebyeFit:
     denom = np.linalg.norm(np.r_[target.real, target.imag])
     rel_l2 = float(np.linalg.norm(np.r_[fitted.real - target.real, fitted.imag - target.imag]) / denom)
     terms = [DebyeTerm(float(d), float(t)) for d, t in zip(delta, tau_grid)]
+    if rel_l2 > float(config.cole_fit_tolerance):
+        raise ValueError(
+            f"Cole-Cole Debye fit relative L2 {rel_l2:.6e} exceeds "
+            f"tolerance {float(config.cole_fit_tolerance):.6e}"
+        )
     print(
         f"[polarization] Cole-Cole fitted to {len(terms)} Debye terms; "
         f"relative L2 error={rel_l2:.6e}",
@@ -5493,6 +5507,62 @@ def _empymod_polarizable_layer_indices(depth: list[float], res: list[float], con
     return indices
 
 
+def _exact_cole_cole_empymod_material(config: PipelineConfig):
+    """Build an exact Cole-Cole conductivity callback for the selected earth layers."""
+
+    import numpy as np
+
+    depth, base_res = _empymod_depth_res(config)
+    indices = _empymod_polarizable_layer_indices(depth, base_res, config)
+    if not indices:
+        raise RuntimeError("no empymod layer overlaps the Cole-Cole interval")
+    sigma = 1.0 / np.asarray(base_res, dtype=float)
+
+    def func_eta(_model, context):
+        freq = np.asarray(context["freq"], dtype=float)
+        eta = np.tile(sigma, (freq.size, 1)).astype(complex)
+        exact = cole_cole_complex_conductivity(
+            freq,
+            config.cole_rho0,
+            config.cole_m,
+            config.cole_tau,
+            config.cole_c,
+        )
+        for index in indices:
+            eta[:, index] = exact
+        return eta, eta.copy()
+
+    return depth, {"res": list(base_res), "func_eta": func_eta}
+
+
+def _debye_cole_cole_empymod_material(config: PipelineConfig):
+    """Build the fitted Debye conductivity callback used only for diagnostics."""
+
+    import numpy as np
+
+    depth, base_res = _empymod_depth_res(config)
+    fit = fit_cole_cole_to_debye(config)
+    indices = _empymod_polarizable_layer_indices(depth, base_res, config)
+    if not indices:
+        raise RuntimeError("no empymod layer overlaps the Cole-Cole interval")
+    sigma = 1.0 / np.asarray(base_res, dtype=float)
+    for index in indices:
+        sigma[index] = fit.sigma_infinity
+
+    def func_eta(_model, context):
+        freq = np.asarray(context["freq"], dtype=float)
+        eta = np.tile(sigma, (freq.size, 1)).astype(complex)
+        for index in indices:
+            for term in fit.terms:
+                eta[:, index] -= term.delta_sigma / (1.0 + 1j * 2.0 * np.pi * freq * term.tau)
+        return eta, eta.copy()
+
+    res = list(base_res)
+    for index in indices:
+        res[index] = 1.0 / fit.sigma_infinity
+    return depth, {"res": res, "func_eta": func_eta}
+
+
 def _apply_linear_ramp_average(times, values, ramp_time: float):
     """Approximate a linear ramp-off response by averaging step-off values."""
 
@@ -5593,6 +5663,17 @@ def get_empymod_reference(t_array, config: PipelineConfig, mode: str = "noip", *
     """Compute matching 1D air-earth empymod reference data."""
 
     import numpy as np
+
+    if mode == "cole-cole":
+        raise ValueError(
+            "empymod reference mode 'cole-cole' is ambiguous; migrate to 'cole-cole-exact' "
+            "or use 'cole-cole-debye' for diagnostics"
+        )
+    if mode not in {"noip", "cole-cole-exact", "cole-cole-debye"}:
+        raise ValueError(
+            "unknown empymod reference mode; expected 'noip', 'cole-cole-exact', or 'cole-cole-debye'"
+        )
+
     import empymod
 
     times = np.asarray(t_array, dtype=float)
@@ -5604,31 +5685,10 @@ def get_empymod_reference(t_array, config: PipelineConfig, mode: str = "noip", *
         -config.source_start[2],
         -config.source_end[2],
     ]
-    if mode == "cole-cole":
-        depth, base_res = _empymod_depth_res(config)
-        fit = fit_cole_cole_to_debye(config)
-        polarizable_indices = _empymod_polarizable_layer_indices(depth, base_res, config)
-        if not polarizable_indices:
-            raise RuntimeError(
-                "No empymod earth layer overlaps the configured Cole-Cole layer window "
-                f"{float(config.cole_layer_top):.6g}-{float(config.cole_layer_bottom):.6g} m"
-            )
-        sigma = 1.0 / np.asarray(base_res, dtype=float)
-        for idx in polarizable_indices:
-            sigma[idx] = fit.sigma_infinity
-
-        def func_eta(_model, context):
-            freq = np.asarray(context["freq"], dtype=float)
-            eta = np.tile(np.asarray(sigma, dtype=float), (freq.size, 1)).astype(complex)
-            for idx in polarizable_indices:
-                for term in fit.terms:
-                    eta[:, idx] -= term.delta_sigma / (1.0 + 1j * 2.0 * np.pi * freq * term.tau)
-            return eta, eta
-
-        res_base = list(base_res)
-        for idx in polarizable_indices:
-            res_base[idx] = 1.0 / fit.sigma_infinity
-        res = {"res": res_base, "func_eta": func_eta}
+    if mode == "cole-cole-exact":
+        depth, res = _exact_cole_cole_empymod_material(config)
+    elif mode == "cole-cole-debye":
+        depth, res = _debye_cole_cole_empymod_material(config)
     else:
         depth, res = _empymod_depth_res(config)
 
@@ -6508,6 +6568,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "divergence_control_t_obs_min": float(config.divergence_control_t_obs_min),
         "divergence_control_scale": str(config.divergence_control_scale),
         "polarization": str(config.polarization),
+        "cole_fit_tolerance": float(config.cole_fit_tolerance),
     }
     lines = []
     for key, value in values.items():
@@ -7009,6 +7070,8 @@ def write_report(
         f"min_steps_before_first_observation={config.min_steps_before_first_observation}"
     )
     lines.append(f"  empymod srcpts: {config.empymod_srcpts}; ht={config.empymod_ht}; ft={config.empymod_ft}")
+    if str(config.polarization).strip().lower() == "cole-cole":
+        lines.append(f"  Cole-Cole Debye material-fit tolerance: {float(config.cole_fit_tolerance):.6e}")
     if int(config.reference_audit_srcpts) > 0:
         lines.append(f"  reference audit srcpts: {config.reference_audit_srcpts}")
     if float(config.error_min_time) > 0.0:
@@ -7025,7 +7088,10 @@ def write_report(
     if debye is not None:
         fit = debye["fit"]
         lines.append("")
-        lines.append(f"Cole-Cole Debye fit relative L2: {fit.relative_l2:.6e}")
+        lines.append(
+            f"Cole-Cole Debye fit relative L2: {fit.relative_l2:.6e} "
+            f"(tolerance {float(config.cole_fit_tolerance):.6e})"
+        )
         for i, term in enumerate(fit.terms):
             lines.append(f"  term {i}: A={term.delta_sigma:.6e} S/m, tau={term.tau:.6e} s")
 
@@ -8151,7 +8217,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         ref_result["data"],
         fem_result["components"],
         config,
-        case_type="ip" if ref_mode == "cole-cole" else "noip",
+        case_type="ip" if ref_mode != "noip" else "noip",
         reference_type="empymod",
         source_info={"mode": f"postprocess_partial/{config.source_mode}"},
         receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
@@ -8293,6 +8359,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cole-f-min", type=float, default=1.0e-2)
     parser.add_argument("--cole-f-max", type=float, default=1.0e5)
     parser.add_argument("--cole-n-freq", type=int, default=96)
+    parser.add_argument("--cole-fit-tolerance", type=float, default=0.01)
     parser.add_argument("--rho-air", type=float, default=1.0e8)
     parser.add_argument("--rho-earth", type=float, default=100.0)
     parser.add_argument("--source-start-x", type=float, default=-500.0)
@@ -8410,6 +8477,7 @@ def main(argv: list[str] | None = None) -> int:
         cole_f_min=args.cole_f_min,
         cole_f_max=args.cole_f_max,
         cole_n_freq=args.cole_n_freq,
+        cole_fit_tolerance=args.cole_fit_tolerance,
         rho_air=args.rho_air,
         rho_earth=args.rho_earth,
         source_start=(args.source_start_x, args.source_start_y, args.source_start_z),
@@ -8485,7 +8553,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_env_only:
         return 0
     if args.postprocess_partial:
-        ref_mode = "cole-cole" if config.polarization == "cole-cole" else "noip"
+        ref_mode = "cole-cole-exact" if config.polarization == "cole-cole" else "noip"
         postprocess_saved_forward(config, env, ref_mode=ref_mode, runtime={"mesh_seconds": 0.0})
         return 0
 
@@ -8514,7 +8582,7 @@ def main(argv: list[str] | None = None) -> int:
         materials["sigma_infinity"].x.scatter_forward()
         materials["sigma_infinity_physical"].x.array[:] = materials["sigma_infinity"].x.array
         materials["sigma_infinity_physical"].x.scatter_forward()
-        ref_mode = "cole-cole"
+        ref_mode = "cole-cole-exact"
     else:
         print("[polarization] disabled: running non-polarizable air-earth stage-1 validation.", flush=True)
     apply_transient_sponge(msh, materials, config)
@@ -8558,7 +8626,7 @@ def main(argv: list[str] | None = None) -> int:
             ref_result["data"],
             fem_result["components"],
             config,
-            case_type="ip" if ref_mode == "cole-cole" else "noip",
+            case_type="ip" if ref_mode != "noip" else "noip",
             reference_type="empymod",
             source_info=source,
             receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
