@@ -17,6 +17,7 @@ _CANONICAL_COLUMNS = (
     "dBzdt_T_per_s",
 )
 _CANONICAL_INDEX = {name: index for index, name in enumerate(_CANONICAL_COLUMNS)}
+_HZ_BZ_RTOL = 8.0 * np.finfo(np.float64).eps
 
 
 def _immutable_array(values: np.ndarray) -> np.ndarray:
@@ -95,6 +96,10 @@ class CanonicalResponse:
             row_count=times.size,
             column_count=len(_CANONICAL_COLUMNS),
         )
+        hz = values[:, _CANONICAL_INDEX["Hz_A_per_m"]]
+        bz = values[:, _CANONICAL_INDEX["Bz_T"]]
+        if not np.all(np.isclose(bz, mu_0 * hz, rtol=_HZ_BZ_RTOL, atol=0.0)):
+            raise ValueError("Bz_T must equal mu_0 * Hz_A_per_m")
         object.__setattr__(self, "times", _immutable_array(times))
         object.__setattr__(self, "values", _immutable_array(values))
 

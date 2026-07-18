@@ -259,6 +259,57 @@ def test_valid_direct_construction_copies_and_deeply_freezes_arrays():
         table.values.setflags(write=True)
 
 
+def test_direct_construction_rejects_inconsistent_hz_bz_relation():
+    values = np.array([[1.0, 2.0, 3.0, 999.0, 4.0]])
+
+    with pytest.raises(
+        ValueError,
+        match=r"^Bz_T must equal mu_0 \* Hz_A_per_m$",
+    ):
+        _direct_response(times=np.array([1.0e-5]), values=values)
+
+
+def test_direct_construction_rejects_nonzero_bz_when_hz_is_zero():
+    smallest_positive = np.nextafter(0.0, 1.0)
+    values = np.array([[1.0, 2.0, 0.0, smallest_positive, 4.0]])
+
+    with pytest.raises(
+        ValueError,
+        match=r"^Bz_T must equal mu_0 \* Hz_A_per_m$",
+    ):
+        _direct_response(times=np.array([1.0e-5]), values=values)
+
+
+def test_direct_construction_rejects_opposite_hz_bz_signs():
+    values = np.array([[1.0, 2.0, -3.0, mu_0 * 3.0, 4.0]])
+
+    with pytest.raises(
+        ValueError,
+        match=r"^Bz_T must equal mu_0 \* Hz_A_per_m$",
+    ):
+        _direct_response(times=np.array([1.0e-5]), values=values)
+
+
+@pytest.mark.parametrize("hz", [3.0, -3.0])
+def test_direct_construction_accepts_exact_signed_hz_bz_relation(hz):
+    values = np.array([[1.0, 2.0, hz, mu_0 * hz, 4.0]])
+
+    table = _direct_response(times=np.array([1.0e-5]), values=values)
+
+    assert table.values[0, 2] == hz
+    assert table.values[0, 3] == mu_0 * hz
+
+
+def test_factory_preserves_exact_signed_hz_bz_relation():
+    table = canonical_response(
+        [1.0e-5, 1.0e-4],
+        [[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, -3.0, 4.0]],
+        ["Ex", "Ey", "Hz", "dBzdt"],
+    )
+
+    np.testing.assert_array_equal(table.values[:, 3], mu_0 * table.values[:, 2])
+
+
 def test_canonical_response_equality_is_identity_based():
     first = _direct_response()
     second = _direct_response()
@@ -335,6 +386,12 @@ def test_write_csv_overwrites_with_exact_header_and_round_trips(tmp_path):
     )
     loaded = np.loadtxt(path, delimiter=",", skiprows=1)
     np.testing.assert_array_equal(loaded, np.column_stack((table.times, table.values)))
+    reconstructed = CanonicalResponse(
+        times=loaded[:, 0],
+        values=loaded[:, 1:],
+        columns=CANONICAL_COLUMNS,
+    )
+    np.testing.assert_array_equal(reconstructed.values, table.values)
 
 
 def test_write_csv_does_not_create_parent_directories(tmp_path):
