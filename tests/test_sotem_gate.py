@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from copy import deepcopy
 import json
 
@@ -310,6 +311,36 @@ def test_valid_gate_evidence_remains_an_ordinary_json_dict():
 
     assert summary["gates"] == gates
     json.dumps(summary, allow_nan=False)
+
+
+def test_stateful_mapping_is_materialized_once_for_evaluation_and_evidence():
+    initial = passing_gates()
+    changed = {name: False for name in GATE_NAMES}
+    changed["reference_provenance"] = "changed_after_first_read"
+
+    class StatefulMapping(Mapping):
+        def __init__(self):
+            self.read_count = 0
+
+        def __getitem__(self, key):
+            values = initial if self.read_count < len(initial) else changed
+            self.read_count += 1
+            return values[key]
+
+        def __iter__(self):
+            return iter(initial)
+
+        def __len__(self):
+            return len(initial)
+
+    gates = StatefulMapping()
+
+    summary = summarize_sotem_gates(gates)
+
+    assert summary["state"] == "ip_internally_validated"
+    assert all(summary["gate_results"].values())
+    assert summary["gates"] == initial
+    assert gates.read_count == len(initial)
 
 
 def test_split_provenance_fields_override_legacy_for_each_level():

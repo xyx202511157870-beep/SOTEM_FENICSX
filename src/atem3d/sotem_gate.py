@@ -206,7 +206,7 @@ def summarize_sotem_gates(gates: Mapping[str, Any]) -> dict[str, Any]:
         or ip_reference_independent,
         "noip_reference_independent": noip_reference_independent,
         "ip_reference_independent": ip_reference_independent,
-        "gates": _snapshot_evidence(gates),
+        "gates": _snapshot_evidence(gates_copy),
         "gate_results": gate_results,
         "failed_gates": failed_gates,
         "reason_codes": reason_codes,
