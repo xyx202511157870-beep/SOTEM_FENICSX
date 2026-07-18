@@ -201,8 +201,7 @@ def _assert_strong_weak_parity(
     strong = np.abs(reference) >= strong_floor_fraction * reference_peak
     weak = ~strong
     strong_error = float(
-        np.linalg.norm(actual[strong] - reference[strong])
-        / np.linalg.norm(reference[strong])
+        np.max(np.abs(actual[strong] - reference[strong]) / np.abs(reference[strong]))
     )
     weak_error = (
         float(np.max(np.abs(actual[weak] - reference[weak]))) / reference_peak
@@ -563,7 +562,7 @@ def test_adapter_tiny_layered_z_up_matches_upstream_e_and_faraday_b_path(song_ca
         source_start_down=(-0.5, 0.0, 0.1),
         source_end_down=(0.5, 0.0, 0.1),
         receiver_down=(0.2, 0.2, 0.1),
-        observation_times=np.array([0.01, 0.02]),
+        observation_times=np.array([1.0e-5, 1.0e-2, 2.0e-2]),
     )
     config = build_benchmark_config(
         tiny_case,
