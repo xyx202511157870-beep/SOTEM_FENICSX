@@ -146,12 +146,17 @@ def _earth(earth: Any) -> Mapping[str, Any]:
             raise ValueError(f"{layer_name} must contain exactly {sorted(required_fields)}")
 
         top = _real_scalar(layer["top_m"], f"{layer_name}.top_m")
+        if index == 0 and top != 0.0:
+            raise ValueError("earth.layers[0].top_m must equal 0.0")
+
         raw_bottom = layer["bottom_m"]
         if raw_bottom is None:
             if index != len(layers) - 1:
                 raise ValueError("only the final earth layer may have no bottom")
             bottom = None
         else:
+            if index == len(layers) - 1:
+                raise ValueError(f"{layer_name}.bottom_m must be null")
             bottom = _real_scalar(raw_bottom, f"{layer_name}.bottom_m")
             if bottom <= top:
                 raise ValueError(f"{layer_name}.bottom_m must be greater than top_m")

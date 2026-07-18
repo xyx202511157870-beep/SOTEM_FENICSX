@@ -224,6 +224,29 @@ def test_loader_rejects_invalid_layer_order_or_continuity(tmp_path, layers):
         _load_payload(tmp_path, payload)
 
 
+@pytest.mark.parametrize("first_top", [10.0, -10.0])
+def test_loader_requires_layered_earth_to_start_at_surface(tmp_path, first_top):
+    payload = _valid_payload()
+    payload["earth"] = _valid_layered_earth()
+    payload["earth"]["layers"][0]["top_m"] = first_top
+
+    with pytest.raises(
+        ValueError, match=r"^earth\.layers\[0\]\.top_m must equal 0\.0$"
+    ):
+        _load_payload(tmp_path, payload)
+
+
+def test_loader_requires_final_layer_to_cover_remaining_domain(tmp_path):
+    payload = _valid_payload()
+    payload["earth"] = _valid_layered_earth()
+    payload["earth"]["layers"][-1]["bottom_m"] = 1000.0
+
+    with pytest.raises(
+        ValueError, match=r"^earth\.layers\[1\]\.bottom_m must be null$"
+    ):
+        _load_payload(tmp_path, payload)
+
+
 @pytest.mark.parametrize(
     "earth",
     [
