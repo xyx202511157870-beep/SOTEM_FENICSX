@@ -14,7 +14,6 @@ from atem3d.seepage_verification import (
     anomaly_energy_trend,
     build_verification_summary,
     canonical_model_contract,
-    comsol_multi_solver_agreement,
     cross_solver_agreement,
     discrete_volume_metrics,
     model_fingerprint,
@@ -226,22 +225,6 @@ def test_cross_solver_agreement_uses_formal_strong_signal_percentiles() -> None:
 
     assert summary["pass"] is True
     assert all(item["median"] < 0.20 for item in summary["components"].values())
-
-
-def test_comsol_agreement_requires_both_open_3d_solvers() -> None:
-    comsol = np.ones((5, 6, 3), dtype=float)
-    simpeg = comsol * 1.10
-    fenicsx = comsol * 0.90
-
-    summary = comsol_multi_solver_agreement(
-        comsol,
-        {"SimPEG": simpeg, "FEniCSx": fenicsx},
-        median_threshold=0.25,
-        p95_threshold=0.40,
-    )
-
-    assert summary["pass"] is True
-    assert set(summary["comparisons"]) == {"SimPEG", "FEniCSx"}
 
 
 def test_discrete_volume_gate_requires_every_solver_case_within_two_percent() -> None:

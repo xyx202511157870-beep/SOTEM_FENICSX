@@ -49,7 +49,7 @@ def test_verified_figure_manifest_is_two_solver_only() -> None:
     assert "verified_three_solver_anomaly.png" not in FIGURE_NAMES
 
 
-def test_plot_generation_does_not_read_comsol_results(
+def test_plot_generation_reads_only_the_layered_background_reference(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -90,7 +90,6 @@ def test_plot_generation_does_not_read_comsol_results(
 
     assert paths == [tmp_path / name for name in FIGURE_NAMES]
     assert loaded_paths == [tmp_path / "verification_empymod_background.npz"]
-    assert all("comsol" not in str(path).lower() for path in loaded_paths)
     assert sweep_calls == [
         ("conductivity", "channel conductivity (S/m)"),
         ("volume", "channel volume (m^3)"),

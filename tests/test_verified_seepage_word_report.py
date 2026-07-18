@@ -36,10 +36,10 @@ def test_verified_report_refuses_missing_or_failed_final_summary(
         build_verified_report(tmp_path, tmp_path / "report.docx")
 
     (tmp_path / "verification_summary.json").write_text(
-        json.dumps({"pass": False, "failed_gates": ["comsol_zero_contrast"]}),
+        json.dumps({"pass": False, "failed_gates": ["late_time_ex_convergence"]}),
         encoding="utf-8",
     )
-    with pytest.raises(VerificationGateError, match="comsol_zero_contrast"):
+    with pytest.raises(VerificationGateError, match="late_time_ex_convergence"):
         build_verified_report(tmp_path, tmp_path / "report.docx")
 
 
@@ -69,7 +69,7 @@ def test_gate_rows_are_derived_from_final_json() -> None:
     assert "20.0%" in rows[1][1]
 
 
-def test_verified_report_contains_only_explicit_comsol_scope_exclusion(
+def test_verified_report_describes_only_the_three_retained_solvers(
     tmp_path: Path,
 ) -> None:
     fingerprint = "a" * 64
@@ -116,6 +116,5 @@ def test_verified_report_contains_only_explicit_comsol_scope_exclusion(
     report_text = "\n".join(text_parts)
 
     assert FIGURES[-1][0] == "verified_two_solver_anomaly.png"
-    assert "COMSOL 不在本版正式求解、验证与报告范围内" in report_text
-    assert report_text.count("COMSOL") == 1
-    assert "COMSOL 三维参考" not in report_text
+    assert "empymod 只承担背景验证" in report_text
+    assert "SimPEG 与 FEniCSx 独立比较" in report_text

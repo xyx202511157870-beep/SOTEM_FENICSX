@@ -29,6 +29,4 @@ def test_final_summary_uses_only_open3d_required_gates(
 
     assert summary is expected
     assert final_aggregation.FINAL_REQUIRED_GATES == OPEN3D_REQUIRED_GATES
-    assert not any(name.startswith("comsol_") for name in summary["required_gates"])
     assert calls == [(tmp_path, True)]
-

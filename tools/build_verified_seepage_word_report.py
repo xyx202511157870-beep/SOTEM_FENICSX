@@ -264,7 +264,7 @@ def _add_reproducibility(document: Document, result_dir: Path, summary: dict[str
     )
     add_body(
         document,
-        "限制：本模型为各向同性、纯电导率异常，不含激发极化、含水率随时间变化、地形和粗糙边界。empymod 只承担背景验证；有限三维通道由 SimPEG 与 FEniCSx 独立比较。COMSOL 不在本版正式求解、验证与报告范围内。",
+        "限制：本模型为各向同性、纯电导率异常，不含激发极化、含水率随时间变化、地形和粗糙边界。empymod 只承担背景验证；有限三维通道由 SimPEG 与 FEniCSx 独立比较。",
         bold_lead="限制：",
     )
     add_body(

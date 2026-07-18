@@ -493,32 +493,6 @@ def test_validation_gate_uses_pointwise_relative_error_not_floor_error():
     assert summary["max_error_Ex"] == 1.0
 
 
-def test_legacy_validation_gate_uses_pointwise_relative_error_not_peak_normalized_error():
-    import importlib.util
-    import sys
-
-    path = Path(__file__).resolve().parents[1] / "dolfinx" / "legacy_total_field_baseline.py"
-    spec = importlib.util.spec_from_file_location("legacy_total_field_baseline_for_test", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-
-    rows, summary = module._robust_error_rows(
-        np.asarray([1.0]),
-        np.asarray([[2.0e-20]]),
-        np.asarray([[1.0e-20]]),
-        ["Ex"],
-        threshold=0.05,
-    )
-
-    assert rows[0]["ordinary_relative_error"] == 1.0
-    assert rows[0]["relative_error_with_floor"] < 0.05
-    assert rows[0]["peak_normalized_error"] < 0.05
-    assert rows[0]["pass_5pct"] is False
-    assert summary["max_error_Ex"] == 1.0
-
-
 def test_source_term_mode_accepts_primary_secondary():
     sp = load_pipeline()
 

@@ -1,3 +1,0 @@
-time_obs,receiver_type,radius,Ex,Ey,Hz,dBzdt,sample_count,candidate_count_min,candidate_count_max,candidate_count_mean
-1e-05,point,0.0,0.0009260757304458694,1.9023586441520596e-05,-0.0021963178682062115,5.264767595840535e-06,1,32,32,32.0
-1e-05,disk_average,2.0,0.0009171461792970266,3.0261204912908846e-05,nan,4.357164841192045e-06,5,4,32,9.6

@@ -23,6 +23,7 @@ __pycache__/
 *.svg
 dolfinx/paper_reproduction/
 dolfinx/runs/
+dolfinx/current_task_runs/
 dolfinx/figures/
 dolfinx/analyticdc_small_smoke/
 dolfinx/empymod_analytic_check/

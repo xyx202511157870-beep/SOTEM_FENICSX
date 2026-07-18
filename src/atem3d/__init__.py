@@ -1,4 +1,4 @@
-"""Direct time-domain grounded-wire TDEM solver with Debye IP coupling."""
+"""Open-source grounded-wire TDEM components used by the three-solver study."""
 
 from __future__ import annotations
 
@@ -21,10 +21,6 @@ from .metrics import (
     robust_relative_error,
     summarize_errors,
 )
-from .corrected_model import (
-    CorrectedModelValidationConfig,
-    build_corrected_model_case_specs,
-)
 from .receivers import AverageReceiver, PointReceiver, build_receiver
 from .waveforms import (
     LinearRampOffWaveform,
@@ -40,13 +36,11 @@ __all__ = [
     "LinearResponseFit",
     "LinearRampOffWaveform",
     "AverageReceiver",
-    "CorrectedModelValidationConfig",
     "PointReceiver",
     "StepOffWaveform",
     "TabulatedWaveform",
     "Waveform",
     "absolute_linf",
-    "build_corrected_model_case_specs",
     "build_internal_time_grid",
     "build_internal_time_grid_from_turnoff",
     "build_receiver",
