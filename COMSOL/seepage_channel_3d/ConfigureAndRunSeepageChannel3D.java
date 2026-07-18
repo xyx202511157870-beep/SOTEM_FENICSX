@@ -123,6 +123,9 @@ public class ConfigureAndRunSeepageChannel3D {
 
   private static void createChannelMeshControl(Model model) {
     model.component("comp1").mesh("mesh1").feature().create("size_channel_3d", "Size");
+    // The canonical mesh sequence ends with ftet1.  Size controls appended
+    // after that node are never consumed by the free-tetrahedral operation.
+    model.component("comp1").mesh("mesh1").feature().move("size_channel_3d", 4);
     model.component("comp1").mesh("mesh1").feature("size_channel_3d")
         .selection().named("sel_channel_3d");
     model.component("comp1").mesh("mesh1").feature("size_channel_3d").set("custom", "on");

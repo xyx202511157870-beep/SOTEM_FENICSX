@@ -38,6 +38,22 @@ def test_comsol_channel_contract_matches_the_canonical_thin_3d_model() -> None:
     assert contract["channel"]["conductivity_s_per_m"] == 1.0
 
 
+def test_comsol_channel_mesh_size_precedes_the_free_tetrahedral_feature() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "COMSOL"
+        / "seepage_channel_3d"
+        / "ConfigureAndRunSeepageChannel3D.java"
+    ).read_text(encoding="utf-8")
+
+    create = source.index('feature().create("size_channel_3d", "Size")')
+    move = source.index('feature().move("size_channel_3d", 4)')
+    configure_call = source.index("createChannelMeshControl(model);")
+    mesh_run = source.index('mesh("mesh1").run()', configure_call)
+    assert create < move
+    assert configure_call < mesh_run
+
+
 def test_comsol_zero_contrast_keeps_geometry_but_uses_background_sigma() -> None:
     contract = comsol_case_contract("zero_contrast")
 
