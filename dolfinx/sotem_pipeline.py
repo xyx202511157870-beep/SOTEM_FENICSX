@@ -3691,6 +3691,10 @@ def cole_cole_complex_conductivity(freqs, rho0: float, m: float, tau: float, c: 
 def fit_cole_cole_to_debye(config: PipelineConfig) -> DebyeFit:
     """Fit Cole-Cole conductivity to nonnegative Debye/Prony poles."""
 
+    tolerance = float(config.cole_fit_tolerance)
+    if not math.isfinite(tolerance) or tolerance <= 0.0:
+        raise ValueError("cole_fit_tolerance must be finite and positive")
+
     import numpy as np
     from scipy.optimize import lsq_linear
 
@@ -3715,10 +3719,10 @@ def fit_cole_cole_to_debye(config: PipelineConfig) -> DebyeFit:
     denom = np.linalg.norm(np.r_[target.real, target.imag])
     rel_l2 = float(np.linalg.norm(np.r_[fitted.real - target.real, fitted.imag - target.imag]) / denom)
     terms = [DebyeTerm(float(d), float(t)) for d, t in zip(delta, tau_grid)]
-    if rel_l2 > float(config.cole_fit_tolerance):
+    if rel_l2 > tolerance:
         raise ValueError(
             f"Cole-Cole Debye fit relative L2 {rel_l2:.6e} exceeds "
-            f"tolerance {float(config.cole_fit_tolerance):.6e}"
+            f"tolerance {tolerance:.6e}"
         )
     print(
         f"[polarization] Cole-Cole fitted to {len(terms)} Debye terms; "
@@ -5507,12 +5511,55 @@ def _empymod_polarizable_layer_indices(depth: list[float], res: list[float], con
     return indices
 
 
+def _split_empymod_cole_cole_layers(
+    depth: list[float],
+    res: list[float],
+    config: PipelineConfig,
+) -> tuple[list[float], list[float]]:
+    """Insert Cole-Cole window boundaries without changing base resistivities."""
+
+    split_depth = [float(value) for value in depth]
+    split_res = [float(value) for value in res]
+    if len(split_res) != len(split_depth) + 1:
+        raise ValueError("empymod model must satisfy len(res) == len(depth) + 1")
+
+    top = float(config.cole_layer_top)
+    bottom = float(config.cole_layer_bottom)
+    earth_depth = float(config.earth_depth)
+    if (
+        not math.isfinite(top)
+        or top < 0.0
+        or top >= earth_depth
+        or math.isnan(bottom)
+        or bottom == -math.inf
+        or bottom <= top
+        or (math.isfinite(bottom) and bottom > earth_depth)
+    ):
+        raise RuntimeError("no empymod layer overlaps the Cole-Cole interval")
+
+    boundaries = [top]
+    if math.isfinite(bottom):
+        boundaries.append(bottom)
+    for boundary in boundaries:
+        if boundary == 0.0 or any(
+            math.isclose(boundary, interface, rel_tol=1.0e-12, abs_tol=1.0e-12)
+            for interface in split_depth
+        ):
+            continue
+        position = bisect.bisect_left(split_depth, boundary)
+        split_depth.insert(position, boundary)
+        split_res.insert(position + 1, split_res[position])
+
+    return split_depth, split_res
+
+
 def _exact_cole_cole_empymod_material(config: PipelineConfig):
     """Build an exact Cole-Cole conductivity callback for the selected earth layers."""
 
     import numpy as np
 
     depth, base_res = _empymod_depth_res(config)
+    depth, base_res = _split_empymod_cole_cole_layers(depth, base_res, config)
     indices = _empymod_polarizable_layer_indices(depth, base_res, config)
     if not indices:
         raise RuntimeError("no empymod layer overlaps the Cole-Cole interval")
@@ -5541,10 +5588,11 @@ def _debye_cole_cole_empymod_material(config: PipelineConfig):
     import numpy as np
 
     depth, base_res = _empymod_depth_res(config)
-    fit = fit_cole_cole_to_debye(config)
+    depth, base_res = _split_empymod_cole_cole_layers(depth, base_res, config)
     indices = _empymod_polarizable_layer_indices(depth, base_res, config)
     if not indices:
         raise RuntimeError("no empymod layer overlaps the Cole-Cole interval")
+    fit = fit_cole_cole_to_debye(config)
     sigma = 1.0 / np.asarray(base_res, dtype=float)
     for index in indices:
         sigma[index] = fit.sigma_infinity
@@ -5725,7 +5773,7 @@ def get_empymod_reference(t_array, config: PipelineConfig, mode: str = "noip", *
         f"srcpts={empymod_kwargs['srcpts']}, ht={config.empymod_ht}, ft={config.empymod_ft}",
         flush=True,
     )
-    return {"times": times, "data": data, "components": components}
+    return {"times": times, "data": data, "components": components, "reference_mode": mode}
 
 
 def compute_error(fem_data, ref_data, components, floor_factor: float = 1.0e-6):
@@ -6445,6 +6493,7 @@ def write_validation_artifacts(
     receiver_diagnostic_rows=None,
     solver_log=None,
     validation_scope: str = "smoke",
+    reference_mode: str | None = None,
 ) -> dict[str, Any]:
     """Write P2 validation CSV/JSON/plot artifacts for a three-component run."""
 
@@ -6460,6 +6509,8 @@ def write_validation_artifacts(
             "validation_scope": str(validation_scope),
         }
     )
+    if reference_mode is not None:
+        summary["reference_mode"] = str(reference_mode)
     from atem3d.validation_3comp import validation_acceptance_status
 
     acceptance_status = validation_acceptance_status(
@@ -6908,7 +6959,8 @@ def write_report(
     lines.append(f"  source: {config.source_start} -> {config.source_end}, I={config.source_current:g} A")
     lines.append(f"  receiver: {config.receiver}")
     try:
-        model = validate_model_consistency(config)
+        reference_mode = ref_result.get("reference_mode") if isinstance(ref_result, dict) else None
+        model = validate_model_consistency(config, reference_mode=reference_mode)
         lines.append(
             "  survey geometry: "
             f"source_length={model['source_length']:.6g} m, "
@@ -8219,6 +8271,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         config,
         case_type="ip" if ref_mode != "noip" else "noip",
         reference_type="empymod",
+        reference_mode=ref_result.get("reference_mode", ref_mode),
         source_info={"mode": f"postprocess_partial/{config.source_mode}"},
         receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
         solver_log=fem_result.get("solver_log"),
@@ -8628,6 +8681,7 @@ def main(argv: list[str] | None = None) -> int:
             config,
             case_type="ip" if ref_mode != "noip" else "noip",
             reference_type="empymod",
+            reference_mode=ref_result.get("reference_mode", ref_mode),
             source_info=source,
             receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
             solver_log=fem_result.get("solver_log"),

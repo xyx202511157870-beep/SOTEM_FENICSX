@@ -224,6 +224,22 @@ def test_cole_cole_debye_fit_accepts_material_error_equal_to_tolerance():
     assert fit.relative_l2 == measured
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0.0, -0.01])
+def test_cole_cole_debye_fit_rejects_invalid_tolerance_before_scipy(monkeypatch, value):
+    sp = _load_pipeline_module()
+    import scipy.optimize
+
+    monkeypatch.setattr(
+        scipy.optimize,
+        "lsq_linear",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("SciPy fit must not run")),
+    )
+    config = sp.PipelineConfig(cole_fit_tolerance=value)
+
+    with pytest.raises(ValueError, match="^cole_fit_tolerance must be finite and positive$"):
+        sp.fit_cole_cole_to_debye(config)
+
+
 def test_exact_empymod_material_uses_cole_cole_not_debye_fit(monkeypatch):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(
@@ -283,9 +299,95 @@ def test_exact_empymod_material_changes_only_overlapping_earth_layers():
     assert eta_v[0, 2] != -1.0
 
 
+def test_exact_empymod_material_splits_internal_cole_cole_window():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        layer_depths=(300.0,),
+        layer_resistivities=(100.0, 100.0),
+        cole_layer_top=100.0,
+        cole_layer_bottom=200.0,
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+    )
+
+    depth, material = sp._exact_cole_cole_empymod_material(config)
+    frequencies = np.array([0.1, 10.0])
+    eta_h, eta_v = material["func_eta"](None, {"freq": frequencies})
+    expected = sp.cole_cole_complex_conductivity(frequencies, 100.0, 0.3, 1.0, 0.3)
+
+    assert depth == pytest.approx([0.0, 100.0, 200.0, 300.0])
+    assert material["res"] == pytest.approx([config.rho_air, 100.0, 100.0, 100.0, 100.0])
+    np.testing.assert_allclose(eta_h[:, 0], 1.0 / config.rho_air)
+    np.testing.assert_allclose(eta_h[:, 1], 0.01)
+    np.testing.assert_allclose(eta_h[:, 2], expected)
+    np.testing.assert_allclose(eta_h[:, 3], 0.01)
+    np.testing.assert_allclose(eta_h[:, 4], 0.01)
+    np.testing.assert_allclose(eta_v, eta_h)
+
+
+def test_debye_empymod_material_splits_internal_cole_cole_window():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        layer_depths=(300.0,),
+        layer_resistivities=(100.0, 100.0),
+        cole_layer_top=100.0,
+        cole_layer_bottom=200.0,
+        cole_rho0=100.0,
+        cole_m=0.3,
+        cole_tau=1.0,
+        cole_c=0.3,
+        cole_n_terms=16,
+        cole_f_min=1.0e-3,
+        cole_f_max=1.0e4,
+        cole_n_freq=81,
+        cole_fit_tolerance=0.01,
+    )
+
+    depth, material = sp._debye_cole_cole_empymod_material(config)
+    frequencies = np.array([0.1, 10.0])
+    eta_h, eta_v = material["func_eta"](None, {"freq": frequencies})
+
+    assert depth == pytest.approx([0.0, 100.0, 200.0, 300.0])
+    assert material["res"] == pytest.approx([config.rho_air, 100.0, 70.0, 100.0, 100.0])
+    np.testing.assert_allclose(eta_h[:, 0], 1.0 / config.rho_air)
+    np.testing.assert_allclose(eta_h[:, 1], 0.01)
+    assert not np.allclose(eta_h[:, 2], 0.01)
+    np.testing.assert_allclose(eta_h[:, 3], 0.01)
+    np.testing.assert_allclose(eta_h[:, 4], 0.01)
+    np.testing.assert_allclose(eta_v, eta_h)
+
+
+def test_empymod_cole_layer_split_preserves_existing_boundaries_and_infinite_bottom():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(cole_layer_top=300.0, cole_layer_bottom=float("inf"))
+
+    depth, res = sp._split_empymod_cole_cole_layers(
+        [0.0, 300.0],
+        [config.rho_air, 100.0, 200.0],
+        config,
+    )
+
+    assert depth == pytest.approx([0.0, 300.0])
+    assert res == pytest.approx([config.rho_air, 100.0, 200.0])
+
+
 def test_exact_empymod_material_rejects_interval_without_earth_overlap():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(cole_layer_top=-300.0, cole_layer_bottom=-100.0)
+
+    with pytest.raises(RuntimeError, match="^no empymod layer overlaps the Cole-Cole interval$"):
+        sp._exact_cole_cole_empymod_material(config)
+
+
+def test_exact_empymod_material_rejects_interval_below_finite_fem_earth():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        earth_depth=1000.0,
+        cole_layer_top=1100.0,
+        cole_layer_bottom=1200.0,
+    )
 
     with pytest.raises(RuntimeError, match="^no empymod layer overlaps the Cole-Cole interval$"):
         sp._exact_cole_cole_empymod_material(config)
@@ -323,6 +425,8 @@ def test_empymod_reference_has_distinct_exact_and_debye_modes(monkeypatch):
     debye = sp.get_empymod_reference(np.array([1.0e-4, 1.0e-3]), config, mode="cole-cole-debye")
 
     assert exact["data"].shape == debye["data"].shape == (2, 3)
+    assert exact["reference_mode"] == "cole-cole-exact"
+    assert debye["reference_mode"] == "cole-cole-debye"
     assert exact_materials and seen_materials
     assert all(material["res"][1] == pytest.approx(100.0) for material in exact_materials)
     assert all(material["res"][1] == pytest.approx(70.0) for material in seen_materials)

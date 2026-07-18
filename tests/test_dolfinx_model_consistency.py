@@ -1161,3 +1161,92 @@ def test_postprocess_cli_selects_exact_cole_cole_reference(monkeypatch, tmp_path
     assert result == 0
     assert captured["config"].polarization == "cole-cole"
     assert captured["ref_mode"] == "cole-cole-exact"
+
+
+@pytest.mark.parametrize("ref_mode", ["noip", "cole-cole-exact", "cole-cole-debye"])
+def test_postprocess_records_actual_empymod_reference_mode(monkeypatch, tmp_path, ref_mode):
+    sp = _load_pipeline_module()
+    times = np.array([1.0e-4, 1.0e-3])
+    components = ("Ex", "Ey", "dBzdt")
+    data = np.ones((times.size, len(components)))
+    fem_result = {"times": times, "data": data, "components": components, "solver_log": []}
+    captured = {}
+
+    monkeypatch.setattr(sp, "_load_forward_partial", lambda _config: fem_result)
+    monkeypatch.setattr(
+        sp,
+        "get_empymod_reference",
+        lambda requested_times, _config, *, mode, **_kwargs: {
+            "times": requested_times,
+            "data": data.copy(),
+            "components": components,
+            "reference_mode": mode,
+        },
+    )
+    monkeypatch.setattr(sp, "compute_error", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(sp, "_save_npz", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(sp, "plot_verification", lambda *_args, **_kwargs: None)
+
+    def write_validation_artifacts(*_args, reference_mode=None, **_kwargs):
+        captured["artifact_reference_mode"] = reference_mode
+        return {}
+
+    def write_report(_config, _env, _fem_result, ref_result, *_args, **_kwargs):
+        captured["report_reference_mode"] = ref_result.get("reference_mode")
+
+    monkeypatch.setattr(sp, "write_validation_artifacts", write_validation_artifacts)
+    monkeypatch.setattr(sp, "write_report", write_report)
+    config = sp.PipelineConfig(workdir=tmp_path, polarization="cole-cole" if ref_mode != "noip" else "none")
+
+    sp.postprocess_saved_forward(config, {}, ref_mode=ref_mode)
+
+    assert captured["artifact_reference_mode"] == ref_mode
+    assert captured["report_reference_mode"] == ref_mode
+
+
+def test_report_uses_reference_mode_from_reference_result(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, polarization="cole-cole")
+    times = np.array([1.0e-4, 1.0e-3])
+    components = ("Ex", "Ey", "dBzdt")
+    data = np.array([[1.0, 1.0e-4, 1.0e-6], [0.5, 5.0e-5, 5.0e-7]])
+    fem_result = {
+        "times": times,
+        "data": data,
+        "components": components,
+        "solver_log": [],
+    }
+    ref_result = {
+        "times": times,
+        "data": data.copy(),
+        "components": components,
+        "reference_mode": "cole-cole-debye",
+    }
+    errors = sp.compute_error(data, data, components)
+
+    sp.write_report(config, {}, fem_result, ref_result, errors, {"mode": "test"})
+
+    report = config.output_report().read_text(encoding="utf-8")
+    assert "reference_mode=cole-cole-debye" in report
+    assert "reference_mode=cole-cole-exact" not in report
+
+
+def test_validation_artifacts_record_actual_reference_mode(tmp_path):
+    sp = _load_pipeline_module()
+    times = np.array([1.0e-4, 1.0e-3])
+    components = ("Ex", "Ey", "dBzdt")
+    data = np.array([[1.0, 1.0e-4, 1.0e-6], [0.5, 5.0e-5, 5.0e-7]])
+    config = sp.PipelineConfig(workdir=tmp_path)
+
+    summary = sp.write_validation_artifacts(
+        times,
+        data,
+        data.copy(),
+        components,
+        config,
+        case_type="ip",
+        reference_type="empymod",
+        reference_mode="cole-cole-debye",
+    )
+
+    assert summary["reference_mode"] == "cole-cole-debye"
