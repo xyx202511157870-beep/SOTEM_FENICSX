@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -665,6 +666,30 @@ def test_late_time_diffusion_audit_accepts_explicit_diffusion_refinement_factor(
     assert audit["underresolved"] is False
 
 
+def test_explicit_observation_times_define_effective_diffusion_window():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        rho_earth=100.0,
+        t_max=1.0,
+        observation_times=(1.0e-5, 1.0e-3, 10.0),
+        diffusion_refinement_factor=2.0,
+    )
+
+    expected_length = sp._max_earth_diffusion_length(config, time=10.0)
+    raw_t_max_length = sp._max_earth_diffusion_length(config, time=1.0)
+    audit = sp._diffusion_refinement_audit(config)
+    diagnostics = sp.validate_model_consistency(config)
+
+    assert sp._effective_t_max(config) == pytest.approx(10.0)
+    assert audit["diffusion_length"] == pytest.approx(expected_length)
+    assert audit["diffusion_length"] != pytest.approx(raw_t_max_length)
+    assert audit["box_radius"] == pytest.approx(2.0 * expected_length)
+    assert audit["box_depth"] == pytest.approx(2.0 * expected_length)
+    assert diagnostics["configured_t_max"] == pytest.approx(1.0)
+    assert diagnostics["effective_t_max"] == pytest.approx(10.0)
+    assert diagnostics["t_max"] == pytest.approx(10.0)
+
+
 def test_late_time_diffusion_audit_reports_finite_domain_separately_from_refinement_box():
     sp = _load_pipeline_module()
 
@@ -709,11 +734,30 @@ def test_explicit_observation_times_override_growth_grid():
     assert sp.generate_time_array(config).tolist() == pytest.approx(config.observation_times)
 
 
-def test_empty_explicit_observation_times_use_legacy_growth_grid():
+@pytest.mark.parametrize("observation_times", [(), [], np.asarray([], dtype=float)])
+def test_empty_one_dimensional_observation_times_use_legacy_growth_grid(observation_times):
     sp = _load_pipeline_module()
-    config = sp.PipelineConfig(t_min=1.0e-5, t_max=1.0e-3, time_growth=10.0, observation_times=())
+    config = sp.PipelineConfig(
+        t_min=1.0e-5,
+        t_max=1.0e-3,
+        time_growth=10.0,
+        observation_times=observation_times,
+    )
 
     assert sp.generate_time_array(config).tolist() == pytest.approx([1.0e-5, 1.0e-4, 1.0e-3])
+
+
+def test_explicit_observation_times_return_independent_array_copy():
+    sp = _load_pipeline_module()
+    supplied = np.asarray([1.0e-5, 1.0e-4, 1.0e-3], dtype=float)
+
+    generated = sp.generate_time_array(sp.PipelineConfig(observation_times=supplied))
+
+    assert not np.shares_memory(generated, supplied)
+    supplied[0] = 2.0e-5
+    assert generated[0] == pytest.approx(1.0e-5)
+    generated[1] = 2.0e-4
+    assert supplied[1] == pytest.approx(1.0e-4)
 
 
 @pytest.mark.parametrize(
@@ -755,6 +799,15 @@ def test_explicit_observation_times_reject_non_one_dimensional_inputs(observatio
     assert str(exc_info.value) == "observation_times must be finite, positive, and strictly increasing"
 
 
+def test_model_consistency_rejects_invalid_explicit_observation_times():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError) as exc_info:
+        sp.validate_model_consistency(sp.PipelineConfig(observation_times=(1.0e-5, float("nan"))))
+
+    assert str(exc_info.value) == "observation_times must be finite, positive, and strictly increasing"
+
+
 def test_ideal_step_off_schedule_has_no_synthetic_ramp_steps():
     sp = _load_pipeline_module()
     times = np.array([1.0e-5, 1.0e-4, 1.0e-3])
@@ -792,7 +845,83 @@ def test_explicit_observation_times_round_trip_through_cli_and_resolved_yaml(mon
 
     assert result == 0
     assert captured["config"].observation_times == pytest.approx((1.0e-5, 1.0e-4, 1.0e-3))
-    assert "observation_times: [1e-05, 0.0001, 0.001]\n" in sp._resolved_config_yaml(captured["config"])
+    resolved = sp._resolved_config_yaml(captured["config"])
+    assert "observation_times: [1e-05, 0.0001, 0.001]\n" in resolved
+    assert "configured_t_max: 1\n" in resolved
+    assert "effective_t_max: 0.001\n" in resolved
+    assert "t_max: 0.001\n" in resolved
+
+
+def test_invalid_explicit_observation_times_fail_before_check_env_only(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    calls = {"environment": 0}
+
+    def check_environment(**_kwargs):
+        calls["environment"] += 1
+        return {}
+
+    monkeypatch.setattr(sp, "check_environment", check_environment)
+
+    with pytest.raises(SystemExit) as exc_info:
+        sp.main(
+            [
+                "--workdir",
+                str(tmp_path),
+                "--observation-times",
+                "1e-5,nan",
+                "--check-env-only",
+                "--no-install",
+            ]
+        )
+
+    assert str(exc_info.value) == "[model] observation_times must be finite, positive, and strictly increasing"
+    assert calls["environment"] == 0
+
+
+def test_invalid_explicit_observation_times_cannot_reach_mesh_only(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    calls = {"environment": 0, "mesh": 0}
+
+    def check_environment(**_kwargs):
+        calls["environment"] += 1
+        return {}
+
+    def generate_verification_mesh(_config):
+        calls["mesh"] += 1
+        return tmp_path / "unused.msh"
+
+    monkeypatch.setattr(sp, "check_environment", check_environment)
+    monkeypatch.setattr(sp, "generate_verification_mesh", generate_verification_mesh)
+    monkeypatch.setitem(
+        sys.modules,
+        "mpi4py",
+        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=1))),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        sp.main(
+            [
+                "--workdir",
+                str(tmp_path),
+                "--observation-times",
+                "1e-5,nan",
+                "--mesh-only",
+                "--no-install",
+            ]
+        )
+
+    assert str(exc_info.value) == "[model] observation_times must be finite, positive, and strictly increasing"
+    assert calls == {"environment": 0, "mesh": 0}
+
+
+def test_malformed_observation_times_csv_is_reported_by_argparse(capsys):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(SystemExit) as exc_info:
+        sp.main(["--observation-times", "1e-5,,1e-3"])
+
+    assert exc_info.value.code == 2
+    assert "argument --observation-times" in capsys.readouterr().err
 
 
 def test_after_ramp_observation_schedule_solves_through_ramp_then_returns_observation_times():

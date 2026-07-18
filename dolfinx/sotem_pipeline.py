@@ -277,12 +277,41 @@ def _uniform_halfspace_resistivity(config: PipelineConfig) -> float:
     return first
 
 
+def _validated_observation_times(config: PipelineConfig):
+    """Return validated explicit observation times as an independent 1-D array."""
+
+    import numpy as np
+
+    try:
+        values = np.asarray(config.observation_times, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("observation_times must be finite, positive, and strictly increasing") from exc
+    if values.ndim != 1:
+        raise ValueError("observation_times must be finite, positive, and strictly increasing")
+    if values.size > 0 and (
+        not np.all(np.isfinite(values))
+        or np.any(values <= 0.0)
+        or np.any(np.diff(values) <= 0.0)
+    ):
+        raise ValueError("observation_times must be finite, positive, and strictly increasing")
+    return values.copy()
+
+
+def _effective_t_max(config: PipelineConfig) -> float:
+    """Return the terminal observation time used by the simulation."""
+
+    observation_times = _validated_observation_times(config)
+    if observation_times.size > 0:
+        return float(observation_times[-1])
+    return float(config.t_max)
+
+
 def _max_earth_diffusion_length(config: PipelineConfig, time: float | None = None) -> float:
     """Return sqrt(2*rho*t/mu) using the most diffusive earth resistivity."""
 
     _layer_depths, layer_resistivities = _normalise_layer_model(config)
     rho = max(float(value) for value in layer_resistivities)
-    t = float(config.t_max if time is None else time)
+    t = float(_effective_t_max(config) if time is None else time)
     mu = 4.0 * math.pi * 1.0e-7 * float(config.mu_r_earth)
     if rho <= 0.0 or t <= 0.0 or mu <= 0.0:
         raise ValueError("rho, time, and mu must be positive for diffusion-length audit")
@@ -323,6 +352,7 @@ def _diffusion_refinement_audit(config: PipelineConfig) -> dict[str, Any]:
     domain_depth = float(config.earth_depth)
     domain_underresolved = bool(domain_horizontal_radius < recommended_radius or domain_depth < recommended_radius)
     return {
+        "effective_t_max": _effective_t_max(config),
         "diffusion_length": float(diffusion_length),
         "recommended_factor": float(recommended_factor),
         "recommended_radius": float(recommended_radius),
@@ -409,6 +439,8 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     import numpy as np
 
     diagnostics: dict[str, Any] = {}
+    observation_times = _validated_observation_times(config)
+    effective_t_max = _effective_t_max(config)
 
     def require_positive(name: str, value: float) -> float:
         value = float(value)
@@ -570,7 +602,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     if time_origin not in {"after_ramp", "ramp_start"}:
         raise ValueError("time_origin must be 'after_ramp' or 'ramp_start'")
     reference_ramp_window = "after_ramp" if time_origin == "after_ramp" else "ramp_start"
-    if float(config.t_max) <= float(config.t_min):
+    if observation_times.size == 0 and float(config.t_max) <= float(config.t_min):
         raise ValueError(f"t_max must be greater than t_min; got t_min={config.t_min:.12g}, t_max={config.t_max:.12g}")
     if not math.isfinite(float(config.time_growth)) or float(config.time_growth) <= 1.0:
         raise ValueError(f"time_growth must be finite and greater than 1; got {float(config.time_growth):.12g}")
@@ -758,6 +790,9 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "time_method": time_method,
             "time_origin": time_origin,
             "time_theta": time_theta,
+            "t_max": effective_t_max,
+            "configured_t_max": float(config.t_max),
+            "effective_t_max": effective_t_max,
             "reference_ramp_window": reference_ramp_window,
             "ramp_off_time": ramp_off_time,
             "ramp_solver_t_min": float(config.ramp_solver_t_min),
@@ -894,18 +929,9 @@ def generate_time_array(config: PipelineConfig):
 
     import numpy as np
 
-    uses_legacy_grid = isinstance(config.observation_times, tuple) and config.observation_times == ()
-    if not uses_legacy_grid:
-        values = np.asarray(config.observation_times, dtype=float)
-        if (
-            values.ndim != 1
-            or values.size == 0
-            or not np.all(np.isfinite(values))
-            or np.any(values <= 0.0)
-            or np.any(np.diff(values) <= 0.0)
-        ):
-            raise ValueError("observation_times must be finite, positive, and strictly increasing")
-        return values
+    observation_times = _validated_observation_times(config)
+    if observation_times.size > 0:
+        return observation_times
 
     if config.t_min <= 0.0 or config.t_max <= config.t_min:
         raise ValueError("time bounds must satisfy 0 < t_min < t_max")
@@ -5293,7 +5319,7 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
     V = spaces["V"]
     H_old = fem.Function(V, name="H_old")
     H_new = fem.Function(V, name="H_new")
-    static_dt = max(float(config.t_max), float(config.ramp_off_time), 1.0) * 1.0e9
+    static_dt = max(_effective_t_max(config), float(config.ramp_off_time), 1.0) * 1.0e9
     A0 = _copy_and_combine_matrix(operators["K"], operators["M"], 1.0 / static_dt)
     _zero_rows_columns(A0, operators["bc_global"], diag=1.0)
     solver_context = configure_lu_solver(A0)
@@ -6443,6 +6469,8 @@ def write_validation_artifacts(
 
 
 def _resolved_config_yaml(config: PipelineConfig) -> str:
+    observation_times = _validated_observation_times(config)
+    effective_t_max = _effective_t_max(config)
     values = {
         "source_start": list(config.source_start),
         "source_end": list(config.source_end),
@@ -6455,9 +6483,11 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "ramp_off_time": float(config.ramp_off_time),
         "time_origin": str(config.time_origin),
         "t_min": float(config.t_min),
-        "t_max": float(config.t_max),
+        "t_max": effective_t_max,
+        "configured_t_max": float(config.t_max),
+        "effective_t_max": effective_t_max,
         "time_growth": float(config.time_growth),
-        "observation_times": list(config.observation_times),
+        "observation_times": observation_times.tolist(),
         "min_steps_during_turnoff": int(config.min_steps_during_turnoff),
         "min_steps_before_first_observation": int(config.min_steps_before_first_observation),
         "components": "runtime",
@@ -6941,7 +6971,7 @@ def write_report(
     diffusion_audit = _diffusion_refinement_audit(config)
     lines.append(
         "  late diffusion audit: "
-        f"Lmax(t_max)={diffusion_audit['diffusion_length']:.6g} m; "
+        f"Lmax(effective_t_max)={diffusion_audit['diffusion_length']:.6g} m; "
         f"recommended radius/depth>={diffusion_audit['recommended_radius']:.6g} m; "
         f"refinement box radius={diffusion_audit['box_radius']:.6g} m; "
         f"refinement box depth={diffusion_audit['box_depth']:.6g} m; "
@@ -6966,7 +6996,8 @@ def write_report(
     lines.append(f"  time theta: {config.time_theta:g}")
     lines.append(f"  ramp-off time: {config.ramp_off_time:g} s")
     lines.append(
-        f"  time samples: t_min={config.t_min:g} s; t_max={config.t_max:g} s; "
+        f"  time samples: t_min={config.t_min:g} s; "
+        f"configured_t_max={config.t_max:g} s; effective_t_max={_effective_t_max(config):g} s; "
         f"ramp_solver_t_min={config.ramp_solver_t_min:g} s; "
         f"min_steps_during_turnoff={config.min_steps_during_turnoff}; "
         f"min_steps_before_first_observation={config.min_steps_before_first_observation}"
@@ -8141,7 +8172,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
     }
 
 
-def _parse_float_csv(value: str | None, name: str) -> tuple[float, ...]:
+def _parse_float_csv(value: str | None, name: str = "comma-separated float list") -> tuple[float, ...]:
     if value is None or str(value).strip() == "":
         return ()
     items: list[float] = []
@@ -8268,7 +8299,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ramp-off-time", type=float, default=1.0e-5)
     parser.add_argument(
         "--observation-times",
-        default="",
+        type=_parse_float_csv,
+        default=(),
         help="Comma-separated explicit output times; empty uses the geometric growth grid.",
     )
     parser.add_argument("--receiver-x", type=float, default=0.0)
@@ -8285,7 +8317,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional local receiver anchoring mesh size in metres; 0 reuses --receiver-mesh-size.",
     )
     parser.add_argument("--receiver-refinement-radius", type=float, default=60.0)
-    parser.add_argument("--diffusion-refinement-factor", type=float, default=0.0, help="If >0, expand the 80 m late-diffusion refinement box to factor*sqrt(2*rho_max*t_max/mu).")
+    parser.add_argument("--diffusion-refinement-factor", type=float, default=0.0, help="If >0, expand the 80 m late-diffusion refinement box to factor*sqrt(2*rho_max*effective_t_max/mu).")
     parser.add_argument("--diffusion-refinement-mesh-size", type=float, default=80.0)
     parser.add_argument("--sponge-strength", type=float, default=0.0, help="Transient outer-shell conductivity increment in S/m; 0 disables the sponge.")
     parser.add_argument("--sponge-thickness", type=float, default=0.0, help="Outer-shell sponge thickness in metres for the unstructured DOLFINx mesh.")
@@ -8378,7 +8410,7 @@ def main(argv: list[str] | None = None) -> int:
         source_end=(args.source_end_x, args.source_end_y, args.source_end_z),
         source_current=args.source_current,
         ramp_off_time=args.ramp_off_time,
-        observation_times=_parse_float_csv(args.observation_times, "--observation-times"),
+        observation_times=args.observation_times,
         receiver=(args.receiver_x, args.receiver_y, args.receiver_z),
         source_mesh_size=args.source_mesh_size,
         source_refinement_radius=args.source_refinement_radius,
