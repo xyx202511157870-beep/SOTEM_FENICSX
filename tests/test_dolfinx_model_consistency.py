@@ -132,7 +132,6 @@ def test_model_consistency_rejects_air_or_interface_electrodes(kwargs):
     ("field", "value"),
     [
         ("source_current", 0.0),
-        ("ramp_off_time", 0.0),
         ("t_min", 0.0),
         ("time_growth", 1.0),
         ("time_theta", 0.49),
@@ -153,6 +152,23 @@ def test_model_consistency_rejects_nonpositive_runtime_parameters(field, value):
 
     with pytest.raises(ValueError, match=field):
         sp.validate_model_consistency(sp.PipelineConfig(**kwargs))
+
+
+def test_model_consistency_accepts_ideal_step_off():
+    sp = _load_pipeline_module()
+
+    result = sp.validate_model_consistency(sp.PipelineConfig(ramp_off_time=0.0))
+
+    assert result["ramp_off_time"] == 0.0
+
+
+def test_model_consistency_rejects_negative_ramp_off_time():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError) as exc_info:
+        sp.validate_model_consistency(sp.PipelineConfig(ramp_off_time=-1.0e-5))
+
+    assert str(exc_info.value) == "ramp_off_time must be finite and nonnegative"
 
 
 @pytest.mark.parametrize("value", [-0.1, 1.1])
@@ -684,6 +700,82 @@ def test_model_consistency_rejects_invalid_time_origin():
 
     with pytest.raises(ValueError, match="time_origin"):
         sp.validate_model_consistency(sp.PipelineConfig(time_origin="bad"))
+
+
+def test_explicit_observation_times_override_growth_grid():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(observation_times=(1.0e-5, 1.0e-4, 1.0e-3))
+
+    assert sp.generate_time_array(config).tolist() == pytest.approx(config.observation_times)
+
+
+def test_empty_explicit_observation_times_use_legacy_growth_grid():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(t_min=1.0e-5, t_max=1.0e-3, time_growth=10.0, observation_times=())
+
+    assert sp.generate_time_array(config).tolist() == pytest.approx([1.0e-5, 1.0e-4, 1.0e-3])
+
+
+@pytest.mark.parametrize(
+    "observation_times",
+    [
+        (1.0e-5, float("nan"), 1.0e-3),
+        (1.0e-5, float("inf"), 1.0e-3),
+        (1.0e-5, float("-inf"), 1.0e-3),
+        (0.0, 1.0e-4, 1.0e-3),
+        (-1.0e-5, 1.0e-4, 1.0e-3),
+        (1.0e-5, 1.0e-5, 1.0e-3),
+        (1.0e-4, 1.0e-5, 1.0e-3),
+    ],
+)
+def test_explicit_observation_times_reject_invalid_values(observation_times):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(observation_times=observation_times)
+
+    with pytest.raises(ValueError) as exc_info:
+        sp.generate_time_array(config)
+
+    assert str(exc_info.value) == "observation_times must be finite, positive, and strictly increasing"
+
+
+def test_ideal_step_off_schedule_has_no_synthetic_ramp_steps():
+    sp = _load_pipeline_module()
+    times = np.array([1.0e-5, 1.0e-4, 1.0e-3])
+
+    schedule = sp._forward_observation_schedule(
+        times, sp.PipelineConfig(ramp_off_time=0.0, time_origin="after_ramp")
+    )
+
+    assert schedule["step_times"].tolist() == pytest.approx(times)
+    assert schedule["output_step_indices"] == [0, 1, 2]
+
+
+def test_explicit_observation_times_round_trip_through_cli_and_resolved_yaml(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    captured = {}
+    validate_model_consistency = sp.validate_model_consistency
+
+    def capture_config(config):
+        captured["config"] = config
+        return validate_model_consistency(config)
+
+    monkeypatch.setattr(sp, "validate_model_consistency", capture_config)
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+
+    result = sp.main(
+        [
+            "--workdir",
+            str(tmp_path),
+            "--observation-times",
+            "1e-5,1e-4,1e-3",
+            "--check-env-only",
+            "--no-install",
+        ]
+    )
+
+    assert result == 0
+    assert captured["config"].observation_times == pytest.approx((1.0e-5, 1.0e-4, 1.0e-3))
+    assert "observation_times: [1e-05, 0.0001, 0.001]\n" in sp._resolved_config_yaml(captured["config"])
 
 
 def test_after_ramp_observation_schedule_solves_through_ramp_then_returns_observation_times():

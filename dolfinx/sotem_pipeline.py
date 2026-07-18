@@ -101,6 +101,7 @@ class PipelineConfig:
     t_min: float = 1.0e-6
     t_max: float = 1.0
     time_growth: float = 1.05
+    observation_times: tuple[float, ...] = ()
     time_method: str = "theta"  # theta, bdf2
     time_theta: float = 1.0
     time_origin: str = "after_ramp"  # after_ramp, ramp_start
@@ -434,7 +435,6 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         ("rho_earth", config.rho_earth),
         ("mu_r_air", config.mu_r_air),
         ("mu_r_earth", config.mu_r_earth),
-        ("ramp_off_time", config.ramp_off_time),
         ("wire_radius", config.wire_radius),
         ("source_mesh_size", config.source_mesh_size),
         ("source_refinement_radius", config.source_refinement_radius),
@@ -449,6 +449,10 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         ("memory_limit_gb", config.memory_limit_gb),
     ]:
         require_positive(name, value)
+    ramp_off_time = float(config.ramp_off_time)
+    if not math.isfinite(ramp_off_time) or ramp_off_time < 0.0:
+        raise ValueError("ramp_off_time must be finite and nonnegative")
+    diagnostics["ramp_off_time"] = ramp_off_time
     receiver_anchor_mesh_size = float(config.receiver_anchor_mesh_size)
     if not math.isfinite(receiver_anchor_mesh_size) or receiver_anchor_mesh_size < 0.0:
         raise ValueError(
@@ -755,7 +759,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "time_origin": time_origin,
             "time_theta": time_theta,
             "reference_ramp_window": reference_ramp_window,
-            "ramp_off_time": float(config.ramp_off_time),
+            "ramp_off_time": ramp_off_time,
             "ramp_solver_t_min": float(config.ramp_solver_t_min),
             "min_steps_during_turnoff": min_steps_during_turnoff,
             "min_steps_before_first_observation": min_steps_before_first_observation,
@@ -890,6 +894,17 @@ def generate_time_array(config: PipelineConfig):
 
     import numpy as np
 
+    if len(config.observation_times) > 0:
+        values = np.asarray(config.observation_times, dtype=float)
+        if (
+            values.ndim != 1
+            or not np.all(np.isfinite(values))
+            or np.any(values <= 0.0)
+            or np.any(np.diff(values) <= 0.0)
+        ):
+            raise ValueError("observation_times must be finite, positive, and strictly increasing")
+        return values
+
     if config.t_min <= 0.0 or config.t_max <= config.t_min:
         raise ValueError("time bounds must satisfy 0 < t_min < t_max")
     if config.time_growth <= 1.0:
@@ -923,6 +938,13 @@ def _forward_observation_schedule(times, config: PipelineConfig):
         output_internal_times = observation_times.copy()
     elif time_origin == "after_ramp":
         ramp_time = float(config.ramp_off_time)
+        if ramp_time == 0.0:
+            return {
+                "step_times": observation_times.copy(),
+                "output_internal_times": observation_times.copy(),
+                "return_times": observation_times.copy(),
+                "output_step_indices": list(range(observation_times.size)),
+            }
         min_steps = max(1, int(config.min_steps_during_turnoff))
         ramp_start = min(float(config.ramp_solver_t_min), ramp_time / min_steps)
         ramp_steps = np.linspace(ramp_start, ramp_time, min_steps)
@@ -6433,6 +6455,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "t_min": float(config.t_min),
         "t_max": float(config.t_max),
         "time_growth": float(config.time_growth),
+        "observation_times": list(config.observation_times),
         "min_steps_during_turnoff": int(config.min_steps_during_turnoff),
         "min_steps_before_first_observation": int(config.min_steps_before_first_observation),
         "components": "runtime",
@@ -8241,6 +8264,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-end-z", type=float, default=-0.1)
     parser.add_argument("--source-current", type=float, default=10.0)
     parser.add_argument("--ramp-off-time", type=float, default=1.0e-5)
+    parser.add_argument(
+        "--observation-times",
+        default="",
+        help="Comma-separated explicit output times; empty uses the geometric growth grid.",
+    )
     parser.add_argument("--receiver-x", type=float, default=0.0)
     parser.add_argument("--receiver-y", type=float, default=-300.0)
     parser.add_argument("--receiver-z", type=float, default=-0.1)
@@ -8348,6 +8376,7 @@ def main(argv: list[str] | None = None) -> int:
         source_end=(args.source_end_x, args.source_end_y, args.source_end_z),
         source_current=args.source_current,
         ramp_off_time=args.ramp_off_time,
+        observation_times=_parse_float_csv(args.observation_times, "--observation-times"),
         receiver=(args.receiver_x, args.receiver_y, args.receiver_z),
         source_mesh_size=args.source_mesh_size,
         source_refinement_radius=args.source_refinement_radius,
