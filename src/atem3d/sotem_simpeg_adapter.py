@@ -33,6 +33,19 @@ _FIT_FREQUENCIES = np.logspace(-3.0, 4.0, 81)
 _FIT_TERMS = 16
 _MATERIAL_RELATIVE_L2_LIMIT = 0.01
 _DC_ABSOLUTE_TOLERANCE = 1.0e-14
+_COORDINATE_TRANSFORM = {
+    "public_coordinates": "z_down",
+    "internal_coordinates": "z_up",
+    "position_mapping": "(x, y, z_up) = (x, y, -z_down)",
+    "output_component_signs": {
+        "Ex": 1.0,
+        "Ey": 1.0,
+        "Hz": 1.0,
+        "dBzdt": 1.0,
+    },
+    "Hz_vector_type": "axial",
+    "vertical_axial_mapping": "Hz_up = Hz_down; dBzdt_up = dBzdt_down",
+}
 
 
 def _readonly_array(values: Any, *, dtype: Any) -> np.ndarray:
@@ -163,6 +176,45 @@ def _graded_axis(
     return [float(value) for value in widths], origin
 
 
+def _snap_axis_nodes(
+    widths: list[float],
+    origin: float,
+    anchors: tuple[float, ...],
+) -> list[float]:
+    """Apply roundoff-sized width corrections so selected nodes are bit-exact."""
+
+    result = np.asarray(widths, dtype=float).copy()
+    for anchor in sorted(anchors):
+        for _ in range(8):
+            # TensorMesh uses cumulative summation over ``[origin, *widths]``.
+            # Mirroring that exact operation is required for bit-exact nodes.
+            nodes = np.cumsum(np.r_[float(origin), result])
+            index = int(np.argmin(np.abs(nodes - float(anchor))))
+            if nodes[index] == float(anchor):
+                break
+            if index == 0:
+                raise RuntimeError("cannot snap the mesh origin through a cell width")
+            residual = float(anchor) - float(nodes[index])
+            updated = float(result[index - 1] + residual)
+            if updated == result[index - 1]:
+                updated = float(
+                    np.nextafter(
+                        result[index - 1],
+                        np.inf if residual > 0.0 else -np.inf,
+                    )
+                )
+            if updated <= 0.0:
+                raise RuntimeError("anchor correction produced a non-positive width")
+            result[index - 1] = updated
+        else:
+            raise RuntimeError(f"could not make mesh anchor {anchor} bit-exact")
+    return [float(value) for value in result]
+
+
+def _z_up_point(point_down: tuple[float, float, float]) -> list[float]:
+    return [float(point_down[0]), float(point_down[1]), -float(point_down[2])]
+
+
 def _build_mesh_dict(
     case: BenchmarkCase,
     spatial_level: str,
@@ -191,13 +243,23 @@ def _build_mesh_dict(
     z_anchors = [(0.0, source_h), (300.0, source_h)]
     hx, x0 = _graded_axis(x_anchors, lower=-extent, upper=extent)
     hy, y0 = _graded_axis(y_anchors, lower=-extent, upper=extent)
-    hz, z0 = _graded_axis(z_anchors, lower=-extent, upper=extent)
+    hz_down, z0_down = _graded_axis(z_anchors, lower=-extent, upper=extent)
+    hz_down = _snap_axis_nodes(hz_down, z0_down, (0.0, 300.0))
+    z_down_upper = z0_down + float(np.sum(hz_down))
+    hz = list(reversed(hz_down))
+    z0 = -z_down_upper
+    hz = _snap_axis_nodes(hz, z0, (-300.0, 0.0))
 
     counts = {"x": len(hx), "y": len(hy), "z": len(hz)}
-    bounds = {
+    internal_bounds = {
         "x": [x0, x0 + float(np.sum(hx))],
         "y": [y0, y0 + float(np.sum(hy))],
         "z": [z0, z0 + float(np.sum(hz))],
+    }
+    public_bounds = {
+        "x": copy.deepcopy(internal_bounds["x"]),
+        "y": copy.deepcopy(internal_bounds["y"]),
+        "z": [-internal_bounds["z"][1], -internal_bounds["z"][0]],
     }
     hash_input = {"hx": hx, "hy": hy, "hz": hz, "origin": [x0, y0, z0]}
     mesh_hash = _hash_payload(hash_input)
@@ -216,7 +278,10 @@ def _build_mesh_dict(
         "nominal_far_extent_m": extent,
         "padding_growth_max": _PADDING_GROWTH,
         "axis_cell_counts": counts,
-        "bounds_m": bounds,
+        "bounds_m": internal_bounds,
+        "public_bounds_z_down_m": public_bounds,
+        "public_coordinate_system": "z_down",
+        "internal_coordinate_system": "z_up",
         "n_cells": n_cells,
         "n_edges": n_edges,
         "mesh_hash": mesh_hash,
@@ -333,9 +398,9 @@ def _song_material_fit(polarization: Any) -> tuple[list[dict[str, float]], dict[
         "delta_sum": delta_sum,
         "dc_residual": dc_residual,
         "dc_absolute_tolerance": _DC_ABSOLUTE_TOLERANCE,
-            "minimum_delta_sigma": float(np.min(delta)),
-            "material_gate_pass": material_gate_pass,
-        }
+        "minimum_delta_sigma": float(np.min(delta)),
+        "material_gate_pass": material_gate_pass,
+    }
     if not material_gate_pass:
         raise ValueError(
             "Song material fit failed adapter gate: "
@@ -354,7 +419,7 @@ def _earth_layers(
     variant: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     air = {
-        "top": float("-inf"),
+        "top": float("inf"),
         "bottom": 0.0,
         "sigma_infinity": 1.0 / float(case.rho_air_ohm_m),
         "debye_terms": [],
@@ -368,7 +433,7 @@ def _earth_layers(
             air,
             {
                 "top": 0.0,
-                "bottom": float("inf"),
+                "bottom": float("-inf"),
                 "sigma_infinity": earth_sigma,
                 "debye_terms": [],
                 "material": "earth_noip",
@@ -378,8 +443,14 @@ def _earth_layers(
     earth_layers = list(case.earth["layers"])
     layers: list[dict[str, Any]] = [air]
     for index, earth in enumerate(earth_layers):
-        top = float(earth["top_m"])
-        bottom = float("inf") if earth["bottom_m"] is None else float(earth["bottom_m"])
+        top_down = float(earth["top_m"])
+        bottom_down = (
+            float("inf")
+            if earth["bottom_m"] is None
+            else float(earth["bottom_m"])
+        )
+        top = -top_down
+        bottom = -bottom_down
         sigma = 1.0 / float(earth["rho_ohm_m"])
         layer = {
             "top": top,
@@ -393,8 +464,8 @@ def _earth_layers(
             if polarization is None:
                 raise ValueError("IP variant requires a polarizable benchmark case")
             if (
-                float(polarization["top_m"]) != top
-                or float(polarization["bottom_m"]) != bottom
+                float(polarization["top_m"]) != top_down
+                or float(polarization["bottom_m"]) != bottom_down
             ):
                 raise ValueError("polarization interval must match the first Song earth layer")
             terms, material_fit = _song_material_fit(polarization)
@@ -432,7 +503,7 @@ def build_benchmark_config(
         {"time_steps": steps.tolist(), "output_indices": output_indices.tolist()}
     )
     return {
-        "coordinate_system": "depth_down",
+        "coordinate_system": "z_up",
         "formulation": "eb",
         "initial_magnetic_field": "ampere",
         "solver": {
@@ -445,19 +516,23 @@ def build_benchmark_config(
         "mesh_hash": mesh["mesh_hash"],
         "time_hash": time_hash,
         "model": {
-            "coordinate_system": "depth_down",
+            "coordinate_system": "z_up",
             "layers": layers,
             "require_layer_boundary_alignment": True,
             "layer_boundary_tolerance": 1.0e-10,
         },
         "source": {
-            "start": list(case.source_start_down),
-            "end": list(case.source_end_down),
+            "start": _z_up_point(case.source_start_down),
+            "end": _z_up_point(case.source_end_down),
             "current": float(case.current_a),
             "waveform": {"type": "step_off", "off_time": 0.0},
         },
         "receivers": [
-            {"location": list(case.receiver_down), "component": component, "type": "point"}
+            {
+                "location": _z_up_point(case.receiver_down),
+                "component": component,
+                "type": "point",
+            }
             for component in _COMPONENTS
         ],
         "time_steps": steps.tolist(),
@@ -472,12 +547,15 @@ def build_benchmark_config(
             "mesh_hash": mesh["mesh_hash"],
             "time_hash": time_hash,
             "material_fit": material_fit,
+            "coordinate_transform": copy.deepcopy(_COORDINATE_TRANSFORM),
             "initial_magnetic_field": "ampere",
             "transient_solver": "cg_jacobi",
             "initialization_solver": "scipy_sparse_direct",
             "resource_note": (
-                "initial DC electric and Ampere-consistent magnetic fields use "
-                "sparse direct solves in the existing core solver"
+                "Production S0 sparse-direct initialization may require substantial "
+                "memory and is not yet full-scale validated; the existing core uses "
+                "sparse direct solves for initial DC electric and Ampere-consistent "
+                "magnetic fields."
             ),
         },
     }
@@ -549,6 +627,14 @@ def run_simpeg_benchmark(
     if not np.allclose(selected_times, expected_times, rtol=2.0e-15, atol=0.0):
         raise RuntimeError("solver output times do not match benchmark observation times")
     selected_data = np.array(result_data[1:][output_indices], dtype=float, copy=True)
+    component_signs = np.asarray(
+        [
+            metadata["coordinate_transform"]["output_component_signs"][component]
+            for component in _COMPONENTS
+        ],
+        dtype=float,
+    )
+    selected_data *= component_signs[None, :]
     if not np.all(np.isfinite(selected_data)):
         raise RuntimeError("solver returned non-finite benchmark data")
 
@@ -557,7 +643,8 @@ def run_simpeg_benchmark(
         "n_cells": int(simulation.mesh.n_cells),
         "n_edges": int(simulation.mesh.n_edges),
         "axis_cell_counts": copy.deepcopy(mesh_metadata["axis_cell_counts"]),
-        "bounds_m": copy.deepcopy(mesh_metadata["bounds_m"]),
+        "bounds_m": copy.deepcopy(mesh_metadata["public_bounds_z_down_m"]),
+        "internal_bounds_z_up_m": copy.deepcopy(mesh_metadata["bounds_m"]),
         "spatial_level": spatial_level,
         "boundary_level": boundary_level,
         "mesh_hash": metadata["mesh_hash"],
@@ -566,6 +653,8 @@ def run_simpeg_benchmark(
         "times": _readonly_array(expected_times, dtype=np.float64),
         "data": selected_data,
         "components": list(_COMPONENTS),
+        "coordinate_system": "z_down",
+        "coordinate_transform": copy.deepcopy(metadata["coordinate_transform"]),
         "mesh_stats": mesh_stats,
         "mesh_hash": metadata["mesh_hash"],
         "time_hash": metadata["time_hash"],

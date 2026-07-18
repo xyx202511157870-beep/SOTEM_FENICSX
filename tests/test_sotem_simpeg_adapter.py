@@ -5,6 +5,8 @@ from types import MappingProxyType, SimpleNamespace
 
 import numpy as np
 import pytest
+from simpeg import maps
+from simpeg.electromagnetics import time_domain as tdem
 
 import atem3d.sotem_simpeg_adapter as adapter
 from atem3d.config import build_simulation
@@ -115,12 +117,12 @@ def test_song_pair_is_structurally_equal_except_model_and_material_metadata(song
     ip["receivers"][0]["location"][0] = 123.0
     ip["time_steps"][0] = 123.0
     assert noip["mesh"]["hx"][0] > 0.0
-    assert noip["source"]["start"] == list(song_case.source_start_down)
-    assert noip["receivers"][0]["location"] == list(song_case.receiver_down)
+    assert noip["source"]["start"] == [-500.0, 0.0, -0.1]
+    assert noip["receivers"][0]["location"] == [0.0, -500.0, -0.1]
     assert noip["time_steps"][0] != 123.0
 
 
-def test_canonical_source_receiver_and_boundary_are_not_shifted(song_case):
+def test_public_z_down_geometry_is_mapped_once_to_internal_z_up(song_case):
     config = build_benchmark_config(
         song_case,
         variant="ip",
@@ -129,7 +131,8 @@ def test_canonical_source_receiver_and_boundary_are_not_shifted(song_case):
         substeps=1,
     )
 
-    assert config["coordinate_system"] == "depth_down"
+    assert config["coordinate_system"] == "z_up"
+    assert config["model"]["coordinate_system"] == "z_up"
     assert config["initial_magnetic_field"] == "ampere"
     assert config["solver"] == {
         "type": "cg",
@@ -140,8 +143,8 @@ def test_canonical_source_receiver_and_boundary_are_not_shifted(song_case):
     assert config["adapter_metadata"]["initial_magnetic_field"] == "ampere"
     assert config["adapter_metadata"]["initialization_solver"] == "scipy_sparse_direct"
     assert config["source"] == {
-        "start": list(song_case.source_start_down),
-        "end": list(song_case.source_end_down),
+        "start": [song_case.source_start_down[0], song_case.source_start_down[1], -0.1],
+        "end": [song_case.source_end_down[0], song_case.source_end_down[1], -0.1],
         "current": song_case.current_a,
         "waveform": {"type": "step_off", "off_time": 0.0},
     }
@@ -152,15 +155,35 @@ def test_canonical_source_receiver_and_boundary_are_not_shifted(song_case):
         "dBzdt",
     ]
     assert all(
-        receiver["location"] == list(song_case.receiver_down)
+        receiver["location"]
+        == [song_case.receiver_down[0], song_case.receiver_down[1], -0.1]
         for receiver in config["receivers"]
     )
+    layers = config["model"]["layers"]
+    assert layers[0]["top"] == float("inf") and layers[0]["bottom"] == 0.0
+    assert layers[1]["top"] == 0.0 and layers[1]["bottom"] == -300.0
+    assert layers[2]["top"] == -300.0 and layers[2]["bottom"] == float("-inf")
+    transform = config["adapter_metadata"]["coordinate_transform"]
+    assert transform["public_coordinates"] == "z_down"
+    assert transform["internal_coordinates"] == "z_up"
+    assert transform["position_mapping"] == "(x, y, z_up) = (x, y, -z_down)"
+    assert transform["output_component_signs"] == {
+        "Ex": 1.0,
+        "Ey": 1.0,
+        "Hz": 1.0,
+        "dBzdt": 1.0,
+    }
+    assert transform["Hz_vector_type"] == "axial"
     assert config["boundary"] == {"kind": "none", "thickness_cells": 0}
 
 
 def _nodes(mesh, axis):
     axis_index = {"x": 0, "y": 1, "z": 2}[axis]
-    return mesh["origin"][axis_index] + np.r_[0.0, np.cumsum(mesh[f"h{axis}"])]
+    # Discretize constructs TensorMesh nodes by cumulatively summing the
+    # origin together with widths, so this must mirror its floating arithmetic.
+    return np.cumsum(
+        np.r_[mesh["origin"][axis_index], np.asarray(mesh[f"h{axis}"])]
+    )
 
 
 @pytest.mark.parametrize("spatial_level", ["S0", "S1", "S2"])
@@ -184,8 +207,8 @@ def test_mesh_has_positive_widths_exact_interfaces_and_contains_anchors(
         nodes = _nodes(mesh, axis)
         assert np.all(np.diff(nodes) > 0.0)
     z_nodes = _nodes(mesh, "z")
-    assert np.any(np.isclose(z_nodes, 0.0, rtol=0.0, atol=1.0e-10))
-    assert np.any(np.isclose(z_nodes, 300.0, rtol=0.0, atol=1.0e-10))
+    assert 0.0 in z_nodes
+    assert -300.0 in z_nodes
 
     bounds = mesh["metadata"]["bounds_m"]
     for point in (
@@ -193,7 +216,8 @@ def test_mesh_has_positive_widths_exact_interfaces_and_contains_anchors(
         song_case.source_end_down,
         song_case.receiver_down,
     ):
-        for coordinate, axis in zip(point, "xyz"):
+        internal_point = (point[0], point[1], -point[2])
+        for coordinate, axis in zip(internal_point, "xyz"):
             assert bounds[axis][0] < coordinate < bounds[axis][1]
 
 
@@ -393,6 +417,24 @@ def test_run_selects_only_canonical_outputs_and_reports_honest_metadata(monkeypa
     assert result["variant"] == "ip"
     assert result["mesh_hash"] == result["mesh_stats"]["mesh_hash"]
     assert result["material_fit"]["material_gate_pass"] is True
+    assert result["coordinate_system"] == "z_down"
+    assert result["coordinate_transform"]["output_component_signs"]["Hz"] == 1.0
+
+
+def test_resource_metadata_discloses_unvalidated_sparse_direct_s0_risk(song_case):
+    config = build_benchmark_config(
+        song_case,
+        variant="noip",
+        spatial_level="S0",
+        boundary_level="B0",
+        substeps=1,
+    )
+
+    note = config["adapter_metadata"]["resource_note"].lower()
+    assert "production s0" in note
+    assert "sparse-direct initialization" in note
+    assert "substantial memory" in note
+    assert "not yet full-scale validated" in note
 
 
 def test_run_rejects_nonfinite_solver_output(monkeypatch, lei_case):
@@ -454,3 +496,86 @@ def test_generated_noip_schema_runs_the_real_solver_on_a_tiny_mesh(lei_case):
     assert result.times.tolist() == pytest.approx([0.0, 0.01])
     assert result.data.shape == (2, 4)
     assert np.all(np.isfinite(result.data))
+
+
+def test_adapter_tiny_layered_z_up_matches_upstream_e_and_faraday_b_path(song_case):
+    tiny_case = replace(
+        song_case,
+        source_start_down=(-0.5, 0.0, 0.1),
+        source_end_down=(0.5, 0.0, 0.1),
+        receiver_down=(0.2, 0.2, 0.1),
+        observation_times=np.array([0.01, 0.02]),
+    )
+    config = build_benchmark_config(
+        tiny_case,
+        variant="noip",
+        spatial_level="S0",
+        boundary_level="B0",
+        substeps=1,
+    )
+    mapped_song_boundary = config["model"]["layers"][1]["bottom"]
+    config["model"]["layers"][1]["bottom"] = -1.0
+    config["model"]["layers"][2]["top"] = -1.0
+    config["mesh"] = {
+        "hx": [1.0, 1.0, 1.0],
+        "hy": [1.0, 1.0, 1.0],
+        "hz": [1.0, 1.0, 1.0],
+        "origin": [-1.5, -1.5, -2.0],
+    }
+    config["solver"] = {"type": "direct"}
+
+    ours_simulation = build_simulation(config)
+    ours = ours_simulation.run()
+    mesh = ours_simulation.mesh
+    source = config["source"]
+    upstream_source = tdem.sources.LineCurrent(
+        [],
+        location=np.array([source["start"], source["end"]]),
+        current=source["current"],
+        waveform=tdem.sources.StepOffWaveform(off_time=0.0),
+    )
+    upstream = tdem.Simulation3DElectricField(
+        mesh,
+        survey=tdem.Survey([upstream_source]),
+        sigmaMap=maps.IdentityMap(nP=mesh.n_cells),
+        time_steps=config["time_steps"],
+    )
+    fields = upstream.fields(ours_simulation.ip_model.sigma_infinity)
+    upstream_e = np.column_stack(
+        [fields[upstream_source, "e", index] for index in range(ours.times.size)]
+    ).T
+    # Upstream's grounded LineCurrent has no EB B-form initialization
+    # (_getAmmr/jInitial are NotImplemented). Its E-form does expose the legal
+    # face dbdt=-curl(E) path, which independently verifies our Faraday B update.
+    upstream_dbdt = np.column_stack(
+        [fields[upstream_source, "dbdt", index] for index in range(ours.times.size)]
+    ).T
+    reconstructed_b = np.empty_like(ours.b)
+    reconstructed_b[0] = ours.b[0]
+    for index, dt in enumerate(config["time_steps"], start=1):
+        reconstructed_b[index] = reconstructed_b[index - 1] + dt * upstream_dbdt[index]
+
+    source_vector = ours_simulation.sources[0].initial_edge_vector(mesh)
+    initial_current = (
+        mesh.get_edge_inner_product(ours_simulation.ip_model.low_frequency_sigma())
+        @ ours.e[0]
+        + source_vector
+    )
+    ampere_current = (
+        mesh.edge_curl.T @ ours_simulation.face_mu_inverse_matrix @ ours.b[0]
+    )
+
+    assert config["coordinate_system"] == "z_up"
+    assert config["source"]["start"][2] == -0.1
+    assert config["model"]["layers"][1]["top"] == 0.0
+    assert mapped_song_boundary == -300.0
+    assert config["model"]["layers"][1]["bottom"] == -1.0
+    np.testing.assert_allclose(ours.e, upstream_e, rtol=1.0e-10, atol=2.0e-8)
+    np.testing.assert_allclose(
+        np.diff(ours.b, axis=0) / np.asarray(config["time_steps"])[:, None],
+        upstream_dbdt[1:],
+        rtol=1.0e-10,
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(ours.b, reconstructed_b, rtol=1.0e-10, atol=1.0e-12)
+    np.testing.assert_allclose(ampere_current, initial_current, rtol=1.0e-8, atol=1.0e-10)
