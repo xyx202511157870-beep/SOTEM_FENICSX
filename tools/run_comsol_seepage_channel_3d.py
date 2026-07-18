@@ -48,6 +48,8 @@ def build_case_paths(
     output_root: str | Path, case: str, source_model: str | Path
 ) -> dict[str, Path]:
     case_dir = Path(output_root) / "comsol_3d" / str(case)
+    drive = case_dir.resolve().drive
+    ooc_root = Path(f"{drive}\\COMSOL_OOC") if drive else case_dir / "COMSOL_OOC"
     paths = {
         "case_dir": case_dir,
         "source_model": Path(source_model),
@@ -58,7 +60,7 @@ def build_case_paths(
         "contract": case_dir / "model_contract.json",
         "provenance": case_dir / "provenance.json",
         "prefs_dir": case_dir / "isolated_prefs",
-        "ooc_dir": case_dir / "pardiso_ooc",
+        "ooc_dir": ooc_root / f"seepage_channel_3d_{case}",
     }
     validate_distinct_model_paths(paths["source_model"], paths["output_model"])
     return paths
@@ -127,9 +129,21 @@ def build_runtime_environment(
 ) -> dict[str, str]:
     """Route COMSOL/PARDISO scratch files to the spacious case drive."""
 
-    paths["ooc_dir"].mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ if base_environment is None else base_environment)
-    ooc_dir = str(paths["ooc_dir"].resolve())
+    configured_root = environment.get("ATEM3D_COMSOL_OOC_ROOT", "").strip()
+    ooc_path = (
+        Path(configured_root) / f"seepage_channel_3d_{case}"
+        if configured_root
+        else paths["ooc_dir"]
+    )
+    ooc_path.mkdir(parents=True, exist_ok=True)
+    ooc_dir = str(ooc_path.resolve())
+    try:
+        ooc_dir.encode("iso-8859-1")
+    except UnicodeEncodeError as exc:
+        raise ValueError(
+            f"COMSOL out-of-core path must be ISO-8859-1 compatible: {ooc_dir}"
+        ) from exc
     environment.update(
         {
             "ATEM3D_COMSOL_INPUT_MODEL": str(paths["source_model"].resolve()),

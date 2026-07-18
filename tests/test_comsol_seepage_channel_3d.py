@@ -75,16 +75,23 @@ def test_comsol_runtime_routes_out_of_core_files_to_the_case_drive(
     tmp_path: Path,
 ) -> None:
     paths = build_case_paths(tmp_path / "results", "channel", tmp_path / "source.mph")
+    ooc_root = tmp_path / "ascii_ooc"
 
     environment = comsol_runner.build_runtime_environment(
-        paths, "channel", base_environment={"KEEP": "yes"}
+        paths,
+        "channel",
+        base_environment={
+            "KEEP": "yes",
+            "ATEM3D_COMSOL_OOC_ROOT": str(ooc_root),
+        },
     )
 
-    expected = str(paths["ooc_dir"].resolve())
+    expected = str((ooc_root / "seepage_channel_3d_channel").resolve())
     assert environment["KEEP"] == "yes"
     assert environment["MKL_PARDISO_OOC_PATH"] == expected
     assert environment["TEMP"] == expected
     assert environment["TMP"] == expected
+    expected.encode("iso-8859-1")
 
 
 def test_isolated_comsol_prefs_enable_external_runtime_without_modifying_template(
