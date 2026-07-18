@@ -54,7 +54,7 @@ FIGURES = (
     ("verified_volume_sweep.png", "图 7  异常体体积扫描的异常能量趋势"),
     ("verified_convergence.png", "图 8  空间与时间三层收敛结果"),
     ("verified_parity.png", "图 9  四个正式观测点的偶/奇对称残差"),
-    ("verified_three_solver_anomaly.png", "图 10  SimPEG、FEniCSx 与 COMSOL 三维异常差分对比"),
+    ("verified_two_solver_anomaly.png", "图 10  SimPEG 与 FEniCSx 三维异常差分对比"),
 )
 
 
@@ -155,7 +155,7 @@ def _add_cover(document: Document, fingerprint: str) -> None:
     subtitle = document.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
     subtitle.paragraph_format.space_before = Pt(18)
-    run = subtitle.add_run("SimPEG  |  FEniCSx  |  empymod  |  COMSOL")
+    run = subtitle.add_run("SimPEG  |  FEniCSx  |  empymod")
     _set_run_font(run, 14, bold=True, color=BLUE)
     document.add_paragraph()
     add_table(
@@ -208,7 +208,6 @@ def _add_solver_section(document: Document, result_dir: Path) -> None:
             ("empymod", "仅验证均匀半空间背景", "一维半空间半解析参考；不声称求解三维有限异常体"),
             ("SimPEG", "三维背景、异常体与扫描", "EB 时域有限体积；TensorMesh；PARDISO"),
             ("FEniCSx", "完整三维域独立有限元", "一阶 Nédélec 四面体；θ=1；CG+hypre/AMS"),
-            ("COMSOL", "独立三维有限异常体参考", "同分区背景、零对比度和 1 S/m 通道三次运行"),
         ],
     )
     add_body(
@@ -248,7 +247,7 @@ def _add_result_figures(document: Document, result_dir: Path) -> None:
         add_figure(document, result_dir / filename, caption)
     add_body(
         document,
-        "总场仍可呈现近似均匀半空间的单调衰减，因为一次背景场占主导。异常体证据由通道减背景的带符号差值、相对异常、参数扫描、收敛趋势以及独立 COMSOL 三维差分共同给出。",
+        "总场仍可呈现近似均匀半空间的单调衰减，因为一次背景场占主导。异常体证据由通道减背景的带符号差值、相对异常、参数扫描、收敛趋势以及 SimPEG 与完整域 FEniCSx 的独立三维差分对比共同给出。",
     )
 
 
@@ -261,12 +260,11 @@ def _add_reproducibility(document: Document, result_dir: Path, summary: dict[str
             ("最终门槛", str((result_dir / "verification_summary.json").resolve())),
             ("算例矩阵", str((result_dir / "verification_case_manifest.json").resolve())),
             ("求解目录", str((result_dir / "verification_runs").resolve())),
-            ("COMSOL 三维参考", str((result_dir / "comsol_3d").resolve())),
         ],
     )
     add_body(
         document,
-        "限制：本模型为各向同性、纯电导率异常，不含激发极化、含水率随时间变化、地形和粗糙边界。empymod 只承担背景验证；有限三维通道只由 SimPEG、FEniCSx 和 COMSOL 比较。",
+        "限制：本模型为各向同性、纯电导率异常，不含激发极化、含水率随时间变化、地形和粗糙边界。empymod 只承担背景验证；有限三维通道由 SimPEG 与 FEniCSx 独立比较。COMSOL 不在本版正式求解、验证与报告范围内。",
         bold_lead="限制：",
     )
     add_body(
