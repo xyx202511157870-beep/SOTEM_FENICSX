@@ -58,6 +58,7 @@ def build_case_paths(
         "contract": case_dir / "model_contract.json",
         "provenance": case_dir / "provenance.json",
         "prefs_dir": case_dir / "isolated_prefs",
+        "ooc_dir": case_dir / "pardiso_ooc",
     }
     validate_distinct_model_paths(paths["source_model"], paths["output_model"])
     return paths
@@ -111,6 +112,37 @@ def prepare_isolated_prefs(
 def clear_generated_outputs(paths: dict[str, Path]) -> None:
     for key in ("output_model", "output_csv", "normalized", "provenance", "log"):
         paths[key].unlink(missing_ok=True)
+    if paths["ooc_dir"].is_dir():
+        for item in paths["ooc_dir"].iterdir():
+            if not item.is_file():
+                raise ValueError(f"unexpected directory in COMSOL OOC path: {item}")
+            item.unlink()
+
+
+def build_runtime_environment(
+    paths: dict[str, Path],
+    case: str,
+    *,
+    base_environment: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Route COMSOL/PARDISO scratch files to the spacious case drive."""
+
+    paths["ooc_dir"].mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ if base_environment is None else base_environment)
+    ooc_dir = str(paths["ooc_dir"].resolve())
+    environment.update(
+        {
+            "ATEM3D_COMSOL_INPUT_MODEL": str(paths["source_model"].resolve()),
+            "ATEM3D_COMSOL_OUTPUT_MODEL": str(paths["output_model"].resolve()),
+            "ATEM3D_COMSOL_OUTPUT_CSV": str(paths["output_csv"].resolve()),
+            "ATEM3D_COMSOL_CASE": case,
+            "ATEM3D_COMSOL_CHANNEL_SIGMA": "1.0" if case == "channel" else "0.01",
+            "MKL_PARDISO_OOC_PATH": ooc_dir,
+            "TEMP": ooc_dir,
+            "TMP": ooc_dir,
+        }
+    )
+    return environment
 
 
 def _write_contract(paths: dict[str, Path], case: str) -> dict:
@@ -178,6 +210,7 @@ def run_case(
         "compile": list(compile_command),
         "batch": list(batch_command),
         "java_source": str(JAVA_SOURCE),
+        "pardiso_ooc_path": str(paths["ooc_dir"]),
     }
     manifest_path = paths["case_dir"] / "commands.json"
     manifest_path.write_text(
@@ -188,16 +221,7 @@ def run_case(
         return manifest_path
 
     subprocess.run(compile_command, cwd=JAVA_SOURCE.parent, check=True)
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "ATEM3D_COMSOL_INPUT_MODEL": str(paths["source_model"].resolve()),
-            "ATEM3D_COMSOL_OUTPUT_MODEL": str(paths["output_model"].resolve()),
-            "ATEM3D_COMSOL_OUTPUT_CSV": str(paths["output_csv"].resolve()),
-            "ATEM3D_COMSOL_CASE": case,
-            "ATEM3D_COMSOL_CHANNEL_SIGMA": "1.0" if case == "channel" else "0.01",
-        }
-    )
+    environment = build_runtime_environment(paths, case)
     subprocess.run(
         batch_command,
         cwd=JAVA_SOURCE.parent,

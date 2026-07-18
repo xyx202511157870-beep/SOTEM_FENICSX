@@ -71,6 +71,22 @@ def test_comsol_adapter_never_overwrites_the_source_mph(tmp_path: Path) -> None:
         validate_distinct_model_paths(source, source)
 
 
+def test_comsol_runtime_routes_out_of_core_files_to_the_case_drive(
+    tmp_path: Path,
+) -> None:
+    paths = build_case_paths(tmp_path / "results", "channel", tmp_path / "source.mph")
+
+    environment = comsol_runner.build_runtime_environment(
+        paths, "channel", base_environment={"KEEP": "yes"}
+    )
+
+    expected = str(paths["ooc_dir"].resolve())
+    assert environment["KEEP"] == "yes"
+    assert environment["MKL_PARDISO_OOC_PATH"] == expected
+    assert environment["TEMP"] == expected
+    assert environment["TMP"] == expected
+
+
 def test_isolated_comsol_prefs_enable_external_runtime_without_modifying_template(
     tmp_path: Path,
 ) -> None:
