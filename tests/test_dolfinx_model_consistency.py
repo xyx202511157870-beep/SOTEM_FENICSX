@@ -690,6 +690,24 @@ def test_explicit_observation_times_define_effective_diffusion_window():
     assert diagnostics["t_max"] == pytest.approx(10.0)
 
 
+def test_h_static_initial_dt_ignores_explicit_observation_window():
+    sp = _load_pipeline_module()
+    short_window = sp.PipelineConfig(
+        t_max=2.0,
+        ramp_off_time=3.0,
+        observation_times=(1.0e-5, 10.0),
+    )
+    long_window = sp.PipelineConfig(
+        t_max=2.0,
+        ramp_off_time=3.0,
+        observation_times=(1.0e-5, 100.0),
+    )
+    expected = max(float(short_window.t_max), float(short_window.ramp_off_time), 1.0) * 1.0e9
+
+    assert sp._h_static_initial_dt(short_window) == pytest.approx(expected)
+    assert sp._h_static_initial_dt(long_window) == pytest.approx(expected)
+
+
 def test_late_time_diffusion_audit_reports_finite_domain_separately_from_refinement_box():
     sp = _load_pipeline_module()
 

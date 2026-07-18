@@ -5291,6 +5291,12 @@ def _evaluate_h_receivers(E, H_new, H_old, dt: float, msh, config: PipelineConfi
     return {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "Hz": float(h_new[2]), "dBzdt": float(dbdt[2])}
 
 
+def _h_static_initial_dt(config: PipelineConfig) -> float:
+    """Return the legacy numerical time scale for the static H initialization."""
+
+    return max(float(config.t_max), float(config.ramp_off_time), 1.0) * 1.0e9
+
+
 def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config: PipelineConfig, times=None):
     """Run a non-polarizable H-form backward-Euler forward model."""
 
@@ -5319,7 +5325,7 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
     V = spaces["V"]
     H_old = fem.Function(V, name="H_old")
     H_new = fem.Function(V, name="H_new")
-    static_dt = max(_effective_t_max(config), float(config.ramp_off_time), 1.0) * 1.0e9
+    static_dt = _h_static_initial_dt(config)
     A0 = _copy_and_combine_matrix(operators["K"], operators["M"], 1.0 / static_dt)
     _zero_rows_columns(A0, operators["bc_global"], diag=1.0)
     solver_context = configure_lu_solver(A0)
