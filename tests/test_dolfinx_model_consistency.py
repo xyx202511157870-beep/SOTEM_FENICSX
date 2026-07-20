@@ -465,6 +465,64 @@ def test_source_projection_mode_defaults_to_charge_conserving_and_accepts_raw_di
     assert raw_diagnostics["source_projection_mode"] == "raw"
 
 
+def _source_projection_info(*, raw_relative, correction_relative, after_relative):
+    return {
+        "projection_diagnostics": {
+            "before_residual": float(raw_relative) * 2.0,
+            "after_residual": float(after_relative) * 2.0,
+            "endpoint_norm": 2.0,
+            "correction_l2_over_raw": float(correction_relative),
+        }
+    }
+
+
+def test_source_projection_gate_accepts_all_three_metrics_at_fixed_limits():
+    sp = _load_pipeline_module()
+    source = _source_projection_info(
+        raw_relative=sp.SOURCE_PROJECTION_MAX_RAW_RELATIVE_RESIDUAL,
+        correction_relative=sp.SOURCE_PROJECTION_MAX_CORRECTION_L2_OVER_RAW,
+        after_relative=sp.SOURCE_PROJECTION_MAX_AFTER_RELATIVE_RESIDUAL,
+    )
+
+    gate = sp._require_source_projection_gate(source)
+
+    assert gate["passed"] is True
+    assert gate["failed_metrics"] == []
+    assert gate["thresholds"] == {
+        "raw_endpoint_relative_residual": 0.05,
+        "correction_l2_over_raw": 0.01,
+        "projected_endpoint_relative_residual": 1.0e-8,
+    }
+
+
+@pytest.mark.parametrize(
+    "metric,overrides",
+    [
+        ("raw_endpoint_relative_residual", {"raw_relative": 0.0500001}),
+        ("correction_l2_over_raw", {"correction_relative": 0.0100001}),
+        ("projected_endpoint_relative_residual", {"after_relative": 1.00001e-8}),
+    ],
+)
+def test_source_projection_gate_fails_closed_above_each_fixed_limit(metric, overrides):
+    sp = _load_pipeline_module()
+    values = {
+        "raw_relative": 0.05,
+        "correction_relative": 0.01,
+        "after_relative": 1.0e-8,
+    }
+    values.update(overrides)
+
+    with pytest.raises(RuntimeError, match=metric):
+        sp._require_source_projection_gate(_source_projection_info(**values))
+
+
+def test_source_projection_gate_fails_closed_when_diagnostics_are_missing():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(RuntimeError, match="missing_projection_diagnostics"):
+        sp._require_source_projection_gate({"mode": "manual_line"})
+
+
 def test_model_consistency_rejects_unknown_source_projection_mode():
     sp = _load_pipeline_module()
 
@@ -1359,6 +1417,27 @@ def test_invalid_explicit_observation_times_cannot_reach_mesh_only(monkeypatch, 
     assert calls == {"environment": 0, "mesh": 0}
 
 
+def test_main_rejects_mpi_forward_before_mesh_generation(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    calls = {"mesh": 0}
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        sp,
+        "generate_verification_mesh",
+        lambda _config: calls.__setitem__("mesh", calls["mesh"] + 1),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "mpi4py",
+        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=2))),
+    )
+
+    with pytest.raises(SystemExit, match="requires serial execution"):
+        sp.main(["--workdir", str(tmp_path), "--mesh-only", "--no-install"])
+
+    assert calls["mesh"] == 0
+
+
 def test_malformed_observation_times_csv_is_reported_by_argparse(capsys):
     sp = _load_pipeline_module()
 
@@ -1828,7 +1907,30 @@ def _patch_formal_forward_seams(monkeypatch, sp, events, *, audit_scale):
     monkeypatch.setattr(sp, "build_function_spaces", lambda *_args: {})
     monkeypatch.setattr(sp, "assign_materials", lambda *_args: {})
     monkeypatch.setattr(sp, "apply_transient_sponge", lambda *_args: None)
-    monkeypatch.setattr(sp, "build_source", lambda *_args: {"mode": "test"})
+    monkeypatch.setattr(
+        sp,
+        "build_source",
+        lambda *_args: {
+            "mode": "test",
+            "vector": object(),
+            "projection_diagnostics": {
+                "before_residual": 0.04,
+                "after_residual": 1.0e-9,
+                "endpoint_norm": 1.0,
+                "correction_l2_over_raw": 0.005,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        sp,
+        "_make_zero_tangential_bc",
+        lambda *_args: (None, [], []),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_validate_source_after_boundary_elimination",
+        lambda *_args: {"passed": True},
+    )
     passing_quality = {
         "passed": True,
         "failed_selections": [],
@@ -2396,6 +2498,93 @@ def test_stage_writer_modes_hold_lock_through_last_stage_action(
     if stage_flag == "--source-only":
         assert "write:source-only" in events
     assert events[-1] == "lock:exit"
+
+
+def test_source_only_writes_failed_projection_gate_evidence_before_raising(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    events = []
+    _patch_formal_forward_seams(monkeypatch, sp, events, audit_scale=1.0001)
+    monkeypatch.setattr(
+        sp,
+        "build_source",
+        lambda *_args: {
+            "mode": "test",
+            "vector": object(),
+            "projection_diagnostics": {
+                "before_residual": 0.04,
+                "after_residual": 1.0e-9,
+                "endpoint_norm": 1.0,
+                "correction_l2_over_raw": 0.0100001,
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="correction_l2_over_raw"):
+        sp.main(["--workdir", str(tmp_path), "--source-only", "--no-install"])
+
+    payload = json.loads(
+        (tmp_path / "source_diagnostics.json").read_text(encoding="utf-8")
+    )
+    report = (tmp_path / "source_diagnostics_report.txt").read_text(encoding="utf-8")
+    assert payload["source_projection_gate"]["passed"] is False
+    assert payload["source_projection_gate"]["failed_metrics"] == [
+        "correction_l2_over_raw"
+    ]
+    assert "source projection gate: FAIL" in report
+    assert events == ["mesh"]
+
+
+def test_formal_forward_projection_gate_failure_precedes_reference_and_solver(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    events = []
+    _patch_formal_forward_seams(monkeypatch, sp, events, audit_scale=1.0001)
+    monkeypatch.setattr(
+        sp,
+        "build_source",
+        lambda *_args: {
+            "mode": "test",
+            "projection_diagnostics": {
+                "before_residual": 0.050001,
+                "after_residual": 1.0e-9,
+                "endpoint_norm": 1.0,
+                "correction_l2_over_raw": 0.005,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        sp,
+        "run_fetd_forward",
+        lambda *_args, **_kwargs: pytest.fail("solver must not run after gate failure"),
+    )
+
+    with pytest.raises(RuntimeError, match="raw_endpoint_relative_residual"):
+        sp.main(["--workdir", str(tmp_path), "--no-install"])
+
+    assert events == ["mesh"]
+
+
+def test_direct_fetd_call_requires_projection_gate_before_operator_assembly(monkeypatch):
+    sp = _load_pipeline_module()
+    monkeypatch.setitem(sys.modules, "dolfinx", SimpleNamespace(fem=object()))
+    monkeypatch.setitem(
+        sys.modules,
+        "petsc4py",
+        SimpleNamespace(PETSc=object()),
+    )
+    monkeypatch.setattr(
+        sp,
+        "assemble_operators",
+        lambda *_args, **_kwargs: pytest.fail("operators assembled before source gate"),
+    )
+
+    with pytest.raises(RuntimeError, match="missing_projection_diagnostics"):
+        sp.run_fetd_forward(
+            object(), object(), object(), {}, {}, {"mode": "test"}, sp.PipelineConfig()
+        )
 
 
 def test_check_env_only_neither_locks_nor_creates_workdir(monkeypatch, tmp_path):

@@ -515,6 +515,12 @@ def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
                     "current_div_endpoint_alignment": 0.1,
                 },
             },
+            "boundary_elimination_diagnostics": {
+                "passed": True,
+                "relative_residual": 6.2e-9,
+                "relative_tolerance": 1.0e-8,
+                "eliminated_l2_over_source": 3.4e-9,
+            },
             "local_projection_diagnostics": {
                 "quadrature_points": 101,
                 "missed_points": 0,
@@ -542,11 +548,13 @@ def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     assert diagnostics["source_consistency"]["waveform_integral_residual"] == pytest.approx(0.0)
     assert diagnostics["source_projection"]["projection_mode"] == "raw"
     assert diagnostics["source_projection"]["scalar_balance"]["residual_active_dofs"] == 12
+    assert diagnostics["source_boundary_elimination"]["passed"] is True
     assert diagnostics["source_local_projection"]["quadrature_points"] == 101
     assert diagnostics["source_line_orientation"]["quadrature_weight_sum_m"] == pytest.approx(1000.0)
     assert diagnostics["source_line_orientation"]["reversed_orientation"] is False
     report_text = (tmp_path / "source_diagnostics_report.txt").read_text(encoding="utf-8")
     assert "source line orientation:" in report_text
+    assert "source after boundary elimination: PASS" in report_text
     assert "reversed=False" in report_text
     assert (tmp_path / "source_diagnostics_report.txt").is_file()
     assert (tmp_path / "source_run_config_resolved.yaml").is_file()

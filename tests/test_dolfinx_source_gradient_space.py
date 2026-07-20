@@ -1,0 +1,306 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+
+def _load_pipeline_module():
+    root = Path(__file__).resolve().parents[1]
+    module_path = root / "dolfinx" / "sotem_pipeline.py"
+    spec = importlib.util.spec_from_file_location("sotem_pipeline_for_source_gradient_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _relative_endpoint_residual(sp, msh, scalar_space, edge_space, source_vec, config):
+    from dolfinx.fem import petsc as fem_petsc
+
+    gradient = fem_petsc.discrete_gradient(scalar_space, edge_space)
+    gradient.assemble()
+    endpoint = sp._build_endpoint_scalar_load(msh, scalar_space, config, use_unit_current=True)
+    residual = endpoint.duplicate()
+    residual.set(0.0)
+    gradient.multTranspose(source_vec, residual)
+    residual.axpy(-1.0, endpoint)
+    relative = float(residual.norm() / endpoint.norm())
+    residual.destroy()
+    endpoint.destroy()
+    gradient.destroy()
+    return relative
+
+
+def _relative_vector_difference(left, right):
+    difference = left.copy()
+    difference.axpy(-1.0, right)
+    relative = float(difference.norm() / max(left.norm(), right.norm()))
+    difference.destroy()
+    return relative
+
+
+def _interior_segment(sp, msh, cell, variant):
+    coords = sp._cell_geometry(msh, cell)
+    barycentric_pairs = (
+        ([0.55, 0.15, 0.20, 0.10], [0.15, 0.50, 0.10, 0.25]),
+        ([0.10, 0.55, 0.15, 0.20], [0.25, 0.10, 0.50, 0.15]),
+        ([0.20, 0.10, 0.55, 0.15], [0.15, 0.25, 0.10, 0.50]),
+    )
+    start_weights, end_weights = barycentric_pairs[int(variant) % len(barycentric_pairs)]
+    return (
+        tuple(np.asarray(start_weights) @ coords),
+        tuple(np.asarray(end_weights) @ coords),
+    )
+
+
+def test_order_two_manual_line_transform_satisfies_de_rham_identity_for_all_real_cell_permutations():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    spaces = sp.build_function_spaces(msh, sp.PipelineConfig(nedelec_order=2))
+    msh.topology.create_entity_permutations()
+    permutations = np.asarray(msh.topology.get_cell_permutation_info())
+    residuals = []
+    reversal_errors = []
+    for cell, permutation in enumerate(permutations):
+        start, end = _interior_segment(sp, msh, cell, int(permutation))
+        config = sp.PipelineConfig(
+            nedelec_order=2,
+            source_start=start,
+            source_end=end,
+            source_mode="manual_line",
+            source_quadrature_points=3,
+            source_projection_mode="raw",
+        )
+        forward = sp._build_manual_line_source(msh, spaces, config)
+        residuals.append(
+            _relative_endpoint_residual(
+                sp,
+                msh,
+                spaces["S"],
+                spaces["V"],
+                forward["vector"],
+                config,
+            )
+        )
+        reverse_config = sp.PipelineConfig(
+            nedelec_order=2,
+            source_start=end,
+            source_end=start,
+            source_mode="manual_line",
+            source_quadrature_points=3,
+            source_projection_mode="raw",
+        )
+        reverse = sp._build_manual_line_source(msh, spaces, reverse_config)
+        reverse["vector"].scale(-1.0)
+        reversal_errors.append(_relative_vector_difference(forward["vector"], reverse["vector"]))
+        forward["vector"].destroy()
+        reverse["vector"].destroy()
+
+    assert len(set(int(value) for value in permutations)) > 1
+    assert max(residuals) < 1.0e-11
+    assert max(reversal_errors) < 1.0e-12
+
+
+def test_order_two_manual_line_projection_satisfies_complete_p2_gradient_space():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    msh.topology.create_entity_permutations()
+    permutations = np.asarray(msh.topology.get_cell_permutation_info())
+    cell = int(np.argmax(permutations))
+    source_start, source_end = _interior_segment(sp, msh, cell, int(permutations[cell]))
+    config = sp.PipelineConfig(
+        nedelec_order=2,
+        source_start=source_start,
+        source_end=source_end,
+        source_mode="manual_line",
+        source_quadrature_points=3,
+        rtol=1.0e-11,
+        atol=1.0e-13,
+        max_it=1000,
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    raw_source = sp._build_manual_line_source(msh, spaces, config)
+    raw_relative = _relative_endpoint_residual(
+        sp,
+        msh,
+        spaces["S"],
+        spaces["V"],
+        raw_source["vector"],
+        config,
+    )
+    source = sp.build_source(msh, spaces, config)
+    gate = sp._require_source_projection_gate(source)
+    complete_p2 = fem.functionspace(msh, ("Lagrange", 2))
+
+    relative = _relative_endpoint_residual(
+        sp,
+        msh,
+        complete_p2,
+        spaces["V"],
+        source["vector"],
+        config,
+    )
+
+    assert raw_relative < 1.0e-11
+    assert relative < 1.0e-11
+    assert _relative_vector_difference(source["vector"], raw_source["vector"]) < 1.0e-11
+    assert spaces["S"].element.basix_element.degree == 2
+    assert source["projection_diagnostics"]["after_residual"] / source["projection_diagnostics"]["endpoint_norm"] < 1.0e-11
+    assert source["projection_diagnostics"]["correction_l2_over_raw"] < 1.0e-11
+    assert gate["passed"] is True
+    assert source["projection_diagnostics"]["gradient_shape"] == [
+        spaces["V"].dofmap.index_map.size_global,
+        spaces["S"].dofmap.index_map.size_global,
+    ]
+    assert source["projection_diagnostics"]["projection_matrix_shape"] == [
+        spaces["S"].dofmap.index_map.size_global,
+        spaces["S"].dofmap.index_map.size_global,
+    ]
+    raw_source["vector"].destroy()
+    source["vector"].destroy()
+
+
+def test_order_one_single_cell_source_passes_fixed_projection_gate():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    source_start, source_end = _interior_segment(sp, msh, 0, 0)
+    config = sp.PipelineConfig(
+        nedelec_order=1,
+        source_start=source_start,
+        source_end=source_end,
+        source_mode="manual_line",
+        source_quadrature_points=2,
+        rtol=1.0e-11,
+        atol=1.0e-13,
+        max_it=1000,
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    source = sp.build_source(msh, spaces, config)
+
+    gate = sp._require_source_projection_gate(source)
+
+    assert spaces["S"].element.basix_element.degree == 1
+    assert gate["passed"] is True
+    source["vector"].destroy()
+
+
+def test_order_one_cross_cell_global_gauss_is_rejected_despite_projected_p1_balance():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 2, 2, 2)
+    config = sp.PipelineConfig(
+        nedelec_order=1,
+        source_start=(0.2, 0.285, 0.389),
+        source_end=(0.8, 0.285, 0.389),
+        source_mode="manual_line",
+        source_quadrature_points=33,
+        rtol=1.0e-11,
+        atol=1.0e-13,
+        max_it=1000,
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    source = sp.build_source(msh, spaces, config)
+    gate = sp._source_projection_gate_diagnostics(source)
+
+    relative = _relative_endpoint_residual(
+        sp,
+        msh,
+        spaces["S"],
+        spaces["V"],
+        source["vector"],
+        config,
+    )
+
+    assert spaces["S"].element.basix_element.degree == 1
+    assert relative < 1.0e-9
+    assert gate["passed"] is False
+    assert gate["failed_metrics"] == [
+        "raw_endpoint_relative_residual",
+        "correction_l2_over_raw",
+    ]
+    with pytest.raises(RuntimeError, match="raw_endpoint_relative_residual"):
+        sp._require_source_projection_gate(source)
+    source["vector"].destroy()
+
+
+def test_actual_source_after_pec_boundary_elimination_keeps_full_p2_balance_and_gates_bad_free_edge():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import fem, mesh
+    from mpi4py import MPI
+    from petsc4py import PETSc
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 3, 3, 3)
+    config = sp.PipelineConfig(
+        nedelec_order=2,
+        source_start=(0.4, 0.4, 0.4),
+        source_end=(0.6, 0.6, 0.6),
+        source_mode="manual_line",
+        source_quadrature_points=7,
+        source_projection_mode="charge_conserving",
+        outer_boundary_mode="pec",
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    source = sp.build_source(msh, spaces, config)
+    facets = mesh.locate_entities_boundary(
+        msh,
+        msh.topology.dim - 1,
+        lambda x: np.ones(x.shape[1], dtype=bool),
+    )
+    local_bc_dofs = np.unique(fem.locate_dofs_topological(spaces["V"], msh.topology.dim - 1, facets))
+    bc_global = spaces["V"].dofmap.index_map.local_to_global(local_bc_dofs).astype(np.int32)
+
+    diagnostics = sp._validate_source_after_boundary_elimination(
+        msh,
+        spaces,
+        source["vector"],
+        config,
+        bc_global,
+    )
+
+    assert diagnostics["relative_residual"] < 1.0e-11
+    assert diagnostics["relative_tolerance"] == pytest.approx(
+        sp.SOURCE_PROJECTION_MAX_AFTER_RELATIVE_RESIDUAL
+    )
+    assert diagnostics["eliminated_l2_over_source"] < 1.0e-11
+
+    bad_source = source["vector"].copy()
+    all_dofs = set(range(spaces["V"].dofmap.index_map.size_global))
+    free_dof = min(all_dofs.difference(int(value) for value in bc_global))
+    bad_source.setValue(free_dof, 1.0, addv=PETSc.InsertMode.ADD_VALUES)
+    bad_source.assemble()
+    with pytest.raises(RuntimeError, match="after PEC boundary elimination"):
+        sp._validate_source_after_boundary_elimination(
+            msh,
+            spaces,
+            bad_source,
+            config,
+            bc_global,
+        )
+    bad_source.destroy()
+    source["vector"].destroy()

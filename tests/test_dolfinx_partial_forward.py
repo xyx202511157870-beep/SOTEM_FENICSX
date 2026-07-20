@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -40,6 +41,73 @@ def test_save_forward_partial_writes_completed_output_rows(tmp_path):
     assert [str(item) for item in data["components"]] == ["Ex", "Ey", "dBzdt"]
     assert data["solver_steps"].tolist() == [1, 2]
     assert data["solver_iterations"].tolist() == [10, 11]
+    assert int(data["producer_schema_version"].item()) == sp._FORWARD_ARTIFACT_SCHEMA_VERSION
+    assert int(data["producer_nedelec_order"].item()) == 1
+    assert int(data["producer_curl_degree"].item()) == 0
+    assert str(data["producer_dbdt_observation_schema"].item()) == sp._dbdt_observation_schema(config)
+    observation_schema = json.loads(str(data["producer_dbdt_observation_schema"].item()))
+    assert observation_schema["quantity"] == "dBdt"
+    assert observation_schema["operator"] == "minus_curl_E"
+    assert observation_schema["observation_space"] == {
+        "degree": 0,
+        "family": "DG",
+        "shape": [3],
+    }
+
+
+def _rewrite_npz(path, transform):
+    with np.load(path, allow_pickle=False) as payload:
+        values = {key: np.asarray(payload[key]) for key in payload.files}
+    transform(values)
+    np.savez(path, **values)
+
+
+def test_legacy_forward_partial_without_producer_identity_fails_closed(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    sp._save_forward_partial(config, [1.0e-5], [[1.0, 2.0]], ["Ex", "dBzdt"], [])
+    _rewrite_npz(
+        config.forward_partial_npz(),
+        lambda values: [values.pop(key) for key in sp._FORWARD_ARTIFACT_IDENTITY_KEYS],
+    )
+
+    with pytest.raises(ValueError, match="missing producer identity"):
+        sp._load_forward_partial(config)
+
+
+def test_forward_partial_rejects_nedelec_order_mismatch(tmp_path):
+    sp = _load_pipeline_module()
+    saved = sp.PipelineConfig(workdir=tmp_path, nedelec_order=2)
+    sp._save_forward_partial(saved, [1.0e-5], [[1.0, 2.0]], ["Ex", "dBzdt"], [])
+
+    with pytest.raises(ValueError, match="producer identity mismatch"):
+        sp._load_forward_partial(sp.PipelineConfig(workdir=tmp_path, nedelec_order=1))
+
+
+def test_forward_partial_rejects_old_producer_schema_version(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    sp._save_forward_partial(config, [1.0e-5], [[1.0, 2.0]], ["Ex", "dBzdt"], [])
+    _rewrite_npz(
+        config.forward_partial_npz(),
+        lambda values: values.__setitem__("producer_schema_version", np.asarray(0)),
+    )
+
+    with pytest.raises(ValueError, match="producer identity mismatch"):
+        sp._load_forward_partial(config)
+
+
+def test_forward_partial_rejects_curl_degree_mismatch(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, nedelec_order=2)
+    sp._save_forward_partial(config, [1.0e-5], [[1.0, 2.0]], ["Ex", "dBzdt"], [])
+    _rewrite_npz(
+        config.forward_partial_npz(),
+        lambda values: values.__setitem__("producer_curl_degree", np.asarray(0)),
+    )
+
+    with pytest.raises(ValueError, match="producer identity mismatch"):
+        sp._load_forward_partial(config)
 
 
 def test_save_forward_partial_round_trips_divergence_cleaning_output_stats(tmp_path):
@@ -297,6 +365,61 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
         np.testing.assert_array_equal(
             payload["schedule_output_step_indices"], schedule["output_step_indices"]
         )
+        assert int(payload["producer_schema_version"].item()) == sp._FORWARD_ARTIFACT_SCHEMA_VERSION
+        assert int(payload["producer_nedelec_order"].item()) == 1
+        assert int(payload["producer_curl_degree"].item()) == 0
+        assert str(payload["producer_dbdt_observation_schema"].item()) == sp._dbdt_observation_schema(config)
+
+
+def test_forward_checkpoint_without_producer_identity_fails_closed(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
+    schedule = _checkpoint_schedule(sp, config)
+    sp._save_forward_checkpoint(
+        config,
+        schedule=schedule,
+        completed_step=0,
+        previous_time=1.0e-5,
+        E_old=_FakeFunction([1.0, 2.0, 3.0]),
+        memories=[],
+        rows=[[7.0, 8.0]],
+        components=["Ex", "dBzdt"],
+        solver_log=[],
+    )
+    _rewrite_npz(
+        config.forward_checkpoint_npz(),
+        lambda values: [values.pop(key) for key in sp._FORWARD_ARTIFACT_IDENTITY_KEYS],
+    )
+
+    with pytest.raises(ValueError, match="missing producer identity"):
+        sp._load_forward_checkpoint(config, schedule=schedule)
+
+
+def test_forward_checkpoint_rejects_dbdt_observation_schema_mismatch(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
+    schedule = _checkpoint_schedule(sp, config)
+    sp._save_forward_checkpoint(
+        config,
+        schedule=schedule,
+        completed_step=0,
+        previous_time=1.0e-5,
+        E_old=_FakeFunction([1.0, 2.0, 3.0]),
+        memories=[],
+        rows=[[7.0, 8.0]],
+        components=["Ex", "dBzdt"],
+        solver_log=[],
+    )
+    _rewrite_npz(
+        config.forward_checkpoint_npz(),
+        lambda values: values.__setitem__(
+            "producer_dbdt_observation_schema",
+            np.asarray("legacy-minus-curl-E-vector-DG0"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="producer identity mismatch"):
+        sp._load_forward_checkpoint(config, schedule=schedule)
 
 
 def test_forward_checkpoint_rejects_resume_with_different_time_level(tmp_path):
@@ -329,7 +452,7 @@ def test_forward_checkpoint_rejects_resume_with_different_time_level(tmp_path):
         sp._load_forward_checkpoint(resumed_config, schedule=resumed_schedule)
 
 
-def test_legacy_forward_checkpoint_without_schedule_identity_fails_closed(tmp_path):
+def test_legacy_forward_checkpoint_without_producer_identity_fails_closed(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
     np.savez(
@@ -342,7 +465,7 @@ def test_legacy_forward_checkpoint_without_schedule_identity_fails_closed(tmp_pa
         components=np.asarray(["Ex", "Ey", "dBzdt"]),
     )
 
-    with pytest.raises(ValueError, match="missing schedule identity"):
+    with pytest.raises(ValueError, match="missing producer identity"):
         sp._load_forward_checkpoint(config, schedule=_checkpoint_schedule(sp, config))
 
 

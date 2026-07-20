@@ -88,15 +88,15 @@ def test_postprocess_saved_forward_uses_forward_partial_without_rerunning_fem(tm
         ],
         dtype=float,
     )
-    np.savez(
-        config.forward_partial_npz(),
-        times=times,
-        fem=data,
-        components=np.asarray(["Ex", "Ey", "Hz", "dBzdt"]),
-        solver_steps=np.asarray([10, 11]),
-        solver_iterations=np.asarray([20, 21]),
-        solver_residuals=np.asarray([1.0e-9, 2.0e-9]),
-        solver_reasons=np.asarray([2, 2]),
+    sp._save_forward_partial(
+        config,
+        times,
+        data,
+        ["Ex", "Ey", "Hz", "dBzdt"],
+        [
+            {"step": 10, "its": 20, "residual": 1.0e-9, "reason": 2},
+            {"step": 11, "its": 21, "residual": 2.0e-9, "reason": 2},
+        ],
     )
 
     reference_srcpts = []

@@ -46,6 +46,7 @@ def test_build_function_spaces_matches_curl_degree_without_changing_shared_dg0(
     assert spaces["W"].descriptor == ("DG", 0, (3,))
     assert spaces["W_curl"].descriptor == ("DG", expected_curl_degree, (3,))
     assert spaces["W_curl"] is not spaces["W"]
+    assert spaces["S"].descriptor == ("Lagrange", nedelec_order)
     assert ("DG", expected_curl_degree, (3,)) in calls
 
 

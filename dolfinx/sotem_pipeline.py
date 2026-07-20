@@ -43,6 +43,9 @@ POSTPROCESS_MODULES = {
     "matplotlib": "matplotlib",
 }
 REFERENCE_SOURCE_QUADRATURE_TOLERANCE = 0.005
+SOURCE_PROJECTION_MAX_RAW_RELATIVE_RESIDUAL = 0.05
+SOURCE_PROJECTION_MAX_CORRECTION_L2_OVER_RAW = 0.01
+SOURCE_PROJECTION_MAX_AFTER_RELATIVE_RESIDUAL = 1.0e-8
 REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON_BEGIN = (
     "BEGIN_REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON"
 )
@@ -58,6 +61,13 @@ PHYS_SOURCE_LINE = 301
 SPONGE_ALL_SIDES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
 MESH_GENERATOR_CONTRACT_VERSION = "sotem-air-earth-unembedded-probes/v2"
 LOCAL_MESH_MIN_QUALITY = 0.01
+_FORWARD_ARTIFACT_SCHEMA_VERSION = 2
+_FORWARD_ARTIFACT_IDENTITY_KEYS = (
+    "producer_schema_version",
+    "producer_nedelec_order",
+    "producer_curl_degree",
+    "producer_dbdt_observation_schema",
+)
 LOCAL_MESH_MAX_ASPECT = 100.0
 _CHECKOUT_SHARED_MODULES: dict[str, Any] = {}
 
@@ -1791,10 +1801,11 @@ def build_function_spaces(msh, config: PipelineConfig | None = None):
     W = fem.functionspace(msh, ("DG", 0, (3,)))
     curl_degree = nedelec_order - 1
     W_curl = fem.functionspace(msh, ("DG", curl_degree, (3,)))
-    S = fem.functionspace(msh, ("Lagrange", 1))
+    S = fem.functionspace(msh, ("Lagrange", nedelec_order))
     log(
         f"[spaces] V=N1curl({nedelec_order}) dofs global={V.dofmap.index_map.size_global}, "
-        f"DG0 cells global={Q.dofmap.index_map.size_global}, curl=vector DG{curl_degree}",
+        f"DG0 cells global={Q.dofmap.index_map.size_global}, curl=vector DG{curl_degree}, "
+        f"gradient=Lagrange({nedelec_order})",
         comm=msh.comm,
     )
     return {"V": V, "Q": Q, "W": W, "W_curl": W_curl, "S": S}
@@ -2754,7 +2765,7 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
         local = np.asarray(phi @ tangent, dtype=float) * float(weights[ip])
         if V.element.needs_dof_transformations:
             local_t = local.copy()
-            V.element.Tt_inv_apply(local_t, permutations[cell : cell + 1], 1)
+            V.element.T_apply(local_t, permutations[cell : cell + 1], 1)
             local = local_t
         local_dofs = dofmap.cell_dofs(cell)
         global_dofs = index_map.local_to_global(local_dofs).astype(PETSc.IntType)
@@ -3023,6 +3034,97 @@ def _build_endpoint_scalar_load(msh, S, config: PipelineConfig, *, use_unit_curr
     return b
 
 
+def _source_projection_gate_diagnostics(source_info) -> dict[str, Any]:
+    """Evaluate immutable source-quality limits without changing the source."""
+
+    projection = None
+    if isinstance(source_info, dict):
+        candidate = source_info.get("projection_diagnostics")
+        if isinstance(candidate, dict):
+            projection = candidate
+        elif {"before_residual", "after_residual", "endpoint_norm"}.issubset(source_info):
+            projection = source_info
+
+    thresholds = {
+        "raw_endpoint_relative_residual": SOURCE_PROJECTION_MAX_RAW_RELATIVE_RESIDUAL,
+        "correction_l2_over_raw": SOURCE_PROJECTION_MAX_CORRECTION_L2_OVER_RAW,
+        "projected_endpoint_relative_residual": SOURCE_PROJECTION_MAX_AFTER_RELATIVE_RESIDUAL,
+    }
+    if projection is None:
+        return {
+            "passed": False,
+            "failed_metrics": ["missing_projection_diagnostics"],
+            "metrics": {},
+            "thresholds": thresholds,
+        }
+
+    def numeric_metric(name: str) -> float:
+        try:
+            return float(projection.get(name, math.nan))
+        except (TypeError, ValueError):
+            return math.nan
+
+    endpoint_norm = numeric_metric("endpoint_norm")
+    before_residual = numeric_metric("before_residual")
+    after_residual = numeric_metric("after_residual")
+    correction_relative = numeric_metric("correction_l2_over_raw")
+    if math.isfinite(endpoint_norm) and endpoint_norm > 0.0:
+        raw_relative = before_residual / endpoint_norm
+        after_relative = after_residual / endpoint_norm
+    else:
+        raw_relative = math.nan
+        after_relative = math.nan
+    raw_metrics = {
+        "raw_endpoint_relative_residual": raw_relative,
+        "correction_l2_over_raw": correction_relative,
+        "projected_endpoint_relative_residual": after_relative,
+    }
+    metrics = {
+        name: value if math.isfinite(value) else None
+        for name, value in raw_metrics.items()
+    }
+    failed_metrics = [
+        name
+        for name, value in raw_metrics.items()
+        if not math.isfinite(value) or value < 0.0 or value > thresholds[name]
+    ]
+    return {
+        "passed": not failed_metrics,
+        "failed_metrics": failed_metrics,
+        "metrics": metrics,
+        "thresholds": thresholds,
+    }
+
+
+def _require_source_projection_gate(source_info) -> dict[str, Any]:
+    """Fail closed unless source projection satisfies all fixed quality limits."""
+
+    gate = _source_projection_gate_diagnostics(source_info)
+    if not gate["passed"]:
+        details = []
+        for name in gate["failed_metrics"]:
+            if name not in gate["metrics"]:
+                details.append(name)
+                continue
+            value = gate["metrics"][name]
+            value_text = "invalid" if value is None else f"{value:.6e}"
+            details.append(f"{name}={value_text} (limit={gate['thresholds'][name]:.6e})")
+        raise RuntimeError("source projection quality gate failed: " + "; ".join(details))
+    return gate
+
+
+def _finalize_source_projection_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    gate = _source_projection_gate_diagnostics(diagnostics)
+    diagnostics["before_relative_residual"] = gate["metrics"].get(
+        "raw_endpoint_relative_residual"
+    )
+    diagnostics["after_relative_residual"] = gate["metrics"].get(
+        "projected_endpoint_relative_residual"
+    )
+    diagnostics["gate"] = gate
+    return diagnostics
+
+
 def _enforce_source_charge_conservation(
     msh,
     spaces: dict[str, Any],
@@ -3042,6 +3144,8 @@ def _enforce_source_charge_conservation(
     V = spaces["V"]
     G = fem_petsc.discrete_gradient(S, V)
     G.assemble()
+    gradient_shape = [int(value) for value in G.getSize()]
+    projection_matrix_shape = [gradient_shape[1], gradient_shape[1]]
 
     endpoint = _build_endpoint_scalar_load(msh, S, config, use_unit_current=True)
     current_div = endpoint.duplicate()
@@ -3069,7 +3173,7 @@ def _enforce_source_charge_conservation(
         current_div.destroy()
         residual.destroy()
         G.destroy()
-        return source_vec, {
+        diagnostics = {
             "projection_mode": projection_mode,
             "applied": False,
             "before_residual": float(residual_norm),
@@ -3088,7 +3192,10 @@ def _enforce_source_charge_conservation(
             "ksp_iterations": 0,
             "ksp_reason": 0,
             "ksp_residual": 0.0,
+            "gradient_shape": gradient_shape,
+            "projection_matrix_shape": projection_matrix_shape,
         }
+        return source_vec, _finalize_source_projection_diagnostics(diagnostics)
     if residual_norm <= max(1.0e-12, 1.0e-10 * endpoint_norm):
         log(
             f"[source] charge-conservation projection skipped; divergence residual={residual_norm:.6e}",
@@ -3098,7 +3205,7 @@ def _enforce_source_charge_conservation(
         current_div.destroy()
         residual.destroy()
         G.destroy()
-        return source_vec, {
+        diagnostics = {
             "projection_mode": projection_mode,
             "applied": False,
             "before_residual": float(residual_norm),
@@ -3117,7 +3224,10 @@ def _enforce_source_charge_conservation(
             "ksp_iterations": 0,
             "ksp_reason": 0,
             "ksp_residual": 0.0,
+            "gradient_shape": gradient_shape,
+            "projection_matrix_shape": projection_matrix_shape,
         }
+        return source_vec, _finalize_source_projection_diagnostics(diagnostics)
 
     A = G.transposeMatMult(G)
     A.assemble()
@@ -3143,6 +3253,10 @@ def _enforce_source_charge_conservation(
         raise RuntimeError(
             f"source charge-conservation projection failed, reason={reason}, residual={ksp.getResidualNorm():.6e}"
         )
+    log(
+        f"[source] projection system G={tuple(gradient_shape)}, A={tuple(int(value) for value in A.getSize())}",
+        comm=msh.comm,
+    )
 
     correction = source_vec.duplicate()
     correction.set(0.0)
@@ -3161,7 +3275,9 @@ def _enforce_source_charge_conservation(
     corrected_norm = corrected_div.norm()
     log(
         "[source] charge-conservation projection applied; "
-        f"before={residual_norm:.6e}, after={corrected_norm:.6e}, endpoint_norm={endpoint_norm:.6e}",
+        f"before={residual_norm:.6e}, after={corrected_norm:.6e}, endpoint_norm={endpoint_norm:.6e}, "
+        f"correction_l2/raw={correction_l2_norm / raw_source_l2_norm if raw_source_l2_norm > 0.0 else 0.0:.6e}, "
+        f"ksp_its={ksp.getIterationNumber()}, ksp_reason={reason}, ksp_residual={ksp.getResidualNorm():.6e}",
         comm=msh.comm,
     )
     diagnostics = {
@@ -3185,6 +3301,8 @@ def _enforce_source_charge_conservation(
         "ksp_iterations": int(ksp.getIterationNumber()),
         "ksp_reason": int(reason),
         "ksp_residual": float(ksp.getResidualNorm()),
+        "gradient_shape": gradient_shape,
+        "projection_matrix_shape": [int(value) for value in A.getSize()],
     }
 
     corrected_div.destroy()
@@ -3195,7 +3313,75 @@ def _enforce_source_charge_conservation(
     current_div.destroy()
     residual.destroy()
     G.destroy()
-    return source_vec, diagnostics
+    return source_vec, _finalize_source_projection_diagnostics(diagnostics)
+
+
+def _validate_source_after_boundary_elimination(
+    msh,
+    spaces: dict[str, Any],
+    source_vec,
+    config: PipelineConfig,
+    boundary_edge_dofs,
+) -> dict[str, Any]:
+    """Gate the source actually retained after strong edge-BC elimination."""
+
+    import numpy as np
+    from dolfinx.fem import petsc as fem_petsc
+
+    S = spaces["S"]
+    V = spaces["V"]
+    actual = source_vec.copy()
+    source_norm = float(source_vec.norm())
+    _zero_rhs_entries(actual, boundary_edge_dofs)
+    eliminated = source_vec.copy()
+    eliminated.axpy(-1.0, actual)
+    eliminated_norm = float(eliminated.norm())
+
+    gradient = fem_petsc.discrete_gradient(S, V)
+    gradient.assemble()
+    endpoint = _build_endpoint_scalar_load(msh, S, config, use_unit_current=True)
+    actual_divergence = endpoint.duplicate()
+    actual_divergence.set(0.0)
+    gradient.multTranspose(actual, actual_divergence)
+    residual = actual_divergence.copy()
+    residual.axpy(-1.0, endpoint)
+    endpoint_norm = float(endpoint.norm())
+    residual_norm = float(residual.norm())
+    relative_residual = residual_norm / endpoint_norm if endpoint_norm > 0.0 else math.inf
+    relative_tolerance = SOURCE_PROJECTION_MAX_AFTER_RELATIVE_RESIDUAL
+    tolerance = max(1.0e-12, relative_tolerance * endpoint_norm)
+    diagnostics = {
+        "gradient_shape": [int(value) for value in gradient.getSize()],
+        "boundary_edge_dof_count": int(len(boundary_edge_dofs)),
+        "source_l2_norm": source_norm,
+        "eliminated_l2_norm": eliminated_norm,
+        "eliminated_l2_over_source": eliminated_norm / source_norm if source_norm > 0.0 else 0.0,
+        "endpoint_norm": endpoint_norm,
+        "residual_norm": residual_norm,
+        "relative_residual": relative_residual,
+        "relative_tolerance": relative_tolerance,
+        "absolute_tolerance": tolerance,
+        "passed": bool(np.isfinite(residual_norm) and residual_norm <= tolerance),
+    }
+    residual.destroy()
+    actual_divergence.destroy()
+    endpoint.destroy()
+    gradient.destroy()
+    eliminated.destroy()
+    actual.destroy()
+    if not diagnostics["passed"]:
+        raise RuntimeError(
+            "source charge balance failed after PEC boundary elimination: "
+            f"residual={residual_norm:.6e}, endpoint_norm={endpoint_norm:.6e}, "
+            f"relative={relative_residual:.6e}, tolerance={tolerance:.6e}"
+        )
+    log(
+        "[source] charge balance after boundary elimination passed; "
+        f"residual={residual_norm:.6e}, relative={relative_residual:.6e}, "
+        f"eliminated_l2/source={diagnostics['eliminated_l2_over_source']:.6e}",
+        comm=msh.comm,
+    )
+    return diagnostics
 
 
 def _build_conductivity_divergence_cleaner(spaces: dict[str, Any], operators, config: PipelineConfig):
@@ -5441,6 +5627,8 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
     from dolfinx import fem
     from petsc4py import PETSc
 
+    if str(config.source_term_mode).strip().lower() == "impressed_current":
+        _require_source_projection_gate(source)
     if times is None:
         times = generate_time_array(config)
     schedule = _forward_observation_schedule(times, config)
@@ -5451,6 +5639,14 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         int(step): float(return_times[i]) for i, step in enumerate(schedule["output_step_indices"])
     }
     operators = assemble_operators(msh, spaces, materials, facet_tags, config, debye=debye)
+    if str(config.source_term_mode).strip().lower() == "impressed_current":
+        source["boundary_elimination_diagnostics"] = _validate_source_after_boundary_elimination(
+            msh,
+            spaces,
+            source["vector"],
+            config,
+            operators["bc_global"],
+        )
     divergence_cleaner = None
     if str(config.divergence_cleaning).strip().lower() == "conductivity":
         if debye is not None:
@@ -7621,6 +7817,7 @@ def write_validation_artifacts(
     diagnostics["acceptance_status"] = acceptance_status
     diagnostics["validation_failure"] = dict(diagnostics)
     source_projection = _source_projection_diagnostics_from_info(source_info)
+    source_projection_gate = _source_projection_gate_diagnostics(source_info)
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
     initial_field_diagnostics = _source_initial_field_diagnostics_from_info(source_info)
     diagnostics["source_consistency"] = diagnose_source_consistency(
@@ -7631,6 +7828,7 @@ def write_validation_artifacts(
     )
     if source_projection is not None:
         diagnostics["source_projection"] = source_projection
+    diagnostics["source_projection_gate"] = source_projection_gate
     if initial_field_diagnostics is not None:
         diagnostics["initial_field"] = initial_field_diagnostics
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
@@ -7823,6 +8021,7 @@ def write_source_only_diagnostics(
     workdir = Path(config.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     source_projection = _source_projection_diagnostics_from_info(source_info)
+    source_projection_gate = _source_projection_gate_diagnostics(source_info)
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
     source_line_orientation = _source_line_orientation_diagnostics_from_info(source_info)
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
@@ -7830,6 +8029,7 @@ def write_source_only_diagnostics(
     diagnostics: dict[str, Any] = {
         "source_only": True,
         "source_mode": str(source_info.get("mode")) if isinstance(source_info, dict) else None,
+        "source_projection_gate": source_projection_gate,
         "source_consistency": diagnose_source_consistency(
             config,
             source_projection_residual=source_projection.get("after_residual") if source_projection else None,
@@ -7846,6 +8046,15 @@ def write_source_only_diagnostics(
         diagnostics["source_line_orientation"] = source_line_orientation
     if initial_field_diagnostics is not None:
         diagnostics["initial_field"] = initial_field_diagnostics
+    boundary_elimination = (
+        source_info.get("boundary_elimination_diagnostics")
+        if isinstance(source_info, dict)
+        else None
+    )
+    if boundary_elimination is not None:
+        diagnostics["source_boundary_elimination"] = json.loads(
+            json.dumps(boundary_elimination, allow_nan=False, default=float)
+        )
     if mesh_quality is not None:
         diagnostics["mesh_quality"] = json.loads(
             json.dumps(mesh_quality, allow_nan=False, default=float)
@@ -7854,7 +8063,10 @@ def write_source_only_diagnostics(
         diagnostics["preflight"] = json.loads(
             json.dumps(preflight, allow_nan=False, default=float)
         )
-    (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
+    (workdir / "source_diagnostics.json").write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True, allow_nan=False),
+        encoding="utf-8",
+    )
     (workdir / "source_run_config_resolved.yaml").write_text(
         _resolved_config_yaml(config), encoding="utf-8"
     )
@@ -7863,6 +8075,15 @@ def write_source_only_diagnostics(
     lines.append(f"python: {env.get('python', sys.executable)}")
     lines.append(f"source mode: {diagnostics['source_mode']}")
     lines.append(f"source projection mode: {config.source_projection_mode}")
+    lines.append(
+        "source projection gate: "
+        f"{'PASS' if source_projection_gate['passed'] else 'FAIL'}; "
+        f"failed={','.join(source_projection_gate['failed_metrics']) or 'none'}; "
+        f"raw/endpoint={source_projection_gate['metrics'].get('raw_endpoint_relative_residual')}; "
+        f"correction_l2/raw={source_projection_gate['metrics'].get('correction_l2_over_raw')}; "
+        f"after/endpoint={source_projection_gate['metrics'].get('projected_endpoint_relative_residual')}; "
+        f"limits={source_projection_gate['thresholds']}"
+    )
     if source_projection is not None:
         lines.append(
             "source projection: "
@@ -7881,6 +8102,14 @@ def write_source_only_diagnostics(
                 f"residual_top_fraction={float(scalar_balance.get('residual_top_abs_fraction', math.nan)):.6g}; "
                 f"current_endpoint_alignment={float(scalar_balance.get('current_div_endpoint_alignment', math.nan)):.6g}"
             )
+    if isinstance(boundary_elimination, dict):
+        lines.append(
+            "source after boundary elimination: "
+            f"{'PASS' if boundary_elimination.get('passed') else 'FAIL'}; "
+            f"relative={float(boundary_elimination.get('relative_residual', math.nan)):.6e}; "
+            f"limit={float(boundary_elimination.get('relative_tolerance', math.nan)):.6e}; "
+            f"eliminated_l2/source={float(boundary_elimination.get('eliminated_l2_over_source', math.nan)):.6e}"
+        )
     if source_local_projection is not None:
         lines.append(
             "source local projection: "
@@ -9145,6 +9374,84 @@ def _plot_receiver_diagnostics(config: PipelineConfig, receiver_diagnostic_rows)
     plt.close(fig)
 
 
+def _dbdt_observation_schema(config: PipelineConfig) -> str:
+    """Return the canonical schema for the saved dB/dt receiver values."""
+
+    nedelec_order = int(config.nedelec_order)
+    formulation = str(config.formulation).strip().lower()
+    magnetic_mode = str(config.magnetic_receiver_mode).strip().lower()
+    magnetic_dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
+    if formulation == "h":
+        operator = "backward_euler_mu_dHdt"
+        observation_space = {
+            "family": "N1curl",
+            "degree": nedelec_order,
+            "shape": [3],
+        }
+    elif magnetic_dbdt_mode == "biot_rate":
+        operator = "backward_euler_mu_dHdt_biot"
+        observation_space = {
+            "family": "receiver_functional",
+            "degree": None,
+            "shape": [3],
+        }
+    else:
+        operator = "minus_curl_E"
+        observation_space = {
+            "family": "DG",
+            "degree": nedelec_order - 1,
+            "shape": [3],
+        }
+    schema = {
+        "schema_version": 1,
+        "quantity": "dBdt",
+        "operator": operator,
+        "formulation": formulation,
+        "magnetic_receiver_mode": magnetic_mode,
+        "magnetic_dbdt_mode": magnetic_dbdt_mode,
+        "observation_space": observation_space,
+        "receiver": {
+            "type": str(config.receiver_type).strip().lower(),
+            "evaluation_mode": str(config.receiver_evaluation_mode).strip().lower(),
+            "average_radius": float(config.receiver_average_radius),
+        },
+    }
+    return json.dumps(schema, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _forward_artifact_identity(config: PipelineConfig):
+    import numpy as np
+
+    nedelec_order = int(config.nedelec_order)
+    return {
+        "producer_schema_version": np.asarray(_FORWARD_ARTIFACT_SCHEMA_VERSION, dtype=np.int64),
+        "producer_nedelec_order": np.asarray(nedelec_order, dtype=np.int64),
+        "producer_curl_degree": np.asarray(nedelec_order - 1, dtype=np.int64),
+        "producer_dbdt_observation_schema": np.asarray(_dbdt_observation_schema(config)),
+    }
+
+
+def _validate_forward_artifact_identity(payload, config: PipelineConfig, path: Path) -> None:
+    import numpy as np
+
+    missing = sorted(set(_FORWARD_ARTIFACT_IDENTITY_KEYS).difference(payload.files))
+    if missing:
+        raise ValueError(
+            f"forward artifact {path} is missing producer identity keys: {', '.join(missing)}"
+        )
+    expected = _forward_artifact_identity(config)
+    mismatched = []
+    for key in _FORWARD_ARTIFACT_IDENTITY_KEYS:
+        saved_value = np.asarray(payload[key])
+        expected_value = np.asarray(expected[key])
+        if saved_value.shape != expected_value.shape or not np.array_equal(saved_value, expected_value):
+            mismatched.append(key)
+    if mismatched:
+        raise ValueError(
+            f"forward artifact {path} producer identity mismatch: {', '.join(mismatched)}"
+        )
+
+
 def _save_forward_partial(config: PipelineConfig, times, rows, components, solver_log, receiver_diagnostic_rows=None) -> None:
     import numpy as np
 
@@ -9213,6 +9520,7 @@ def _save_forward_partial(config: PipelineConfig, times, rows, components, solve
             dtype=float,
         ),
     }
+    payload.update(_forward_artifact_identity(config))
     if receiver_diagnostic_rows:
         payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
     tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -9586,6 +9894,7 @@ def _save_forward_checkpoint(
         if h_old_receiver is not None
         else np.full(3, np.nan, dtype=float),
     }
+    payload.update(_forward_artifact_identity(config))
     payload.update(_forward_schedule_checkpoint_payload(schedule, config))
     if receiver_diagnostic_rows:
         payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
@@ -9603,6 +9912,7 @@ def _load_forward_checkpoint(config: PipelineConfig, *, schedule):
     if not path.is_file():
         raise FileNotFoundError(f"forward checkpoint file not found: {path}")
     payload = np.load(path, allow_pickle=False)
+    _validate_forward_artifact_identity(payload, config, path)
     _validate_forward_checkpoint_schedule(payload, config, schedule, path)
     required = {"completed_step", "previous_time", "e_old", "memories", "rows", "components"}
     missing = sorted(required.difference(payload.files))
@@ -9631,6 +9941,7 @@ def _load_forward_partial(config: PipelineConfig):
     if not path.is_file():
         raise FileNotFoundError(f"partial forward file not found: {path}")
     payload = np.load(path, allow_pickle=False)
+    _validate_forward_artifact_identity(payload, config, path)
     required = {"times", "fem", "components"}
     missing = sorted(required.difference(payload.files))
     if missing:
@@ -10235,6 +10546,15 @@ def _main_locked(argv: list[str]) -> int:
     source = build_source(msh, spaces, config, cell_tags)
     if config.formulation == "h":
         source["current_density"] = _build_regularized_current_density(msh, spaces, config, cell_tags)
+    elif config.source_only and str(config.source_term_mode).strip().lower() == "impressed_current":
+        _bc, _bc_dofs, bc_global = _make_zero_tangential_bc(msh, spaces, facet_tags, config)
+        source["boundary_elimination_diagnostics"] = _validate_source_after_boundary_elimination(
+            msh,
+            spaces,
+            source["vector"],
+            config,
+            bc_global,
+        )
     runtime["setup_seconds"] = time.perf_counter() - t0
     mesh_quality = diagnose_local_mesh_quality(msh, config, source)
     preflight = _pre_forward_diagnostics(
@@ -10259,9 +10579,19 @@ def _main_locked(argv: list[str]) -> int:
                 mesh_quality=mesh_quality,
                 preflight=preflight,
             )
+        if (
+            str(config.formulation).strip().lower() == "e"
+            and str(config.source_term_mode).strip().lower() == "impressed_current"
+        ):
+            _require_source_projection_gate(source)
         _require_local_mesh_quality_gate(mesh_quality)
         return 0
     _require_local_mesh_quality_gate(mesh_quality)
+    if (
+        str(config.formulation).strip().lower() == "e"
+        and str(config.source_term_mode).strip().lower() == "impressed_current"
+    ):
+        _require_source_projection_gate(source)
     times = generate_time_array(config)
     t0 = time.perf_counter()
     precomputed_ref_result = get_empymod_reference(times, config, mode=ref_mode)
