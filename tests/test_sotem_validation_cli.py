@@ -1400,6 +1400,71 @@ def _convert_to_v1_implicit_reference_srcpts(run_dir):
     )
 
 
+def _rewrite_reference_metadata_srcpts(run_dir, replacement):
+    metadata_paths = (
+        run_dir / "empymod_metadata.json",
+        run_dir / "artifacts" / "reference" / "empymod_metadata.json",
+    )
+    for path in metadata_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if replacement == "missing":
+            payload.pop("srcpts")
+        else:
+            payload["srcpts"] = replacement
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    digest = cli._sha256_file(metadata_paths[0])
+    assert cli._sha256_file(metadata_paths[1]) == digest
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stages"]["reference"]["file_sha256"]["empymod_metadata.json"] = digest
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    transaction["file_sha256"]["artifacts/reference/empymod_metadata.json"] = digest
+    transaction_path.write_text(
+        json.dumps(transaction, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("replacement", ["missing", 17])
+def test_reference_resume_rejects_rehashed_metadata_srcpts_tamper(
+    tmp_path, monkeypatch, replacement
+):
+    run_dir = _prepare(tmp_path, run_name=f"metadata-resume-{replacement}")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
+    )
+    command = _command("reference", run_dir, LEI_CASE)
+    assert cli.main(command) == 0
+    assert cli.main(command) == 0
+    _rewrite_reference_metadata_srcpts(run_dir, replacement)
+
+    with pytest.raises(ValueError, match="metadata|srcpts|identity"):
+        cli.main(command)
+
+
+@pytest.mark.parametrize("replacement", ["missing", 17])
+def test_effect_rejects_rehashed_reference_metadata_srcpts_tamper(
+    tmp_path, monkeypatch, replacement
+):
+    runs = _build_effect_source_runs(tmp_path, monkeypatch)
+    _rewrite_reference_metadata_srcpts(runs["noip_reference"], replacement)
+    effect_run = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver="polarization_effect",
+        run_name=f"metadata-effect-{replacement}",
+    )
+
+    with pytest.raises(ValueError, match="metadata|srcpts|identity"):
+        cli.main(_effect_args(effect_run, runs))
+
+
 def test_reference_rejects_v1_stage_with_implicit_default_srcpts(
     tmp_path, monkeypatch
 ):

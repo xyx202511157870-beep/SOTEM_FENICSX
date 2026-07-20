@@ -983,6 +983,42 @@ def _transaction_export_hashes(
     return exports
 
 
+def _validate_reference_metadata_identity(
+    run_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    variant: str,
+    srcpts: int,
+) -> dict[str, Any]:
+    stages = manifest.get("stages", {})
+    record = stages.get("reference") if isinstance(stages, Mapping) else None
+    hashes = record.get("file_sha256", {}) if isinstance(record, Mapping) else {}
+    expected_hash = hashes.get("empymod_metadata.json") if isinstance(hashes, Mapping) else None
+    metadata_path = _safe_evidence_path(
+        run_dir, "artifacts/reference/empymod_metadata.json"
+    )
+    if type(expected_hash) is not str or _sha256_file(metadata_path) != expected_hash:
+        raise ValueError("reference metadata hash is not bound to the stage")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("reference metadata must be a JSON object") from exc
+    if not isinstance(metadata, dict):
+        raise ValueError("reference metadata must be a JSON object")
+    if metadata.get("solver_id") != "empymod":
+        raise ValueError("reference metadata solver_id mismatch")
+    if metadata.get("reference_mode") != variant:
+        raise ValueError("reference metadata reference_mode mismatch")
+    if metadata.get("case_id") != manifest.get("case_id"):
+        raise ValueError("reference metadata case_id mismatch")
+    metadata_srcpts = metadata.get("srcpts")
+    if type(metadata_srcpts) is not int or metadata_srcpts <= 0:
+        raise ValueError("reference metadata srcpts must be an explicit positive integer")
+    if metadata_srcpts != srcpts:
+        raise ValueError("reference metadata srcpts does not match stage inputs")
+    return metadata
+
+
 def _materialize_bundle_exports(
     run_dir: Path,
     stage_name: str,
@@ -1261,6 +1297,12 @@ def _reference(args: argparse.Namespace) -> int:
         status="reference_complete",
         inputs=inputs,
     ):
+        _validate_reference_metadata_identity(
+            run_dir,
+            manifest,
+            variant=args.variant,
+            srcpts=args.srcpts,
+        )
         return 0
     _refuse_existing_outputs(outputs)
     _ensure_safe_directory(run_dir, run_dir / "artifacts")
@@ -1504,6 +1546,13 @@ def _source_run_evidence(
         raise ValueError(f"{role} {stage_name} transaction status mismatch")
     if _transaction_export_hashes(stage_name, journal) != stage.get("file_sha256"):
         raise ValueError(f"{role} {stage_name} manifest and bundle hashes differ")
+    if stage_name == "reference":
+        _validate_reference_metadata_identity(
+            run_dir,
+            manifest,
+            variant=variant,
+            srcpts=srcpts,
+        )
     evidence_path = run_dir / evidence_name
     expected_hash = stage["file_sha256"].get(evidence_name)
     if type(expected_hash) is not str:
