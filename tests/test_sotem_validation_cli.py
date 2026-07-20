@@ -432,6 +432,14 @@ def test_effect_composes_four_completed_cli_runs_end_to_end(tmp_path, monkeypatc
     )
 
     assert cli.main(_effect_args(effect_run, runs)) == 0
+    monkeypatch.setattr(
+        cli,
+        "write_polarization_effect_artifacts",
+        lambda *args, **kwargs: pytest.fail(
+            "completed effect recovery must not rerun the effect writer"
+        ),
+    )
+    assert cli.main(_effect_args(effect_run, runs)) == 0
 
     output = effect_run / "effect"
     summary = json.loads(
@@ -1087,6 +1095,81 @@ def test_bad_reference_does_not_restore_missing_root_export(
         cli.main(command)
 
     assert not missing_output.exists()
+    assert manifest_path.read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize("orphan_bundle", [True, False])
+def test_reference_recovery_rejects_bundle_swap_after_semantic_validation(
+    tmp_path, monkeypatch, orphan_bundle
+):
+    run_name = "swap-orphan" if orphan_bundle else "swap-record"
+    run_dir = _prepare(tmp_path, run_name=run_name)
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    command = _command("reference", run_dir, LEI_CASE, extra=("--variant", "noip"))
+    original_record = cli._record_stage
+    if orphan_bundle:
+        monkeypatch.setattr(
+            cli,
+            "_record_stage",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+        )
+        with pytest.raises(RuntimeError, match="interrupted"):
+            cli.main(command)
+        monkeypatch.setattr(cli, "_record_stage", original_record)
+    else:
+        assert cli.main(command) == 0
+
+    missing_output = run_dir / "empymod.csv"
+    missing_output.unlink()
+    manifest_path = run_dir / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+    original_validate = cli._validate_reference_metadata_identity
+    attack = {"calls": 0}
+
+    def validate_then_swap(*args, **kwargs):
+        result = original_validate(*args, **kwargs)
+        attack["calls"] += 1
+        metadata_paths = (
+            run_dir / "empymod_metadata.json",
+            run_dir / "artifacts" / "reference" / "empymod_metadata.json",
+        )
+        for metadata_path in metadata_paths:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["srcpts"] = 17
+            metadata_path.write_text(
+                json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        attack["root_metadata_after"] = metadata_paths[0].read_bytes()
+        transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+        transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+        transaction["file_sha256"]["artifacts/reference/empymod_metadata.json"] = (
+            cli._sha256_file(metadata_paths[1])
+        )
+        transaction_path.write_text(
+            json.dumps(transaction, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return result
+
+    monkeypatch.setattr(cli, "_validate_reference_metadata_identity", validate_then_swap)
+
+    with pytest.raises(ValueError, match="hash|metadata|bundle"):
+        cli.main(command)
+
+    assert attack["calls"] == 1
+    assert not missing_output.exists()
+    assert (run_dir / "empymod_metadata.json").read_bytes() == attack[
+        "root_metadata_after"
+    ]
     assert manifest_path.read_bytes() == manifest_before
 
 

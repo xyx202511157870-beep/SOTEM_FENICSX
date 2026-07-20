@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 from types import ModuleType
-from typing import Any
+from typing import Any, Callable
 import uuid
 
 import numpy as np
@@ -1024,50 +1024,6 @@ def _validate_reference_metadata_identity(
     return metadata
 
 
-def _prevalidate_existing_reference_bundle(
-    run_dir: Path,
-    manifest: Mapping[str, Any],
-    *,
-    inputs: Mapping[str, Any],
-) -> None:
-    """Validate an existing reference bundle without materializing any exports."""
-
-    stages = manifest.get("stages", {})
-    if not isinstance(stages, Mapping):
-        raise ValueError("run manifest stages must be a mapping")
-    record = stages.get("reference")
-    bundle = _bundle_dir(run_dir, "reference")
-    if record is None and not bundle.exists() and not _is_linklike(bundle):
-        return
-    if not bundle.exists() or _is_linklike(bundle):
-        raise ValueError("reference transaction bundle is not a safe directory")
-    if record is not None:
-        if not isinstance(record, Mapping) or record.get("status") != "complete":
-            raise ValueError("run manifest has an invalid reference stage record")
-        if record.get("inputs") != _json_value(inputs):
-            raise ValueError("completed reference stage inputs do not match")
-        stage_hashes = record.get("file_sha256")
-        if not isinstance(stage_hashes, Mapping) or not stage_hashes:
-            raise ValueError("completed reference stage lacks evidence hashes")
-    else:
-        stage_hashes = None
-
-    journal, _bundle_files = _verify_transaction_bundle(run_dir, "reference", inputs)
-    if journal.get("manifest_status") != "reference_complete":
-        raise ValueError("published reference bundle status mismatch")
-    export_hashes = _transaction_export_hashes("reference", journal)
-    if stage_hashes is not None and export_hashes != stage_hashes:
-        raise ValueError("completed reference manifest and bundle hashes differ")
-    expected_hash = export_hashes.get("empymod_metadata.json")
-    _validate_reference_metadata_identity(
-        run_dir,
-        case_id=str(manifest.get("case_id")),
-        variant=str(inputs.get("variant")),
-        srcpts=inputs.get("srcpts"),
-        expected_hash=expected_hash,
-    )
-
-
 def _materialize_bundle_exports(
     run_dir: Path,
     stage_name: str,
@@ -1076,13 +1032,23 @@ def _materialize_bundle_exports(
     """Restore the specification-level run outputs from an immutable bundle."""
 
     exports: list[Path] = []
-    for export_text, expected in _transaction_export_hashes(
-        stage_name, journal
-    ).items():
+    planned: list[tuple[Path, Path, str]] = []
+    export_hashes = _transaction_export_hashes(stage_name, journal)
+    for export_text, expected in export_hashes.items():
         export_relative = PurePosixPath(export_text)
         source_relative = PurePosixPath("artifacts", stage_name, *export_relative.parts)
         source = _safe_evidence_path(run_dir, source_relative.as_posix())
         target = run_dir.joinpath(*export_relative.parts)
+        if _sha256_file(source) != expected:
+            raise ValueError(f"published {stage_name} bundle changed before export")
+        if target.exists() or _is_linklike(target):
+            if _is_linklike(target) or not target.is_file():
+                raise ValueError(f"published {stage_name} export is not a safe file")
+            if _sha256_file(target) != expected:
+                raise ValueError(f"published {stage_name} export hash mismatch")
+        planned.append((source, target, expected))
+
+    for source, target, expected in planned:
         _ensure_safe_directory(run_dir, target.parent)
         if target.exists() or _is_linklike(target):
             if _is_linklike(target) or not target.is_file():
@@ -1113,6 +1079,7 @@ def _recover_or_complete_stage(
     stage_name: str,
     status: str,
     inputs: Mapping[str, Any],
+    validate_bundle: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> bool:
     stages = manifest.get("stages", {})
     if not isinstance(stages, Mapping):
@@ -1132,6 +1099,8 @@ def _recover_or_complete_stage(
         journal, _bundle_files = _verify_transaction_bundle(
             run_dir, stage_name, inputs
         )
+        if validate_bundle is not None:
+            validate_bundle(journal)
         if journal.get("manifest_status") != status:
             raise ValueError(f"published {stage_name} bundle status mismatch")
         if _transaction_export_hashes(stage_name, journal) != stage_hashes:
@@ -1144,6 +1113,8 @@ def _recover_or_complete_stage(
     if not bundle.exists():
         return False
     journal, _bundle_files = _verify_transaction_bundle(run_dir, stage_name, inputs)
+    if validate_bundle is not None:
+        validate_bundle(journal)
     if journal.get("manifest_status") != status:
         raise ValueError(f"published {stage_name} bundle status mismatch")
     files = _materialize_bundle_exports(run_dir, stage_name, journal)
@@ -1339,13 +1310,26 @@ def _reference(args: argparse.Namespace) -> int:
         run_dir / "reference_empymod_or_1d.csv",
         run_dir / "empymod_metadata.json",
     ]
-    _prevalidate_existing_reference_bundle(run_dir, manifest, inputs=inputs)
+
+    def validate_reference_bundle(journal: Mapping[str, Any]) -> None:
+        expected_hash = _transaction_export_hashes("reference", journal).get(
+            "empymod_metadata.json"
+        )
+        _validate_reference_metadata_identity(
+            run_dir,
+            case_id=case.case_id,
+            variant=args.variant,
+            srcpts=args.srcpts,
+            expected_hash=expected_hash,
+        )
+
     if _recover_or_complete_stage(
         run_dir,
         manifest,
         stage_name="reference",
         status="reference_complete",
         inputs=inputs,
+        validate_bundle=validate_reference_bundle,
     ):
         return 0
     _refuse_existing_outputs(outputs)
