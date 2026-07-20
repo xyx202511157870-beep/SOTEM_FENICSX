@@ -807,6 +807,23 @@ def test_pipeline_cli_resolves_independent_qwe_sampling_density(tmp_path, monkey
     monkeypatch.setattr(sp, "validate_model_consistency", fake_validate)
     monkeypatch.setattr(sp, "validate_formulation", lambda config: config.formulation)
     monkeypatch.setattr(sp, "check_environment", lambda **kwargs: {})
+    monkeypatch.setattr(
+        sp,
+        "get_empymod_reference",
+        lambda *_args, **_kwargs: pytest.fail(
+            "check-env-only must not compute references"
+        ),
+    )
+    monkeypatch.setattr(
+        sp,
+        "run_fetd_forward",
+        lambda *_args, **_kwargs: pytest.fail("check-env-only must not run E forward"),
+    )
+    monkeypatch.setattr(
+        sp,
+        "run_h_forward",
+        lambda *_args, **_kwargs: pytest.fail("check-env-only must not run H forward"),
+    )
 
     assert (
         sp.main(
@@ -1494,7 +1511,7 @@ def test_postprocess_cli_selects_exact_cole_cole_reference(monkeypatch, tmp_path
 def test_postprocess_records_actual_empymod_reference_mode(monkeypatch, tmp_path, ref_mode):
     sp = _load_pipeline_module()
     times = np.array([1.0e-4, 1.0e-3])
-    components = ("Ex", "Ey", "dBzdt")
+    components = ("Ex", "Ey", "Hz", "dBzdt")
     data = np.ones((times.size, len(components)))
     fem_result = {"times": times, "data": data, "components": components, "solver_log": []}
     captured = {}
@@ -1536,9 +1553,9 @@ def test_postprocess_reference_quadrature_failure_blocks_acceptance_writes(
 ):
     sp = _load_pipeline_module()
     times = np.asarray([1.0e-4, 1.0e-3])
-    components = ("Ex", "Ey", "dBzdt")
-    primary = np.asarray([[1.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
-    audit = np.asarray([[1.02, 0.0, 1.0], [1.0, 0.0, 1.0]])
+    components = ("Ex", "Ey", "Hz", "dBzdt")
+    primary = np.asarray([[1.0, 0.0, 1.0, 1.0], [1.0, 0.0, 1.0, 1.0]])
+    audit = np.asarray([[1.02, 0.0, 1.0, 1.0], [1.0, 0.0, 1.0, 1.0]])
     calls = []
     monkeypatch.setattr(
         sp,
@@ -1576,6 +1593,210 @@ def test_postprocess_reference_quadrature_failure_blocks_acceptance_writes(
 
     assert calls == [None, 17]
     assert not any(tmp_path.iterdir())
+
+
+def test_reference_source_quadrature_audit_requires_ex_hz_and_dbdzdt():
+    sp = _load_pipeline_module()
+    data = np.ones((2, 2), dtype=float)
+
+    with pytest.raises(ValueError, match="required components.*Hz"):
+        sp._reference_source_quadrature_audit(
+            data,
+            data.copy(),
+            ("Ex", "dBzdt"),
+        )
+
+
+def test_reference_source_quadrature_audit_rejects_hz_above_fixed_tolerance():
+    sp = _load_pipeline_module()
+    primary = np.ones((2, 3), dtype=float)
+    audit = primary.copy()
+    audit[0, 1] = 1.02
+
+    summary = sp._reference_source_quadrature_audit(
+        primary,
+        audit,
+        ("Ex", "Hz", "dBzdt"),
+    )
+
+    assert summary["threshold"] == pytest.approx(0.005)
+    assert summary["passed"] is False
+    assert summary["failed_components"] == ["Hz"]
+
+
+def test_reference_source_quadrature_audit_accepts_all_three_required_components():
+    sp = _load_pipeline_module()
+    audit = np.asarray([[2.0, 3.0, 4.0], [1.0, 1.5, 2.0]])
+    primary = audit * (1.0 + 1.0e-4)
+
+    summary = sp._reference_source_quadrature_audit(
+        primary,
+        audit,
+        ("Ex", "Hz", "dBzdt"),
+    )
+
+    assert summary["passed"] is True
+    assert summary["failed_components"] == []
+    assert set(summary["components"]) == {"Ex", "Hz", "dBzdt"}
+
+
+def _patch_formal_forward_seams(monkeypatch, sp, events, *, audit_scale):
+    fake_mesh = SimpleNamespace(comm=SimpleNamespace(rank=0))
+    times = np.asarray([1.0e-4, 1.0e-3])
+    components = ("Ex", "Ey", "Hz", "dBzdt")
+    primary = np.ones((times.size, len(components)), dtype=float)
+    audit = primary.copy()
+    audit[:, 0] *= audit_scale
+
+    monkeypatch.setitem(
+        sys.modules,
+        "mpi4py",
+        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=1))),
+    )
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(sp, "generate_verification_mesh", lambda _config: events.append("mesh"))
+    monkeypatch.setattr(
+        sp,
+        "load_mesh",
+        lambda _config: (fake_mesh, object(), object()),
+    )
+    monkeypatch.setattr(sp, "build_function_spaces", lambda *_args: {})
+    monkeypatch.setattr(sp, "assign_materials", lambda *_args: {})
+    monkeypatch.setattr(sp, "apply_transient_sponge", lambda *_args: None)
+    monkeypatch.setattr(sp, "build_source", lambda *_args: {"mode": "test"})
+    monkeypatch.setattr(
+        sp,
+        "_build_regularized_current_density",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(sp, "generate_time_array", lambda _config: times.copy())
+
+    def fake_reference(requested_times, _config, *, mode, srcpts=None):
+        events.append(f"reference:{srcpts}")
+        return {
+            "times": np.asarray(requested_times),
+            "data": (audit if srcpts == 17 else primary).copy(),
+            "components": components,
+            "reference_mode": mode,
+        }
+
+    monkeypatch.setattr(sp, "get_empymod_reference", fake_reference)
+    return times, primary, components
+
+
+@pytest.mark.parametrize("formulation, selected_solver", [("e", "run_fetd_forward"), ("h", "run_h_forward")])
+def test_formal_forward_quadrature_failure_precedes_both_solvers_and_all_acceptance_writes(
+    monkeypatch, tmp_path, formulation, selected_solver
+):
+    sp = _load_pipeline_module()
+    events = []
+    _patch_formal_forward_seams(monkeypatch, sp, events, audit_scale=1.02)
+
+    for solver_name in ("run_fetd_forward", "run_h_forward"):
+        monkeypatch.setattr(
+            sp,
+            solver_name,
+            lambda *_args, _solver_name=solver_name, **_kwargs: events.append(
+                f"solver:{_solver_name}"
+            ),
+        )
+    for writer_name in (
+        "_save_forward_partial",
+        "_save_forward_checkpoint",
+        "_save_npz",
+        "plot_verification",
+        "write_validation_artifacts",
+        "write_report",
+    ):
+        monkeypatch.setattr(
+            sp,
+            writer_name,
+            lambda *_args, _writer_name=writer_name, **_kwargs: events.append(
+                f"write:{_writer_name}"
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match="source-quadrature audit failed.*Ex"):
+        sp.main(
+            [
+                "--workdir",
+                str(tmp_path),
+                "--formulation",
+                formulation,
+                "--checkpoint-forward",
+                "--no-install",
+            ]
+        )
+
+    assert events == ["mesh", "reference:None", "reference:17"]
+    assert not list(tmp_path.glob("*.npz"))
+    assert not list(tmp_path.glob("*.png"))
+    assert f"solver:{selected_solver}" not in events
+
+
+@pytest.mark.parametrize("formulation, selected_solver", [("e", "run_fetd_forward"), ("h", "run_h_forward")])
+def test_formal_forward_passes_reference_gate_before_solver_and_reuses_precomputed_reference(
+    monkeypatch, tmp_path, formulation, selected_solver
+):
+    sp = _load_pipeline_module()
+    events = []
+    times, primary, components = _patch_formal_forward_seams(
+        monkeypatch, sp, events, audit_scale=1.0001
+    )
+
+    def fake_forward(*_args, **_kwargs):
+        events.append(f"solver:{selected_solver}")
+        return {
+            "times": times[:1].copy(),
+            "data": primary[:1].copy(),
+            "components": components,
+            "solver_log": [],
+        }
+
+    monkeypatch.setattr(sp, selected_solver, fake_forward)
+    other_solver = "run_h_forward" if selected_solver == "run_fetd_forward" else "run_fetd_forward"
+    monkeypatch.setattr(
+        sp,
+        other_solver,
+        lambda *_args, **_kwargs: pytest.fail("unselected formulation solver called"),
+    )
+    def fake_save_npz(_config, fem_result, ref_result, _errors):
+        np.testing.assert_array_equal(ref_result["times"], fem_result["times"])
+        assert ref_result["data"].shape == fem_result["data"].shape
+        events.append("write:npz")
+
+    monkeypatch.setattr(sp, "_save_npz", fake_save_npz)
+    monkeypatch.setattr(
+        sp, "plot_verification", lambda *_args, **_kwargs: events.append("write:plot")
+    )
+    monkeypatch.setattr(
+        sp,
+        "write_validation_artifacts",
+        lambda *_args, **_kwargs: events.append("write:acceptance"),
+    )
+    monkeypatch.setattr(sp, "write_report", lambda *_args, **_kwargs: events.append("write:report"))
+
+    assert (
+        sp.main(
+            [
+                "--workdir",
+                str(tmp_path),
+                "--formulation",
+                formulation,
+                "--no-install",
+            ]
+        )
+        == 0
+    )
+
+    assert events[:4] == [
+        "mesh",
+        "reference:None",
+        "reference:17",
+        f"solver:{selected_solver}",
+    ]
+    assert events.count("reference:None") == 1
+    assert events.count("reference:17") == 1
 
 
 def test_report_uses_reference_mode_from_reference_result(tmp_path):

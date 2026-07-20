@@ -82,8 +82,8 @@ def test_postprocess_saved_forward_uses_forward_partial_without_rerunning_fem(tm
     times = np.asarray([1.0e-6, 2.0e-6])
     data = np.asarray(
         [
-            [1.0e-5, 1.0e-8, -1.0e-8],
-            [8.0e-6, 8.0e-9, -8.0e-9],
+            [1.0e-5, 1.0e-8, 2.0e-8, -1.0e-8],
+            [8.0e-6, 8.0e-9, 1.6e-8, -8.0e-9],
         ],
         dtype=float,
     )
@@ -91,7 +91,7 @@ def test_postprocess_saved_forward_uses_forward_partial_without_rerunning_fem(tm
         config.forward_partial_npz(),
         times=times,
         fem=data,
-        components=np.asarray(["Ex", "Ey", "dBzdt"]),
+        components=np.asarray(["Ex", "Ey", "Hz", "dBzdt"]),
         solver_steps=np.asarray([10, 11]),
         solver_iterations=np.asarray([20, 21]),
         solver_residuals=np.asarray([1.0e-9, 2.0e-9]),
@@ -103,14 +103,18 @@ def test_postprocess_saved_forward_uses_forward_partial_without_rerunning_fem(tm
     def fake_reference(t_array, _config, mode="noip", *, srcpts=None):
         assert mode == "noip"
         reference_srcpts.append(srcpts)
-        return {"times": np.asarray(t_array), "data": data.copy(), "components": ["Ex", "Ey", "dBzdt"]}
+        return {
+            "times": np.asarray(t_array),
+            "data": data.copy(),
+            "components": ["Ex", "Ey", "Hz", "dBzdt"],
+        }
 
     monkeypatch.setattr(sp, "get_empymod_reference", fake_reference)
 
     result = sp.postprocess_saved_forward(config, env={})
 
     assert reference_srcpts == [None, 17]
-    assert result["fem_result"]["data"].shape == (2, 3)
+    assert result["fem_result"]["data"].shape == (2, 4)
     assert config.output_npz().is_file()
     assert config.output_png().is_file()
     assert config.output_report().is_file()

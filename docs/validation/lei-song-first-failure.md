@@ -215,6 +215,14 @@ pipeline now uses primary `srcpts=9` with a mandatory higher-order `srcpts=17`
 acceptance audit, while the standalone validation CLI publishes the high-order
 `srcpts=17` reference directly.
 
+For a formal pipeline forward, both references and the fixed acceptance gate are
+evaluated after the source-only exit and before either E- or H-form time stepping.
+The gate requires all of `Ex`, `Hz`, and `dBzdt`; a missing component or a component
+above `0.005` fails closed before any forward partial, checkpoint, response NPZ,
+figure, or acceptance artifact can be written. A passing run reuses the references
+already computed for the full requested schedule, selecting completed rows for a
+segmented run instead of recomputing them after the solver.
+
 This clean rerun computed empymod references only. It did **not** run a FEniCSx or
 SimPEG forward solve, and it does not claim either solver has passed response
 validation.

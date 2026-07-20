@@ -156,6 +156,11 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
         "run_h_forward",
         lambda *args, **kwargs: pytest.fail("source-only must not run H forward"),
     )
+    monkeypatch.setattr(
+        pipeline,
+        "get_empymod_reference",
+        lambda *args, **kwargs: pytest.fail("source-only must not compute references"),
+    )
     captured = _run_through_real_pipeline(
         monkeypatch,
         runner,

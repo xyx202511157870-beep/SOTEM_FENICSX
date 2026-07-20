@@ -6138,11 +6138,12 @@ def _reference_source_quadrature_audit(
     if not np.all(np.isfinite(primary)) or not np.all(np.isfinite(audit)):
         raise ValueError("reference audit arrays must contain only finite values")
 
-    required = tuple(name for name in ("Ex", "Hz", "dBzdt") if name in names)
-    missing = [name for name in ("Ex", "dBzdt") if name not in names]
+    required = ("Ex", "Hz", "dBzdt")
+    missing = [name for name in required if name not in names]
     if missing:
         raise ValueError(
-            "reference source-quadrature audit lacks required components: "
+            "reference source-quadrature audit lacks required components "
+            "Ex, Hz, dBzdt; missing: "
             + ", ".join(missing)
         )
 
@@ -6211,6 +6212,40 @@ def _require_reference_source_quadrature_audit(
             f"{summary['threshold']:.6g}): {details}"
         )
     return summary
+
+
+def _select_precomputed_reference_times(reference_result, requested_times) -> dict[str, Any]:
+    """Select completed forward times from a reference computed before the solve."""
+
+    import numpy as np
+
+    available_times = np.asarray(reference_result["times"], dtype=float).reshape(-1)
+    requested = np.asarray(requested_times, dtype=float).reshape(-1)
+    data = np.asarray(reference_result["data"], dtype=float)
+    if data.ndim != 2 or data.shape[0] != available_times.size:
+        raise ValueError("precomputed reference data must have one row per reference time")
+
+    indices: list[int] = []
+    for requested_time in requested:
+        matches = np.flatnonzero(
+            np.isclose(
+                available_times,
+                requested_time,
+                rtol=1.0e-12,
+                atol=max(1.0e-15, abs(float(requested_time)) * 1.0e-12),
+            )
+        )
+        if matches.size != 1:
+            raise ValueError(
+                "completed forward time is not uniquely represented in the "
+                f"precomputed reference: {requested_time:.12g}"
+            )
+        indices.append(int(matches[0]))
+
+    selected = dict(reference_result)
+    selected["times"] = requested.copy()
+    selected["data"] = data[np.asarray(indices, dtype=int), :].copy()
+    return selected
 
 
 def _write_component_csv(path: Path, times, data, components) -> None:
@@ -9188,28 +9223,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     times = generate_time_array(config)
     t0 = time.perf_counter()
+    precomputed_ref_result = get_empymod_reference(times, config, mode=ref_mode)
+    precomputed_audit_ref_result = get_empymod_reference(
+        times,
+        config,
+        mode=ref_mode,
+        srcpts=int(config.reference_audit_srcpts),
+    )
+    _require_reference_source_quadrature_audit(
+        config, precomputed_ref_result, precomputed_audit_ref_result
+    )
+    runtime["reference_seconds"] = time.perf_counter() - t0
+    t0 = time.perf_counter()
     if config.formulation == "h":
         fem_result = run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config, times=times)
     else:
         fem_result = run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, config, debye=debye, times=times)
     runtime["forward_seconds"] = time.perf_counter() - t0
     completed_times = fem_result["times"]
-    t0 = time.perf_counter()
-    ref_result = get_empymod_reference(completed_times, config, mode=ref_mode)
-    errors = compute_error(fem_result["data"], ref_result["data"], fem_result["components"])
-    audit_ref_result = get_empymod_reference(
-        completed_times,
-        config,
-        mode=ref_mode,
-        srcpts=int(config.reference_audit_srcpts),
+    ref_result = _select_precomputed_reference_times(
+        precomputed_ref_result, completed_times
     )
-    _require_reference_source_quadrature_audit(config, ref_result, audit_ref_result)
+    audit_ref_result = _select_precomputed_reference_times(
+        precomputed_audit_ref_result, completed_times
+    )
+    errors = compute_error(fem_result["data"], ref_result["data"], fem_result["components"])
     reference_audit_errors = compute_error(
         ref_result["data"],
         audit_ref_result["data"],
         ref_result["components"],
     )
-    runtime["reference_seconds"] = time.perf_counter() - t0
     if msh.comm.rank == 0:
         t0 = time.perf_counter()
         _save_npz(config, fem_result, ref_result, errors)
