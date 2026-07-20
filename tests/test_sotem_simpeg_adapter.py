@@ -135,11 +135,15 @@ def test_public_z_down_geometry_is_mapped_once_to_internal_z_up(song_case):
     assert config["model"]["coordinate_system"] == "z_up"
     assert config["initial_magnetic_field"] == "ampere"
     assert config["solver"] == {
-        "type": "cg",
+        "type": "petsc_ams",
         "tolerance": 1.0e-8,
+        "internal_tolerance": 1.0e-11,
         "maxiter": 2000,
-        "preconditioner": "jacobi",
+        "preconditioner": "hypre_ams",
+        "ksp_type": "gmres",
+        "residual_replacement_steps": 2,
     }
+    assert config["adapter_metadata"]["transient_solver"] == "petsc_gmres_hypre_ams"
     assert config["adapter_metadata"]["initial_magnetic_field"] == "ampere"
     assert config["adapter_metadata"]["initialization_solver"] == "scipy_sparse_direct"
     assert config["source"] == {
@@ -422,7 +426,21 @@ def _fake_solver_for_config(config, *, nonfinite=False):
     metadata = config["mesh"]["metadata"]
     result = SimpleNamespace(times=times, data=data, memories=[])
     mesh = SimpleNamespace(n_cells=metadata["n_cells"], n_edges=metadata["n_edges"])
-    return SimpleNamespace(mesh=mesh, run_data_only=lambda: result), data
+    diagnostics = [
+        {
+            "step_index": index,
+            "dt_s": float(dt),
+            "backend_reported_converged": True,
+            "external_true_relative_residual": 0.0,
+            "external_tolerance": 1.0e-8,
+        }
+        for index, dt in enumerate(config["time_steps"])
+    ]
+    return SimpleNamespace(
+        mesh=mesh,
+        run_data_only=lambda: result,
+        linear_solver_diagnostics=diagnostics,
+    ), data
 
 
 def test_run_selects_only_canonical_outputs_and_reports_honest_metadata(monkeypatch, song_case):
@@ -453,6 +471,24 @@ def test_run_selects_only_canonical_outputs_and_reports_honest_metadata(monkeypa
     assert result["material_fit"]["material_gate_pass"] is True
     assert result["coordinate_system"] == "z_down"
     assert result["coordinate_transform"]["output_component_signs"]["Hz"] == 1.0
+
+
+def test_run_rejects_missing_per_step_external_solver_diagnostics(monkeypatch, lei_case):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        simulation.linear_solver_diagnostics.pop()
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="linear solver diagnostics"):
+        run_simpeg_benchmark(
+            lei_case,
+            variant="noip",
+            spatial_level="S0",
+            boundary_level="B0",
+            substeps=1,
+        )
 
 
 def test_resource_metadata_discloses_unvalidated_sparse_direct_s0_risk(song_case):
@@ -524,6 +560,9 @@ def test_generated_noip_schema_runs_the_real_solver_on_a_tiny_mesh(lei_case):
         "hz": [1.0, 1.0, 1.0],
         "origin": [-1.5, -1.5, -1.0],
     }
+    # Keep this cross-platform schema smoke independent of the WSL-only PETSc
+    # production backend.  PETSc/AMS has dedicated real-solver tests.
+    config["solver"] = {"type": "direct"}
 
     result = build_simulation(config).run_data_only()
 

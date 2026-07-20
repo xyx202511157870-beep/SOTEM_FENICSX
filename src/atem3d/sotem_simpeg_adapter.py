@@ -507,10 +507,13 @@ def build_benchmark_config(
         "formulation": "eb",
         "initial_magnetic_field": "ampere",
         "solver": {
-            "type": "cg",
+            "type": "petsc_ams",
             "tolerance": 1.0e-8,
+            "internal_tolerance": 1.0e-11,
             "maxiter": 2000,
-            "preconditioner": "jacobi",
+            "preconditioner": "hypre_ams",
+            "ksp_type": "gmres",
+            "residual_replacement_steps": 2,
         },
         "mesh": mesh,
         "mesh_hash": mesh["mesh_hash"],
@@ -549,7 +552,7 @@ def build_benchmark_config(
             "material_fit": material_fit,
             "coordinate_transform": copy.deepcopy(_COORDINATE_TRANSFORM),
             "initial_magnetic_field": "ampere",
-            "transient_solver": "cg_jacobi",
+            "transient_solver": "petsc_gmres_hypre_ams",
             "initialization_solver": "scipy_sparse_direct",
             "resource_note": (
                 "Production S0 sparse-direct initialization may require substantial "
@@ -616,6 +619,10 @@ def run_simpeg_benchmark(
 
     simulation = build_simulation(config)
     result = simulation.run_data_only()
+    linear_solver_diagnostics = _validated_linear_solver_diagnostics(
+        simulation.linear_solver_diagnostics,
+        config,
+    )
     output_indices = np.asarray(metadata["output_indices"], dtype=np.int64)
     result_times = np.asarray(result.times, dtype=float)
     result_data = np.asarray(result.data, dtype=float)
@@ -659,6 +666,33 @@ def run_simpeg_benchmark(
         "mesh_hash": metadata["mesh_hash"],
         "time_hash": metadata["time_hash"],
         "solver_id": "atem3d_simpeg_discretize_debye",
+        "linear_solver_diagnostics": linear_solver_diagnostics,
         "variant": variant,
         "material_fit": copy.deepcopy(material_fit),
     }
+
+
+def _validated_linear_solver_diagnostics(
+    diagnostics: Any,
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(diagnostics, list) or len(diagnostics) != len(config["time_steps"]):
+        raise RuntimeError("linear solver diagnostics must contain one record per time step")
+    tolerance = float(config["solver"]["tolerance"])
+    validated: list[dict[str, Any]] = []
+    for index, (record, dt) in enumerate(zip(diagnostics, config["time_steps"])):
+        if not isinstance(record, dict):
+            raise RuntimeError("linear solver diagnostics records must be mappings")
+        residual = record.get("external_true_relative_residual")
+        if (
+            record.get("step_index") != index
+            or not bool(record.get("backend_reported_converged", False))
+            or isinstance(residual, bool)
+            or not isinstance(residual, (int, float, np.integer, np.floating))
+            or not np.isfinite(float(residual))
+            or float(residual) > tolerance
+            or not np.isclose(float(record.get("dt_s", np.nan)), float(dt), rtol=0.0, atol=0.0)
+        ):
+            raise RuntimeError("linear solver diagnostics failed the external residual gate")
+        validated.append(copy.deepcopy(record))
+    return validated

@@ -1512,6 +1512,7 @@ def _simpeg(args: argparse.Namespace) -> int:
         "time_hash": result.get("time_hash"),
         "mesh_stats": result.get("mesh_stats"),
         "material_fit": result.get("material_fit"),
+        "linear_solver_diagnostics": result.get("linear_solver_diagnostics"),
         "time_schedule": {
             "time_steps_s": expected_config["time_steps"],
             "output_indices": expected_metadata["output_indices"],

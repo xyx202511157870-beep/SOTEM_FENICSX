@@ -87,6 +87,9 @@ class TDEMIPSimulation:
     cg_tolerance: float = 1.0e-8
     cg_maxiter: int | None = None
     cg_preconditioner: str = "jacobi"
+    petsc_ams_internal_tolerance: float | None = None
+    petsc_ams_refinement_steps: int = 2
+    petsc_ams_ksp_type: str = "gmres"
     cpml: CPMLConfig | None = None
     magnetic_receiver_mode: str = "stored_b"
     magnetic_recovery_subdivisions: int = 1
@@ -120,8 +123,10 @@ class TDEMIPSimulation:
             raise ValueError(
                 "initial_magnetic_mode must be 'ampere', 'zero', or 'biot_savart_wire'"
             )
-        if self.linear_solver not in {"direct", "cg", "pardiso"}:
-            raise ValueError("linear_solver must be 'direct', 'cg', or 'pardiso'")
+        if self.linear_solver not in {"direct", "cg", "pardiso", "petsc_ams"}:
+            raise ValueError(
+                "linear_solver must be 'direct', 'cg', 'pardiso', or 'petsc_ams'"
+            )
         if (
             isinstance(self.cg_tolerance, bool)
             or not isinstance(self.cg_tolerance, Real)
@@ -140,8 +145,40 @@ class TDEMIPSimulation:
                     "cg_maxiter must be a positive integer excluding bool or None"
                 )
             self.cg_maxiter = int(self.cg_maxiter)
-        if self.cg_preconditioner not in {"none", "jacobi"}:
+        if self.linear_solver == "petsc_ams":
+            if self.cg_preconditioner != "hypre_ams":
+                raise ValueError(
+                    "linear_solver='petsc_ams' requires preconditioner='hypre_ams'"
+                )
+        elif self.cg_preconditioner not in {"none", "jacobi"}:
             raise ValueError("cg_preconditioner must be 'none' or 'jacobi'")
+        if self.petsc_ams_internal_tolerance is not None:
+            if (
+                isinstance(self.petsc_ams_internal_tolerance, bool)
+                or not isinstance(self.petsc_ams_internal_tolerance, Real)
+                or not np.isfinite(self.petsc_ams_internal_tolerance)
+                or self.petsc_ams_internal_tolerance <= 0.0
+                or self.petsc_ams_internal_tolerance > self.cg_tolerance
+            ):
+                raise ValueError(
+                    "petsc_ams_internal_tolerance must be finite, positive, and no "
+                    "larger than cg_tolerance"
+                )
+            self.petsc_ams_internal_tolerance = float(
+                self.petsc_ams_internal_tolerance
+            )
+        if (
+            isinstance(self.petsc_ams_refinement_steps, bool)
+            or not isinstance(self.petsc_ams_refinement_steps, Integral)
+            or self.petsc_ams_refinement_steps < 0
+        ):
+            raise ValueError(
+                "petsc_ams_refinement_steps must be a nonnegative integer excluding bool"
+            )
+        self.petsc_ams_refinement_steps = int(self.petsc_ams_refinement_steps)
+        self.petsc_ams_ksp_type = str(self.petsc_ams_ksp_type).strip().lower()
+        if self.petsc_ams_ksp_type not in {"cg", "gmres"}:
+            raise ValueError("petsc_ams_ksp_type must be 'cg' or 'gmres'")
         if self.magnetic_receiver_mode not in {
             "stored_b",
             "current_biot",
@@ -199,9 +236,11 @@ class TDEMIPSimulation:
         if (
             self.cpml is not None
             and self.cpml.thickness_cells > 0
-            and self.linear_solver == "cg"
+            and self.linear_solver in {"cg", "petsc_ams"}
         ):
-            raise ValueError("active CPML currently requires linear_solver='direct' or 'pardiso'")
+            raise ValueError(
+                "active CPML currently requires linear_solver='direct' or 'pardiso'"
+            )
         self.sources = list(self.sources or [])
         self.receivers = list(self.receivers or [])
         self.ip_model = self.ip_model.expand_to_cells(self.mesh.n_cells)
@@ -213,6 +252,9 @@ class TDEMIPSimulation:
         self._unit_edge_mass_diagonal: np.ndarray | None = None
         self._matrix_cache: dict[int, sp.csr_matrix] = {}
         self._factor_cache: dict[int, object] = {}
+        self._petsc_ams_solver = None
+        self._petsc_ams_solver_key: int | None = None
+        self.linear_solver_diagnostics: list[dict[str, object]] = []
         self._cpml_profiles_cache: dict[int, CPMLProfiles] = {}
         self._cpml_curl_split_cache: CurlSplit | None = None
 
@@ -420,6 +462,15 @@ class TDEMIPSimulation:
         return rhs / dt
 
     def run(self) -> SimulationResult:
+        """Run the simulation and release any native iterative solver state."""
+
+        self.linear_solver_diagnostics = []
+        try:
+            return self._run_impl()
+        finally:
+            self.close()
+
+    def _run_impl(self) -> SimulationResult:
         """Run the simulation and return all time-node fields."""
 
         n_times = self.time_steps.size + 1
@@ -452,6 +503,7 @@ class TDEMIPSimulation:
             else:
                 rhs = self.magnetic_history_rhs(b[step_index], memories, step_index, cpml_state)
             e_new = solver(rhs)
+            self._record_linear_solver_diagnostic(step_index, solver)
             if cpml_state is None:
                 b_new = b[step_index] - float(dt) * (curl @ e_new)
             else:
@@ -512,6 +564,15 @@ class TDEMIPSimulation:
         )
 
     def run_data_only(self) -> ReceiverDataResult:
+        """Run receiver-only mode and release any native iterative solver state."""
+
+        self.linear_solver_diagnostics = []
+        try:
+            return self._run_data_only_impl()
+        finally:
+            self.close()
+
+    def _run_data_only_impl(self) -> ReceiverDataResult:
         """Run the simulation while storing receiver data but not field histories."""
 
         n_times = self.time_steps.size + 1
@@ -537,6 +598,7 @@ class TDEMIPSimulation:
             else:
                 rhs = self.magnetic_history_rhs(b_old, memories, step_index, cpml_state)
             e_new = solver(rhs)
+            self._record_linear_solver_diagnostic(step_index, solver)
             if cpml_state is None:
                 b_new = b_old - float(dt) * (curl @ e_new)
             else:
@@ -586,6 +648,23 @@ class TDEMIPSimulation:
             memories = new_memories
 
         return ReceiverDataResult(times=self.times, data=data, memories=memories)
+
+    def _record_linear_solver_diagnostic(self, step_index: int, solver) -> None:
+        diagnostic = getattr(solver, "last_diagnostics", None)
+        if not isinstance(diagnostic, dict):
+            return
+        record = dict(diagnostic)
+        record["step_index"] = int(step_index)
+        record["dt_s"] = float(self.time_steps[step_index])
+        self.linear_solver_diagnostics.append(record)
+
+    def close(self) -> None:
+        """Release the current PETSc/HYPRE hierarchy, if any."""
+
+        if self._petsc_ams_solver is not None:
+            self._petsc_ams_solver.destroy()
+            self._petsc_ams_solver = None
+            self._petsc_ams_solver_key = None
 
     def _sample_receivers(self, e: np.ndarray, b: np.ndarray) -> np.ndarray:
         return np.array([receiver.sample(self.mesh, e, b, self.mu) for receiver in self.receivers])
@@ -882,6 +961,30 @@ class TDEMIPSimulation:
         return int(np.argmin(distances))
 
     def _solver_for_step(self, step_index: int):
+        if self.linear_solver == "petsc_ams":
+            key = self._time_step_cache_key(step_index)
+            if self._petsc_ams_solver is not None and self._petsc_ams_solver_key != key:
+                self.close()
+            if self._petsc_ams_solver is None:
+                from .solvers.petsc_ams import (  # noqa: PLC0415
+                    PetscHypreAmsSolver,
+                    tensor_mesh_ams_auxiliary_space,
+                )
+
+                gradient, constants = tensor_mesh_ams_auxiliary_space(self.mesh)
+                self._petsc_ams_solver = PetscHypreAmsSolver(
+                    self.system_matrix(step_index),
+                    nodal_gradient=gradient,
+                    edge_constant_vectors=constants,
+                    tolerance=self.cg_tolerance,
+                    internal_tolerance=self.petsc_ams_internal_tolerance,
+                    maxiter=self.cg_maxiter or 2000,
+                    refinement_steps=self.petsc_ams_refinement_steps,
+                    ksp_type=self.petsc_ams_ksp_type,
+                )
+                self._petsc_ams_solver_key = key
+            return self._petsc_ams_solver
+
         if self.linear_solver == "cg":
             matrix = self.system_matrix(step_index)
             preconditioner = self._cg_preconditioner(matrix)

@@ -129,6 +129,11 @@ def build_simulation(config: dict[str, Any]) -> TDEMIPSimulation | HJMagneticSim
         cg_tolerance=float(config.get("solver", {}).get("tolerance", 1.0e-8)),
         cg_maxiter=config.get("solver", {}).get("maxiter"),
         cg_preconditioner=str(config.get("solver", {}).get("preconditioner", "jacobi")),
+        petsc_ams_internal_tolerance=config.get("solver", {}).get("internal_tolerance"),
+        petsc_ams_refinement_steps=config.get("solver", {}).get(
+            "residual_replacement_steps", 2
+        ),
+        petsc_ams_ksp_type=str(config.get("solver", {}).get("ksp_type", "gmres")),
         cpml=cpml,
         magnetic_receiver_mode=str(config.get("magnetic_receiver_mode", "stored_b")),
         magnetic_recovery_subdivisions=int(config.get("magnetic_recovery_subdivisions", 1)),
