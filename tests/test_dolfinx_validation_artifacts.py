@@ -490,7 +490,12 @@ def test_validation_artifacts_use_initial_field_curl_diagnostic_from_source_info
 
 def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     sp = _load_pipeline_module()
-    config = sp.PipelineConfig(workdir=tmp_path, source_only=True)
+    config = sp.PipelineConfig(
+        workdir=tmp_path,
+        source_only=True,
+        source_current=12.5,
+        ramp_off_time=0.0,
+    )
 
     sp.write_source_only_diagnostics(
         config,
@@ -530,6 +535,11 @@ def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
 
     diagnostics = json.loads((tmp_path / "source_diagnostics.json").read_text(encoding="utf-8"))
     assert diagnostics["source_mode"] == "manual_line"
+    assert diagnostics["source_consistency"]["current_initial"] == pytest.approx(12.5)
+    assert diagnostics["source_consistency"]["current_final"] == pytest.approx(0.0)
+    assert diagnostics["source_consistency"]["integral_didt_dt"] == pytest.approx(-12.5)
+    assert diagnostics["source_consistency"]["expected_current_change"] == pytest.approx(-12.5)
+    assert diagnostics["source_consistency"]["waveform_integral_residual"] == pytest.approx(0.0)
     assert diagnostics["source_projection"]["projection_mode"] == "raw"
     assert diagnostics["source_projection"]["scalar_balance"]["residual_active_dofs"] == 12
     assert diagnostics["source_local_projection"]["quadrature_points"] == 101

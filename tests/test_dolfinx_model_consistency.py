@@ -176,6 +176,43 @@ def test_model_consistency_rejects_negative_ramp_off_time():
     assert str(exc_info.value) == "ramp_off_time must be finite and nonnegative"
 
 
+def test_source_consistency_diagnostics_define_ideal_step_off_current_jump():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(source_current=12.5, ramp_off_time=0.0)
+
+    diagnostics = sp.diagnose_source_consistency(config)
+
+    assert diagnostics["current_initial"] == pytest.approx(12.5)
+    assert diagnostics["current_final"] == pytest.approx(0.0)
+    assert diagnostics["integral_didt_dt"] == pytest.approx(-12.5)
+    assert diagnostics["expected_current_change"] == pytest.approx(-12.5)
+    assert diagnostics["waveform_integral_residual"] == pytest.approx(0.0)
+
+
+def test_source_consistency_diagnostics_preserve_finite_ramp_integral():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(source_current=12.5, ramp_off_time=2.0e-5)
+
+    diagnostics = sp.diagnose_source_consistency(config)
+
+    assert diagnostics["current_initial"] == pytest.approx(12.5)
+    assert diagnostics["current_final"] == pytest.approx(0.0)
+    assert diagnostics["integral_didt_dt"] == pytest.approx(-12.5)
+    assert diagnostics["expected_current_change"] == pytest.approx(-12.5)
+    assert diagnostics["waveform_integral_residual"] == pytest.approx(0.0)
+
+
+def test_ideal_step_off_time_stepping_uses_a_strictly_positive_first_interval():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(source_current=10.0, ramp_off_time=0.0)
+
+    assert sp._source_interval_average_didt(0.0, 2.0e-6, config) == pytest.approx(
+        -5.0e6
+    )
+    with pytest.raises(ValueError, match="t1 must be greater than t0"):
+        sp._source_interval_average_didt(0.0, 0.0, config)
+
+
 @pytest.mark.parametrize("value", [-0.1, 1.1])
 def test_model_consistency_rejects_invalid_divergence_cleaning_strength(value):
     sp = _load_pipeline_module()

@@ -6840,10 +6840,19 @@ def diagnose_source_consistency(
         diagnostics["diagnostic_backend"] = "atem3d.source_diagnostics"
         return diagnostics
 
+    ramp_off_time = float(config.ramp_off_time)
     initial = _source_current(0.0, config)
-    final = _source_current(float(config.ramp_off_time), config)
-    integrated = _source_interval_average_didt(0.0, float(config.ramp_off_time), config) * float(config.ramp_off_time)
-    expected = final - initial
+    if ramp_off_time == 0.0:
+        final = 0.0
+        expected = -float(initial)
+        integrated = expected
+    else:
+        final = _source_current(ramp_off_time, config)
+        integrated = (
+            _source_interval_average_didt(0.0, ramp_off_time, config)
+            * ramp_off_time
+        )
+        expected = final - initial
     return {
         "source_endpoint_balance_residual": source_projection_residual,
         "dc_current_conservation_residual": None,
