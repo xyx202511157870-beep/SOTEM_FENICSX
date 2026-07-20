@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -871,6 +872,24 @@ class TDEMIPSimulation:
             preconditioner = self._cg_preconditioner(matrix)
 
             def solve(rhs):
+                rhs = np.asarray(rhs, dtype=float)
+                rhs_norm = float(np.linalg.norm(rhs))
+                initial_relative_residual = 0.0 if rhs_norm == 0.0 else 1.0
+                best_relative_residual = initial_relative_residual
+                iterations = 0
+
+                def relative_true_residual(iterate: np.ndarray) -> float:
+                    residual_norm = float(np.linalg.norm(rhs - matrix @ iterate))
+                    if rhs_norm == 0.0:
+                        return 0.0 if residual_norm == 0.0 else float("inf")
+                    return residual_norm / rhs_norm
+
+                def record_true_residual(iterate: np.ndarray) -> None:
+                    nonlocal best_relative_residual, iterations
+                    iterations += 1
+                    value = relative_true_residual(iterate)
+                    best_relative_residual = min(best_relative_residual, value)
+
                 solution, info = spla.cg(
                     matrix,
                     rhs,
@@ -878,9 +897,42 @@ class TDEMIPSimulation:
                     atol=0.0,
                     maxiter=self.cg_maxiter,
                     M=preconditioner,
+                    callback=record_true_residual,
                 )
-                if info != 0:
-                    raise RuntimeError(f"CG solver failed to converge with info={info}")
+                final_relative_residual = relative_true_residual(solution)
+                best_relative_residual = min(
+                    best_relative_residual,
+                    final_relative_residual,
+                )
+                external_gate_pass = bool(
+                    np.isfinite(final_relative_residual)
+                    and final_relative_residual <= float(self.cg_tolerance)
+                )
+                if info != 0 or not external_gate_pass:
+                    reason = (
+                        "backend_failed"
+                        if info != 0
+                        else "external_true_residual_above_tolerance"
+                    )
+                    diagnostics = self._cg_failure_diagnostics(
+                        matrix,
+                        step_index=step_index,
+                        reason=reason,
+                        backend_info=info,
+                        iterations=iterations,
+                        initial_relative_residual=initial_relative_residual,
+                        final_relative_residual=final_relative_residual,
+                        best_relative_residual=best_relative_residual,
+                    )
+                    raise RuntimeError(
+                        "CG solver failed convergence gate: "
+                        + json.dumps(
+                            diagnostics,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                    )
                 return solution
 
             return solve
@@ -904,6 +956,60 @@ class TDEMIPSimulation:
         mask = np.abs(diagonal) > 0.0
         inverse[mask] = 1.0 / diagonal[mask]
         return spla.LinearOperator(matrix.shape, matvec=lambda x: inverse * x)
+
+    def _cg_failure_diagnostics(
+        self,
+        matrix: sp.spmatrix,
+        *,
+        step_index: int,
+        reason: str,
+        backend_info: int,
+        iterations: int,
+        initial_relative_residual: float,
+        final_relative_residual: float,
+        best_relative_residual: float,
+    ) -> dict[str, object]:
+        matrix = matrix.tocsr()
+        diagonal = np.asarray(matrix.diagonal(), dtype=float)
+        difference = matrix - matrix.T
+        matrix_max = float(np.max(np.abs(matrix.data))) if matrix.nnz else 0.0
+        difference_max = (
+            float(np.max(np.abs(difference.data))) if difference.nnz else 0.0
+        )
+
+        def finite_value(value: float) -> float | str:
+            value = float(value)
+            if np.isfinite(value):
+                return value
+            return "nan" if np.isnan(value) else ("inf" if value > 0.0 else "-inf")
+
+        return {
+            "reason": reason,
+            "solver": "scipy_cg",
+            "preconditioner": self.cg_preconditioner,
+            "step_index": int(step_index),
+            "dt_s": float(self.time_steps[step_index]),
+            "iterations": int(iterations),
+            "backend_info": int(backend_info),
+            "backend_reported_converged": bool(backend_info == 0),
+            "rtol": float(self.cg_tolerance),
+            "atol": 0.0,
+            "maxiter": self.cg_maxiter,
+            "relative_true_residual": {
+                "initial": finite_value(initial_relative_residual),
+                "final": finite_value(final_relative_residual),
+                "best": finite_value(best_relative_residual),
+            },
+            "matrix": {
+                "shape": [int(matrix.shape[0]), int(matrix.shape[1])],
+                "nnz": int(matrix.nnz),
+                "diagonal_min": finite_value(np.min(diagonal)),
+                "diagonal_max": finite_value(np.max(diagonal)),
+                "relative_max_abs_transpose_difference": finite_value(
+                    difference_max / matrix_max if matrix_max > 0.0 else 0.0
+                ),
+            },
+        }
 
     def _factorize(self, matrix: sp.csr_matrix):
         return spla.factorized(matrix.tocsc())

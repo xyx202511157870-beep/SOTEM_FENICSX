@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 from discretize import TensorMesh
@@ -1096,6 +1098,83 @@ def test_cg_linear_solver_mode_matches_direct_solution_for_small_problem():
     cg = TDEMIPSimulation(**kwargs, linear_solver="cg", cg_tolerance=1.0e-10).run()
 
     np.testing.assert_allclose(cg.e, direct.e, rtol=1.0e-8, atol=1.0e-10)
+
+
+def _cg_failure_payload(error: RuntimeError) -> dict:
+    prefix = "CG solver failed convergence gate: "
+    message = str(error)
+    assert message.startswith(prefix)
+    return json.loads(message.removeprefix(prefix))
+
+
+def test_cg_failure_reports_step_dt_residual_and_matrix_diagnostics(monkeypatch):
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+        time_steps=[0.125],
+        linear_solver="cg",
+        cg_tolerance=1.0e-8,
+        cg_maxiter=7,
+    )
+
+    def failed_cg(matrix, rhs, *, callback, **_kwargs):
+        callback(np.zeros_like(rhs))
+        return np.zeros_like(rhs), 7
+
+    monkeypatch.setattr(simulation_module.spla, "cg", failed_cg)
+    rhs = np.ones(mesh.n_edges)
+
+    with pytest.raises(RuntimeError) as caught:
+        simulation._solver_for_step(0)(rhs)
+
+    payload = _cg_failure_payload(caught.value)
+    assert payload["reason"] == "backend_failed"
+    assert payload["step_index"] == 0
+    assert payload["dt_s"] == pytest.approx(0.125)
+    assert payload["iterations"] == 1
+    assert payload["backend_info"] == 7
+    assert payload["backend_reported_converged"] is False
+    assert payload["rtol"] == pytest.approx(1.0e-8)
+    assert payload["maxiter"] == 7
+    assert payload["relative_true_residual"] == {
+        "initial": pytest.approx(1.0),
+        "final": pytest.approx(1.0),
+        "best": pytest.approx(1.0),
+    }
+    assert payload["matrix"]["shape"] == [mesh.n_edges, mesh.n_edges]
+    assert payload["matrix"]["diagonal_min"] > 0.0
+    assert payload["matrix"]["diagonal_max"] >= payload["matrix"]["diagonal_min"]
+    assert payload["matrix"]["relative_max_abs_transpose_difference"] < 1.0e-12
+
+
+def test_cg_rejects_backend_success_when_external_true_residual_misses_rtol(
+    monkeypatch,
+):
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+        time_steps=[0.25],
+        linear_solver="cg",
+        cg_tolerance=1.0e-8,
+    )
+
+    def false_success_cg(matrix, rhs, *, callback, **_kwargs):
+        callback(np.zeros_like(rhs))
+        return np.zeros_like(rhs), 0
+
+    monkeypatch.setattr(simulation_module.spla, "cg", false_success_cg)
+
+    with pytest.raises(RuntimeError) as caught:
+        simulation._solver_for_step(0)(np.ones(mesh.n_edges))
+
+    payload = _cg_failure_payload(caught.value)
+    assert payload["reason"] == "external_true_residual_above_tolerance"
+    assert payload["backend_info"] == 0
+    assert payload["backend_reported_converged"] is True
+    assert payload["relative_true_residual"]["final"] == pytest.approx(1.0)
+    assert payload["relative_true_residual"]["final"] > payload["rtol"]
 
 
 def test_pardiso_linear_solver_mode_matches_direct_solution_for_small_problem():
