@@ -1780,6 +1780,42 @@ def test_reference_resume_rejects_rehashed_reference_identity_tamper(
         cli.main(command)
 
 
+@pytest.mark.parametrize(
+    ("identity_path", "replacement"),
+    [
+        (("fourier_transform", "parameters", "pts_per_dec"), False),
+        (("magnetic_permeability", "horizontal"), True),
+    ],
+    ids=["integer-to-boolean", "float-to-boolean"],
+)
+def test_reference_resume_rejects_synchronized_json_type_confusion(
+    tmp_path, monkeypatch, identity_path, replacement
+):
+    run_dir = _prepare(tmp_path, run_name=f"reference-type-confusion-{replacement}")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    command = _command("reference", run_dir, LEI_CASE)
+    assert cli.main(command) == 0
+    replacement_identity = json.loads(
+        json.dumps(cli._approved_empymod_reference_identity())
+    )
+    target = replacement_identity
+    for key in identity_path[:-1]:
+        target = target[key]
+    target[identity_path[-1]] = replacement
+    _rewrite_reference_identity_everywhere(run_dir, replacement_identity)
+
+    with pytest.raises(ValueError, match="identity|inputs|metadata"):
+        cli.main(command)
+
+
 def test_effect_rejects_reference_transform_identity_mismatch_before_writing(
     tmp_path, monkeypatch
 ):
@@ -1801,6 +1837,42 @@ def test_effect_rejects_reference_transform_identity_mismatch_before_writing(
     manifest_before = manifest_path.read_bytes()
 
     with pytest.raises(ValueError, match="identity|transform"):
+        cli.main(_effect_args(effect_run, runs))
+
+    assert manifest_path.read_bytes() == manifest_before
+    assert not (effect_run / "effect").exists()
+
+
+@pytest.mark.parametrize(
+    ("identity_path", "replacement"),
+    [
+        (("fourier_transform", "parameters", "pts_per_dec"), False),
+        (("magnetic_permeability", "horizontal"), True),
+    ],
+    ids=["integer-to-boolean", "float-to-boolean"],
+)
+def test_effect_rejects_synchronized_reference_json_type_confusion(
+    tmp_path, monkeypatch, identity_path, replacement
+):
+    runs = _build_effect_source_runs(tmp_path, monkeypatch)
+    replacement_identity = json.loads(
+        json.dumps(cli._approved_empymod_reference_identity())
+    )
+    target = replacement_identity
+    for key in identity_path[:-1]:
+        target = target[key]
+    target[identity_path[-1]] = replacement
+    _rewrite_reference_identity_everywhere(runs["ip_reference"], replacement_identity)
+    effect_run = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver="polarization_effect",
+        run_name=f"effect-type-confusion-{replacement}",
+    )
+    manifest_path = effect_run / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+
+    with pytest.raises(ValueError, match="identity|inputs|metadata"):
         cli.main(_effect_args(effect_run, runs))
 
     assert manifest_path.read_bytes() == manifest_before

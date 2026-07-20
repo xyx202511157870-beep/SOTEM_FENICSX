@@ -260,6 +260,24 @@ def _json_bytes(payload: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    normalized = _json_value(value)
+    return json.dumps(
+        normalized,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _strict_json_equal(left: Any, right: Any) -> bool:
+    try:
+        return _canonical_json_bytes(left) == _canonical_json_bytes(right)
+    except (TypeError, ValueError):
+        return False
+
+
 def _finite_number(mapping: Mapping[str, Any], name: str) -> float:
     value = mapping.get(name)
     if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
@@ -853,7 +871,7 @@ def _completed_stage_is_intact(
         return False
     if not isinstance(record, Mapping) or record.get("status") != "complete":
         raise ValueError(f"run manifest has an invalid {stage_name} stage record")
-    if record.get("inputs") != _json_value(inputs):
+    if not _strict_json_equal(record.get("inputs"), inputs):
         raise ValueError(f"completed {stage_name} stage inputs do not match")
     hashes = record.get("file_sha256")
     if not isinstance(hashes, Mapping) or not hashes:
@@ -960,7 +978,9 @@ def _verify_transaction_bundle(
     journal_sha256 = _sha256_bytes(journal_bytes)
     if not isinstance(journal, dict) or journal.get("schema") != _TRANSACTION_SCHEMA:
         raise ValueError(f"published {stage_name} bundle transaction schema mismatch")
-    if journal.get("stage") != stage_name or journal.get("inputs") != _json_value(inputs):
+    if journal.get("stage") != stage_name or not _strict_json_equal(
+        journal.get("inputs"), inputs
+    ):
         raise ValueError(f"published {stage_name} bundle identity mismatch")
     hashes = journal.get("file_sha256")
     if not isinstance(hashes, dict) or not hashes:
@@ -1059,7 +1079,7 @@ def _validate_reference_metadata_identity(
     metadata_identity = metadata.get("reference_identity")
     if not isinstance(metadata_identity, Mapping):
         raise ValueError("reference metadata lacks an explicit reference identity")
-    if metadata_identity != _json_value(reference_identity):
+    if not _strict_json_equal(metadata_identity, reference_identity):
         raise ValueError("reference metadata identity does not match stage inputs")
     return metadata
 
@@ -1130,7 +1150,7 @@ def _recover_or_complete_stage(
     if record is not None:
         if not isinstance(record, Mapping) or record.get("status") != "complete":
             raise ValueError(f"run manifest has an invalid {stage_name} stage record")
-        if record.get("inputs") != _json_value(inputs):
+        if not _strict_json_equal(record.get("inputs"), inputs):
             raise ValueError(f"completed {stage_name} stage inputs do not match")
         stage_hashes = record.get("file_sha256")
         if not isinstance(stage_hashes, Mapping) or not stage_hashes:
@@ -1361,7 +1381,7 @@ def _reference_identity_for_config(config) -> dict[str, Any]:
     if not isinstance(identity, dict):
         raise ValueError("empymod reference identity must be a JSON object")
     identity = _json_value(identity)
-    if identity != _approved_empymod_reference_identity():
+    if not _strict_json_equal(identity, _approved_empymod_reference_identity()):
         raise ValueError("validation CLI refuses an unapproved empymod reference identity")
     return identity
 
@@ -1629,7 +1649,9 @@ def _source_run_evidence(
         reference_identity = recorded_inputs.get("reference_identity")
         if not isinstance(reference_identity, Mapping):
             raise ValueError(f"{role} reference identity provenance is invalid")
-        if reference_identity != _approved_empymod_reference_identity():
+        if not _strict_json_equal(
+            reference_identity, _approved_empymod_reference_identity()
+        ):
             raise ValueError(f"{role} reference identity is not approved")
         expected_inputs = {
             "variant": variant,
@@ -1771,7 +1793,7 @@ def _validated_effect_sources(
         )
     noip_identity = identities["noip_reference"]["reference_identity"]
     ip_identity = identities["ip_reference"]["reference_identity"]
-    if noip_identity != ip_identity:
+    if not _strict_json_equal(noip_identity, ip_identity):
         raise ValueError(
             "polarization-effect reference transform identity must match exactly"
         )

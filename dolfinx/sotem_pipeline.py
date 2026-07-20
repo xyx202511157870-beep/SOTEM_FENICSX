@@ -165,6 +165,7 @@ class PipelineConfig:
     empymod_ft: str = "dlf"
     empymod_ft_filter: str = "key_201_2012"
     empymod_ft_pts_per_dec: int = 0
+    empymod_ft_qwe_pts_per_dec: int = 30
     empymod_ft_qwe_rtol: float = 1.0e-10
     empymod_ft_qwe_atol: float = 1.0e-24
     empymod_ft_qwe_nquad: int = 31
@@ -696,8 +697,8 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     if empymod_ht not in {"dlf", "qwe", "quad"}:
         raise ValueError("empymod_ht must be 'dlf', 'qwe', or 'quad'")
     empymod_ft = str(config.empymod_ft).strip().lower()
-    if empymod_ft not in {"dlf", "sin", "cos", "qwe", "fftlog", "fft"}:
-        raise ValueError("empymod_ft must be 'dlf', 'sin', 'cos', 'qwe', 'fftlog', or 'fft'")
+    if empymod_ft not in {"dlf", "qwe", "fftlog", "fft"}:
+        raise ValueError("empymod_ft must be 'dlf', 'qwe', 'fftlog', or 'fft'")
     for name, value in (
         ("empymod_ht_filter", config.empymod_ht_filter),
         ("empymod_ft_filter", config.empymod_ft_filter),
@@ -710,6 +711,9 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     ):
         if isinstance(value, bool) or not isinstance(value, Integral):
             raise ValueError(f"{name} must be a non-bool integer")
+    _identity_positive_int(
+        "empymod_ft_qwe_pts_per_dec", config.empymod_ft_qwe_pts_per_dec
+    )
     empymod_reference_identity = _require_approved_empymod_reference_identity(config)
     reference_audit_srcpts = int(config.reference_audit_srcpts)
     if reference_audit_srcpts < 0:
@@ -5554,6 +5558,8 @@ def _empymod_rec_mapping(receiver, component: str):
 
 
 def _identity_finite_float(name: str, value: Any) -> float:
+    if type(value) not in {int, float}:
+        raise ValueError(f"{name} must be a finite non-bool number")
     result = float(value)
     if not math.isfinite(result):
         raise ValueError(f"{name} must be finite")
@@ -5566,6 +5572,12 @@ def _identity_int(name: str, value: Any, *, optional: bool = False) -> int | Non
     if isinstance(value, bool) or not isinstance(value, Integral):
         raise ValueError(f"{name} must be a non-bool integer")
     return int(value)
+
+
+def _identity_positive_int(name: str, value: Any) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
 
 
 def _identity_optional_float(name: str, value: Any) -> float | None:
@@ -5614,10 +5626,12 @@ def _empymod_reference_identity(config: PipelineConfig) -> dict[str, Any]:
     else:
         raise ValueError("empymod_ht must be 'dlf', 'qwe', or 'quad'")
 
-    if ft in {"dlf", "sin", "cos"}:
+    if ft == "dlf":
         ft_parameters: dict[str, Any] = {
             "filter": str(config.empymod_ft_filter),
-            "pts_per_dec": _identity_int("empymod_ft_pts_per_dec", config.empymod_ft_pts_per_dec),
+            "pts_per_dec": _identity_int(
+                "empymod_ft_pts_per_dec", config.empymod_ft_pts_per_dec
+            ),
         }
     elif ft == "qwe":
         ft_parameters = {
@@ -5625,7 +5639,9 @@ def _empymod_reference_identity(config: PipelineConfig) -> dict[str, Any]:
             "atol": _identity_finite_float("empymod_ft_qwe_atol", config.empymod_ft_qwe_atol),
             "nquad": _identity_int("empymod_ft_qwe_nquad", config.empymod_ft_qwe_nquad),
             "maxint": _identity_int("empymod_ft_qwe_maxint", config.empymod_ft_qwe_maxint),
-            "pts_per_dec": _identity_int("empymod_ft_pts_per_dec", config.empymod_ft_pts_per_dec),
+            "pts_per_dec": _identity_positive_int(
+                "empymod_ft_qwe_pts_per_dec", config.empymod_ft_qwe_pts_per_dec
+            ),
             "diff_quad": _identity_int("empymod_ft_qwe_diff_quad", config.empymod_ft_qwe_diff_quad),
             "a": _identity_optional_float("empymod_ft_qwe_a", config.empymod_ft_qwe_a),
             "b": _identity_optional_float("empymod_ft_qwe_b", config.empymod_ft_qwe_b),
@@ -5657,7 +5673,7 @@ def _empymod_reference_identity(config: PipelineConfig) -> dict[str, Any]:
             ),
         }
     else:
-        raise ValueError("empymod_ft must be 'dlf', 'sin', 'cos', 'qwe', 'fftlog', or 'fft'")
+        raise ValueError("empymod_ft must be 'dlf', 'qwe', 'fftlog', or 'fft'")
 
     return {
         "equation": str(config.empymod_equation).strip().lower(),
@@ -5692,9 +5708,26 @@ def _approved_empymod_reference_identity() -> dict[str, Any]:
     }
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _strict_json_equal(left: Any, right: Any) -> bool:
+    try:
+        return _canonical_json_bytes(left) == _canonical_json_bytes(right)
+    except (TypeError, ValueError):
+        return False
+
+
 def _require_approved_empymod_reference_identity(config: PipelineConfig) -> dict[str, Any]:
     identity = _empymod_reference_identity(config)
-    if identity != _approved_empymod_reference_identity():
+    if not _strict_json_equal(identity, _approved_empymod_reference_identity()):
         raise ValueError(
             "unapproved empymod reference identity is diagnostic-only and cannot "
             "enter formal SOTEM validation or acceptance"
@@ -5705,7 +5738,9 @@ def _require_approved_empymod_reference_identity(config: PipelineConfig) -> dict
 def _empymod_transform_call(transform_identity: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     method = str(transform_identity["method"])
     parameters = dict(transform_identity["parameters"])
-    if method in {"dlf", "sin", "cos"}:
+    if method not in {"dlf", "qwe", "quad", "fftlog", "fft"}:
+        raise ValueError(f"unsupported empymod transform method: {method!r}")
+    if method == "dlf":
         parameters["dlf"] = parameters.pop("filter")
     return method, parameters
 
@@ -6888,6 +6923,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "empymod_ft": str(config.empymod_ft),
         "empymod_ft_filter": str(config.empymod_ft_filter),
         "empymod_ft_pts_per_dec": int(config.empymod_ft_pts_per_dec),
+        "empymod_ft_qwe_pts_per_dec": int(config.empymod_ft_qwe_pts_per_dec),
     }
     lines = []
     for key, value in values.items():
@@ -8846,7 +8882,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--time-origin", choices=["after_ramp", "ramp_start"], default="after_ramp")
     parser.add_argument("--empymod-srcpts", type=int, default=5)
     parser.add_argument("--empymod-ht", choices=["dlf", "qwe", "quad"], default="dlf")
-    parser.add_argument("--empymod-ft", choices=["dlf", "sin", "cos", "qwe", "fftlog", "fft"], default="dlf")
+    parser.add_argument("--empymod-ft", choices=["dlf", "qwe", "fftlog", "fft"], default="dlf")
+    parser.add_argument("--empymod-ft-qwe-pts-per-dec", type=int, default=30)
     parser.add_argument("--reference-audit-srcpts", type=int, default=0)
     parser.add_argument("--max-it", type=int, default=1000)
     parser.add_argument("--rtol", type=float, default=1.0e-8)
@@ -8958,6 +8995,7 @@ def main(argv: list[str] | None = None) -> int:
         empymod_srcpts=args.empymod_srcpts,
         empymod_ht=args.empymod_ht,
         empymod_ft=args.empymod_ft,
+        empymod_ft_qwe_pts_per_dec=args.empymod_ft_qwe_pts_per_dec,
         reference_audit_srcpts=args.reference_audit_srcpts,
         max_it=args.max_it,
         rtol=args.rtol,

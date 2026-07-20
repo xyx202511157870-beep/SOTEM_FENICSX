@@ -154,7 +154,7 @@ def test_empymod_call_kwargs_include_configured_source_points_and_qwe_transforms
         empymod_ht_qwe_nquad=43,
         empymod_ht_qwe_maxint=77,
         empymod_ft="qwe",
-        empymod_ft_pts_per_dec=11,
+        empymod_ft_qwe_pts_per_dec=11,
         empymod_ft_qwe_rtol=4.0e-9,
         empymod_ft_qwe_atol=5.0e-23,
         empymod_ft_qwe_nquad=25,
@@ -180,6 +180,39 @@ def test_empymod_call_kwargs_include_configured_source_points_and_qwe_transforms
     assert identity["hankel_transform"]["parameters"] == kwargs["htarg"]
     assert identity["fourier_transform"]["parameters"] == kwargs["ftarg"]
     assert json.loads(json.dumps(identity, allow_nan=False)) == identity
+
+
+def test_empymod_qwe_uses_independent_default_sampling_density():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(empymod_ft="qwe")
+
+    identity = sp._empymod_reference_identity(config)
+    kwargs = sp._empymod_call_kwargs(config)
+
+    assert config.empymod_ft_pts_per_dec == 0
+    assert config.empymod_ft_qwe_pts_per_dec == 30
+    assert identity["fourier_transform"]["parameters"]["pts_per_dec"] == 30
+    assert kwargs["ftarg"]["pts_per_dec"] == 30
+
+
+@pytest.mark.parametrize("value", [0, -1, False, 1.5])
+def test_empymod_qwe_sampling_density_requires_positive_integer(value):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="empymod_ft_qwe_pts_per_dec.*positive integer"):
+        sp._empymod_reference_identity(
+            sp.PipelineConfig(empymod_ft="qwe", empymod_ft_qwe_pts_per_dec=value)
+        )
+
+
+@pytest.mark.parametrize("ft", ["sin", "cos"])
+def test_empymod_transform_translation_rejects_unsupported_fourier_aliases(ft):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="unsupported empymod transform method"):
+        sp._empymod_transform_call(
+            {"method": ft, "parameters": {"filter": "key_201_2012", "pts_per_dec": 0}}
+        )
 
 
 def test_empymod_call_kwargs_make_approved_quasistatic_dlf_identity_explicit():

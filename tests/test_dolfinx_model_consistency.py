@@ -579,7 +579,7 @@ def test_qwe_reference_identity_remains_available_for_function_level_diagnostics
         empymod_ht="qwe",
         empymod_ht_qwe_rtol=2.0e-11,
         empymod_ft="qwe",
-        empymod_ft_pts_per_dec=13,
+        empymod_ft_qwe_pts_per_dec=13,
         empymod_ft_qwe_rtol=3.0e-9,
     )
     identity = sp._empymod_reference_identity(config)
@@ -614,7 +614,7 @@ def test_model_consistency_reports_resolved_quasistatic_reference_identity():
     [
         {"empymod_ht": "qwe"},
         {"empymod_ht": "quad"},
-        {"empymod_ft": "qwe", "empymod_ft_pts_per_dec": 20},
+        {"empymod_ft": "qwe", "empymod_ft_qwe_pts_per_dec": 20},
         {"empymod_ht_filter": "key_101_2009"},
         {"empymod_ft_filter": "key_101_2012"},
         {"empymod_ht_pts_per_dec": 1},
@@ -677,6 +677,7 @@ def test_resolved_config_yaml_records_empymod_reference_identity_fields():
         "empymod_ft: dlf\n",
         "empymod_ft_filter: key_201_2012\n",
         "empymod_ft_pts_per_dec: 0\n",
+        "empymod_ft_qwe_pts_per_dec: 30\n",
     ):
         assert line in resolved
 
@@ -698,6 +699,9 @@ def test_resolved_config_yaml_records_empymod_reference_identity_fields():
         {"empymod_ft_filter": ""},
         {"empymod_ft_pts_per_dec": 0.5},
         {"empymod_ft_pts_per_dec": False},
+        {"empymod_ft_qwe_pts_per_dec": 0},
+        {"empymod_ft_qwe_pts_per_dec": False},
+        {"empymod_mperm_h": True},
         {"reference_audit_srcpts": -1},
     ],
 )
@@ -706,6 +710,100 @@ def test_model_consistency_rejects_invalid_empymod_reference_settings(kwargs):
 
     with pytest.raises(ValueError):
         sp.validate_model_consistency(sp.PipelineConfig(**kwargs))
+
+
+@pytest.mark.parametrize("ft", ["sin", "cos"])
+def test_acceptance_rejects_unsupported_empymod_fourier_alias_before_writing(
+    tmp_path, ft
+):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path / ft, empymod_ft=ft)
+    data = np.asarray([[1.0, 2.0, 3.0]])
+
+    with pytest.raises(
+        ValueError,
+        match="empymod_ft must be 'dlf', 'qwe', 'fftlog', or 'fft'",
+    ):
+        sp.write_validation_artifacts(
+            np.asarray([1.0e-4]),
+            data,
+            data.copy(),
+            ("Ex", "Ey", "dBzdt"),
+            config,
+            case_type="noip",
+            reference_type="empymod",
+        )
+
+    assert not config.workdir.exists()
+
+
+@pytest.mark.parametrize("ft", ["sin", "cos"])
+def test_pipeline_cli_parser_rejects_unsupported_empymod_fourier_alias(
+    tmp_path, ft
+):
+    sp = _load_pipeline_module()
+    workdir = tmp_path / ft
+
+    with pytest.raises(SystemExit) as exc_info:
+        sp.main(
+            [
+                "--workdir",
+                str(workdir),
+                "--check-env-only",
+                "--no-install",
+                "--empymod-ft",
+                ft,
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not workdir.exists()
+
+
+def test_pipeline_cli_resolves_independent_qwe_sampling_density(tmp_path, monkeypatch):
+    sp = _load_pipeline_module()
+    captured = {}
+
+    def fake_validate(config):
+        captured["ft"] = config.empymod_ft
+        captured["qwe_pts_per_dec"] = config.empymod_ft_qwe_pts_per_dec
+        captured["dlf_pts_per_dec"] = config.empymod_ft_pts_per_dec
+        return {
+            "source_length": 1000.0,
+            "inline_distance_from_source_start": 1500.0,
+            "parallel_offset": 500.0,
+            "reference_mode": "noip",
+            "time_origin": "after_ramp",
+            "source_depth_start": 0.1,
+            "source_depth_end": 0.1,
+            "receiver_depth": 0.1,
+            "sponge": {"enabled": False},
+        }
+
+    monkeypatch.setattr(sp, "validate_model_consistency", fake_validate)
+    monkeypatch.setattr(sp, "validate_formulation", lambda config: config.formulation)
+    monkeypatch.setattr(sp, "check_environment", lambda **kwargs: {})
+
+    assert (
+        sp.main(
+            [
+                "--workdir",
+                str(tmp_path / "qwe-cli"),
+                "--check-env-only",
+                "--no-install",
+                "--empymod-ft",
+                "qwe",
+                "--empymod-ft-qwe-pts-per-dec",
+                "47",
+            ]
+        )
+        == 0
+    )
+    assert captured == {
+        "ft": "qwe",
+        "qwe_pts_per_dec": 47,
+        "dlf_pts_per_dec": 0,
+    }
 
 
 def test_receiver_evaluation_mode_defaults_to_median():
