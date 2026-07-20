@@ -44,6 +44,11 @@ from .source_history_runtime import (
     source_history_correction_terms,
 )
 from .sources import GroundedWireSource
+from .solvers.petsc_ams import (
+    PetscHypreAmsSolver,
+    tensor_mesh_ams_auxiliary_space,
+)
+from .solvers.petsc_boomeramg import PetscHypreBoomerAmgSolver
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,13 @@ class TDEMIPSimulation:
     receivers: Sequence[PointReceiver] | None = None
     mu: float = mu_0
     initial_magnetic_mode: str = "ampere"
+    initialization_solver: str = "direct"
+    initialization_tolerance: float = 1.0e-8
+    initialization_internal_tolerance: float | None = None
+    initialization_maxiter: int = 2000
+    initialization_refinement_steps: int = 2
+    initialization_dc_ksp_type: str = "cg"
+    initialization_magnetic_ksp_type: str = "gmres"
     linear_solver: str = "direct"
     cg_tolerance: float = 1.0e-8
     cg_maxiter: int | None = None
@@ -122,6 +134,67 @@ class TDEMIPSimulation:
         if self.initial_magnetic_mode not in {"ampere", "zero", "biot_savart_wire"}:
             raise ValueError(
                 "initial_magnetic_mode must be 'ampere', 'zero', or 'biot_savart_wire'"
+            )
+        if self.initialization_solver not in {"direct", "petsc_hypre"}:
+            raise ValueError(
+                "initialization_solver must be 'direct' or 'petsc_hypre'"
+            )
+        if (
+            isinstance(self.initialization_tolerance, bool)
+            or not isinstance(self.initialization_tolerance, Real)
+            or not np.isfinite(self.initialization_tolerance)
+            or self.initialization_tolerance <= 0.0
+        ):
+            raise ValueError("initialization_tolerance must be finite and positive")
+        self.initialization_tolerance = float(self.initialization_tolerance)
+        if self.initialization_internal_tolerance is not None:
+            if (
+                isinstance(self.initialization_internal_tolerance, bool)
+                or not isinstance(self.initialization_internal_tolerance, Real)
+                or not np.isfinite(self.initialization_internal_tolerance)
+                or self.initialization_internal_tolerance <= 0.0
+                or self.initialization_internal_tolerance
+                > self.initialization_tolerance
+            ):
+                raise ValueError(
+                    "initialization_internal_tolerance must be finite, positive, "
+                    "and no larger than initialization_tolerance"
+                )
+            self.initialization_internal_tolerance = float(
+                self.initialization_internal_tolerance
+            )
+        if (
+            isinstance(self.initialization_maxiter, bool)
+            or not isinstance(self.initialization_maxiter, Integral)
+            or self.initialization_maxiter <= 0
+        ):
+            raise ValueError(
+                "initialization_maxiter must be a positive integer excluding bool"
+            )
+        self.initialization_maxiter = int(self.initialization_maxiter)
+        if (
+            isinstance(self.initialization_refinement_steps, bool)
+            or not isinstance(self.initialization_refinement_steps, Integral)
+            or self.initialization_refinement_steps < 0
+        ):
+            raise ValueError(
+                "initialization_refinement_steps must be a nonnegative integer "
+                "excluding bool"
+            )
+        self.initialization_refinement_steps = int(
+            self.initialization_refinement_steps
+        )
+        self.initialization_dc_ksp_type = str(
+            self.initialization_dc_ksp_type
+        ).strip().lower()
+        self.initialization_magnetic_ksp_type = str(
+            self.initialization_magnetic_ksp_type
+        ).strip().lower()
+        if self.initialization_dc_ksp_type not in {"cg", "gmres"}:
+            raise ValueError("initialization_dc_ksp_type must be 'cg' or 'gmres'")
+        if self.initialization_magnetic_ksp_type not in {"cg", "gmres"}:
+            raise ValueError(
+                "initialization_magnetic_ksp_type must be 'cg' or 'gmres'"
             )
         if self.linear_solver not in {"direct", "cg", "pardiso", "petsc_ams"}:
             raise ValueError(
@@ -254,6 +327,7 @@ class TDEMIPSimulation:
         self._factor_cache: dict[int, object] = {}
         self._petsc_ams_solver = None
         self._petsc_ams_solver_key: int | None = None
+        self.initialization_solver_diagnostics: list[dict[str, object]] = []
         self.linear_solver_diagnostics: list[dict[str, object]] = []
         self._cpml_profiles_cache: dict[int, CPMLProfiles] = {}
         self._cpml_curl_split_cache: CurlSplit | None = None
@@ -330,8 +404,39 @@ class TDEMIPSimulation:
         # Fix one scalar-potential gauge node to remove the null space.
         keep = np.arange(adc.shape[0] - 1)
         phi = np.zeros(adc.shape[0], dtype=float)
-        phi[keep] = spla.spsolve(adc[keep][:, keep].tocsc(), rhs[keep])
-        return -gradient @ phi
+        reduced_matrix = adc[keep][:, keep].tocsr()
+        reduced_rhs = np.asarray(rhs[keep], dtype=float)
+        if self.initialization_solver == "direct":
+            phi[keep] = spla.spsolve(reduced_matrix.tocsc(), reduced_rhs)
+            return -gradient @ phi
+
+        solver = PetscHypreBoomerAmgSolver(
+            reduced_matrix,
+            tolerance=self.initialization_tolerance,
+            internal_tolerance=self.initialization_internal_tolerance,
+            maxiter=self.initialization_maxiter,
+            refinement_steps=self.initialization_refinement_steps,
+            ksp_type=self.initialization_dc_ksp_type,
+        )
+        try:
+            phi[keep] = solver.solve(reduced_rhs)
+            diagnostic = self._validated_initialization_backend_diagnostic(
+                solver.last_diagnostics,
+                phase="dc_electric",
+            )
+        finally:
+            solver.destroy()
+        e_initial = -gradient @ phi
+        current = me_sigma0 @ e_initial + source_vec
+        divergence = np.asarray(gradient.T @ current, dtype=float)
+        balance = self._initialization_relative_residual(divergence, rhs)
+        self._record_initialization_diagnostic(
+            diagnostic,
+            phase="dc_electric",
+            balance_relative_residual=balance,
+            balance_name="discrete_current_divergence",
+        )
+        return np.asarray(e_initial, dtype=float)
 
     def initial_magnetic_flux_density(self, e_initial: np.ndarray | None = None) -> np.ndarray:
         """Compute static magnetic flux density consistent with initial current.
@@ -364,9 +469,110 @@ class TDEMIPSimulation:
         gradient = self.mesh.nodal_gradient.tocsr()
         stiffness = curl.T @ self.face_mu_inverse_matrix @ curl
         gauge = gradient @ gradient.T
-        matrix = (stiffness + gauge).tocsc()
-        vector_potential = spla.spsolve(matrix, current)
-        return curl @ vector_potential
+        matrix = (stiffness + gauge).tocsr()
+        if self.initialization_solver == "direct":
+            vector_potential = spla.spsolve(matrix.tocsc(), current)
+            return curl @ vector_potential
+
+        auxiliary_gradient, constants = tensor_mesh_ams_auxiliary_space(self.mesh)
+        solver = PetscHypreAmsSolver(
+            matrix,
+            nodal_gradient=auxiliary_gradient,
+            edge_constant_vectors=constants,
+            tolerance=self.initialization_tolerance,
+            internal_tolerance=self.initialization_internal_tolerance,
+            maxiter=self.initialization_maxiter,
+            refinement_steps=self.initialization_refinement_steps,
+            ksp_type=self.initialization_magnetic_ksp_type,
+        )
+        try:
+            vector_potential = solver.solve(current)
+            diagnostic = self._validated_initialization_backend_diagnostic(
+                solver.last_diagnostics,
+                phase="ampere_magnetic",
+            )
+        finally:
+            solver.destroy()
+        magnetic_flux = np.asarray(curl @ vector_potential, dtype=float)
+        ampere_current = np.asarray(
+            curl.T @ self.face_mu_inverse_matrix @ magnetic_flux,
+            dtype=float,
+        )
+        balance = self._initialization_relative_residual(
+            ampere_current - current,
+            current,
+        )
+        self._record_initialization_diagnostic(
+            diagnostic,
+            phase="ampere_magnetic",
+            balance_relative_residual=balance,
+            balance_name="static_ampere",
+        )
+        return magnetic_flux
+
+    def _validated_initialization_backend_diagnostic(
+        self,
+        diagnostic: object,
+        *,
+        phase: str,
+    ) -> dict[str, object]:
+        if not isinstance(diagnostic, dict):
+            raise RuntimeError(f"{phase} initialization solver omitted diagnostics")
+        reason = diagnostic.get("backend_reason")
+        residual = diagnostic.get("external_true_relative_residual")
+        if (
+            isinstance(reason, bool)
+            or not isinstance(reason, Integral)
+            or int(reason) <= 0
+            or not bool(diagnostic.get("backend_reported_converged", False))
+            or isinstance(residual, bool)
+            or not isinstance(residual, Real)
+            or not np.isfinite(float(residual))
+            or float(residual) > self.initialization_tolerance
+        ):
+            raise RuntimeError(
+                f"{phase} initialization solver failed the external residual gate"
+            )
+        return dict(diagnostic)
+
+    @staticmethod
+    def _initialization_relative_residual(
+        residual: np.ndarray,
+        reference: np.ndarray,
+    ) -> float:
+        residual_norm = float(np.linalg.norm(np.asarray(residual, dtype=float)))
+        reference_norm = float(np.linalg.norm(np.asarray(reference, dtype=float)))
+        if reference_norm == 0.0:
+            return 0.0 if residual_norm == 0.0 else float("inf")
+        return residual_norm / reference_norm
+
+    def _record_initialization_diagnostic(
+        self,
+        diagnostic: dict[str, object],
+        *,
+        phase: str,
+        balance_relative_residual: float,
+        balance_name: str,
+    ) -> None:
+        if (
+            not np.isfinite(balance_relative_residual)
+            or balance_relative_residual > self.initialization_tolerance
+        ):
+            raise RuntimeError(
+                f"{phase} initialization failed the {balance_name} balance gate: "
+                f"relative_residual={balance_relative_residual}, "
+                f"tolerance={self.initialization_tolerance}"
+            )
+        record = dict(diagnostic)
+        record.update(
+            {
+                "phase": phase,
+                "balance_name": balance_name,
+                "balance_relative_residual": float(balance_relative_residual),
+                "balance_tolerance": float(self.initialization_tolerance),
+            }
+        )
+        self.initialization_solver_diagnostics.append(record)
 
     def _biot_savart_wire_initial_magnetic_flux_density(self) -> np.ndarray:
         try:
@@ -464,6 +670,7 @@ class TDEMIPSimulation:
     def run(self) -> SimulationResult:
         """Run the simulation and release any native iterative solver state."""
 
+        self.initialization_solver_diagnostics = []
         self.linear_solver_diagnostics = []
         try:
             return self._run_impl()
@@ -566,6 +773,7 @@ class TDEMIPSimulation:
     def run_data_only(self) -> ReceiverDataResult:
         """Run receiver-only mode and release any native iterative solver state."""
 
+        self.initialization_solver_diagnostics = []
         self.linear_solver_diagnostics = []
         try:
             return self._run_data_only_impl()

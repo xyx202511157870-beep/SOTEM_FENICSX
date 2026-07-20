@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pytest
+import scipy.sparse.linalg as spla
 from discretize import TensorMesh
 from scipy.constants import mu_0
 
@@ -1405,6 +1406,118 @@ def test_step_off_initial_magnetic_flux_satisfies_static_ampere_balance():
 
     assert np.linalg.norm(b0) > 0.0
     np.testing.assert_allclose(lhs, rhs, rtol=1e-8, atol=1e-10)
+
+
+def test_small_noncanonical_simulation_defaults_to_direct_initialization():
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+    )
+
+    assert simulation.initialization_solver == "direct"
+
+
+def test_petsc_initialization_records_two_gated_balances_and_destroys_local_solvers(
+    monkeypatch,
+):
+    created = []
+
+    class SolverProbe:
+        def __init__(self, matrix, **kwargs):
+            self.matrix = matrix.tocsr()
+            self.kwargs = kwargs
+            self.destroyed = False
+            self.last_diagnostics = None
+            created.append(self)
+
+        def solve(self, rhs):
+            solution = spla.spsolve(self.matrix.tocsc(), rhs)
+            residual = np.linalg.norm(rhs - self.matrix @ solution) / np.linalg.norm(rhs)
+            self.last_diagnostics = {
+                "solver": (
+                    "petsc_ksp_hypre_ams"
+                    if "nodal_gradient" in self.kwargs
+                    else "petsc_ksp_hypre_boomeramg"
+                ),
+                "backend_reason": 2,
+                "backend_reported_converged": True,
+                "backend_iterations": 4,
+                "external_true_relative_residual": residual,
+                "external_tolerance": 1.0e-8,
+            }
+            return solution
+
+        __call__ = solve
+
+        def destroy(self):
+            self.destroyed = True
+
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreBoomerAmgSolver",
+        SolverProbe,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreAmsSolver",
+        SolverProbe,
+        raising=False,
+    )
+
+    mesh = _mesh()
+    source = GroundedWireSource(
+        start=(-1.5, 0.0, 0.0),
+        end=(1.5, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(off_time=0.0, on_value=1.0),
+    )
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+        initialization_solver="petsc_hypre",
+        initialization_tolerance=1.0e-8,
+        initialization_internal_tolerance=1.0e-11,
+        initialization_maxiter=500,
+    )
+
+    e0 = simulation.initial_electric_field()
+    b0 = simulation.initial_magnetic_flux_density(e0)
+
+    assert len(created) == 2
+    assert all(item.destroyed for item in created)
+    assert [
+        item["phase"] for item in simulation.initialization_solver_diagnostics
+    ] == ["dc_electric", "ampere_magnetic"]
+    assert all(
+        item["backend_reason"] > 0
+        and item["backend_reported_converged"] is True
+        and np.isfinite(item["external_true_relative_residual"])
+        and item["external_true_relative_residual"] <= 1.0e-8
+        and np.isfinite(item["balance_relative_residual"])
+        and item["balance_relative_residual"] <= 1.0e-8
+        for item in simulation.initialization_solver_diagnostics
+    )
+    current = (
+        mesh.get_edge_inner_product(np.full(mesh.n_cells, 0.1)) @ e0
+        + source.initial_edge_vector(mesh)
+    )
+    np.testing.assert_allclose(
+        mesh.nodal_gradient.T @ current,
+        0.0,
+        rtol=0.0,
+        atol=1.0e-10,
+    )
+    np.testing.assert_allclose(
+        mesh.edge_curl.T @ simulation.face_mu_inverse_matrix @ b0,
+        current,
+        rtol=1.0e-8,
+        atol=1.0e-10,
+    )
 
 
 def test_biot_savart_wire_initial_magnetic_flux_matches_finite_wire_scale():

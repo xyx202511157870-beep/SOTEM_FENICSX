@@ -399,6 +399,11 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
             **_valid_simpeg_provenance(case, kwargs["variant"], "S1T2B0"),
             "variant": kwargs["variant"],
             "material_fit": _valid_ip_material_fit(),
+            "initialization_solver_diagnostics": [
+                {"phase": "dc_electric", "solver": "petsc_ksp_hypre_boomeramg"},
+                {"phase": "ampere_magnetic", "solver": "petsc_ksp_hypre_ams"},
+            ],
+            "linear_solver_diagnostics": [],
         }
 
     monkeypatch.setattr(cli, "run_simpeg_benchmark", fake_run)
@@ -419,6 +424,11 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
     assert metadata["solver_id"] == SIMPEG_SOLVER
     assert metadata["level"] == "S1T2B0"
     assert metadata["material_fit"]["material_gate_pass"] is True
+    assert metadata["solver_configuration"]["initialization"]["type"] == "petsc_hypre"
+    assert metadata["solver_configuration"]["transient"]["type"] == "petsc_ams"
+    assert [
+        item["phase"] for item in metadata["initialization_solver_diagnostics"]
+    ] == ["dc_electric", "ampere_magnetic"]
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "simpeg_complete"
 

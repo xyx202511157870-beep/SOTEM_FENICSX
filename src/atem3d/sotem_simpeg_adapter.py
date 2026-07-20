@@ -515,6 +515,17 @@ def build_benchmark_config(
             "ksp_type": "gmres",
             "residual_replacement_steps": 2,
         },
+        "initialization_solver": {
+            "type": "petsc_hypre",
+            "tolerance": 1.0e-8,
+            "internal_tolerance": 1.0e-11,
+            "maxiter": 2000,
+            "residual_replacement_steps": 2,
+            "dc_ksp_type": "cg",
+            "dc_preconditioner": "hypre_boomeramg",
+            "magnetic_ksp_type": "gmres",
+            "magnetic_preconditioner": "hypre_ams",
+        },
         "mesh": mesh,
         "mesh_hash": mesh["mesh_hash"],
         "time_hash": time_hash,
@@ -553,12 +564,14 @@ def build_benchmark_config(
             "coordinate_transform": copy.deepcopy(_COORDINATE_TRANSFORM),
             "initial_magnetic_field": "ampere",
             "transient_solver": "petsc_gmres_hypre_ams",
-            "initialization_solver": "scipy_sparse_direct",
+            "initialization_solver": {
+                "dc_electric": "petsc_cg_hypre_boomeramg",
+                "ampere_magnetic": "petsc_gmres_hypre_ams",
+            },
             "resource_note": (
-                "Production S0 sparse-direct initialization may require substantial "
-                "memory and is not yet full-scale validated; the existing core uses "
-                "sparse direct solves for initial DC electric and Ampere-consistent "
-                "magnetic fields."
+                "Canonical PETSc/HYPRE initialization uses independent external residual "
+                "and physical-balance gates after the prior sparse-direct OOM; the "
+                "full-scale S0 case has not yet rerun with this initialization path."
             ),
         },
     }
@@ -619,6 +632,10 @@ def run_simpeg_benchmark(
 
     simulation = build_simulation(config)
     result = simulation.run_data_only()
+    initialization_solver_diagnostics = _validated_initialization_solver_diagnostics(
+        simulation.initialization_solver_diagnostics,
+        config,
+    )
     linear_solver_diagnostics = _validated_linear_solver_diagnostics(
         simulation.linear_solver_diagnostics,
         config,
@@ -666,10 +683,61 @@ def run_simpeg_benchmark(
         "mesh_hash": metadata["mesh_hash"],
         "time_hash": metadata["time_hash"],
         "solver_id": "atem3d_simpeg_discretize_debye",
+        "initialization_solver_diagnostics": initialization_solver_diagnostics,
         "linear_solver_diagnostics": linear_solver_diagnostics,
         "variant": variant,
         "material_fit": copy.deepcopy(material_fit),
     }
+
+
+def _validated_initialization_solver_diagnostics(
+    diagnostics: Any,
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    expected = (
+        ("dc_electric", "petsc_ksp_hypre_boomeramg"),
+        ("ampere_magnetic", "petsc_ksp_hypre_ams"),
+    )
+    if not isinstance(diagnostics, list) or len(diagnostics) != len(expected):
+        raise RuntimeError(
+            "initialization solver diagnostics must contain DC and Ampere records"
+        )
+    tolerance = float(config["initialization_solver"]["tolerance"])
+    validated: list[dict[str, Any]] = []
+    for record, (phase, solver) in zip(diagnostics, expected):
+        if not isinstance(record, dict):
+            raise RuntimeError("initialization solver diagnostics records must be mappings")
+        residual = record.get("external_true_relative_residual")
+        balance = record.get("balance_relative_residual")
+        reason = record.get("backend_reason")
+        iterations = record.get("backend_iterations")
+        if (
+            record.get("phase") != phase
+            or record.get("solver") != solver
+            or isinstance(reason, bool)
+            or not isinstance(reason, (int, np.integer))
+            or int(reason) <= 0
+            or not bool(record.get("backend_reported_converged", False))
+            or isinstance(iterations, bool)
+            or not isinstance(iterations, (int, np.integer))
+            or int(iterations) < 0
+            or isinstance(residual, bool)
+            or not isinstance(residual, (int, float, np.integer, np.floating))
+            or not np.isfinite(float(residual))
+            or float(residual) > tolerance
+            or isinstance(balance, bool)
+            or not isinstance(balance, (int, float, np.integer, np.floating))
+            or not np.isfinite(float(balance))
+            or float(balance) > tolerance
+            or float(record.get("external_tolerance", np.nan)) != tolerance
+            or float(record.get("balance_tolerance", np.nan)) != tolerance
+        ):
+            raise RuntimeError(
+                "initialization solver diagnostics failed the external residual or "
+                "physical balance gate"
+            )
+        validated.append(copy.deepcopy(record))
+    return validated
 
 
 def _validated_linear_solver_diagnostics(

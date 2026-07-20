@@ -143,9 +143,23 @@ def test_public_z_down_geometry_is_mapped_once_to_internal_z_up(song_case):
         "ksp_type": "gmres",
         "residual_replacement_steps": 2,
     }
+    assert config["initialization_solver"] == {
+        "type": "petsc_hypre",
+        "tolerance": 1.0e-8,
+        "internal_tolerance": 1.0e-11,
+        "maxiter": 2000,
+        "residual_replacement_steps": 2,
+        "dc_ksp_type": "cg",
+        "dc_preconditioner": "hypre_boomeramg",
+        "magnetic_ksp_type": "gmres",
+        "magnetic_preconditioner": "hypre_ams",
+    }
     assert config["adapter_metadata"]["transient_solver"] == "petsc_gmres_hypre_ams"
     assert config["adapter_metadata"]["initial_magnetic_field"] == "ampere"
-    assert config["adapter_metadata"]["initialization_solver"] == "scipy_sparse_direct"
+    assert config["adapter_metadata"]["initialization_solver"] == {
+        "dc_electric": "petsc_cg_hypre_boomeramg",
+        "ampere_magnetic": "petsc_gmres_hypre_ams",
+    }
     assert config["source"] == {
         "start": [song_case.source_start_down[0], song_case.source_start_down[1], -0.1],
         "end": [song_case.source_end_down[0], song_case.source_end_down[1], -0.1],
@@ -436,10 +450,28 @@ def _fake_solver_for_config(config, *, nonfinite=False):
         }
         for index, dt in enumerate(config["time_steps"])
     ]
+    initialization_diagnostics = [
+        {
+            "phase": phase,
+            "solver": solver,
+            "backend_reason": 2,
+            "backend_reported_converged": True,
+            "backend_iterations": 3,
+            "external_true_relative_residual": 1.0e-12,
+            "external_tolerance": 1.0e-8,
+            "balance_relative_residual": 1.0e-12,
+            "balance_tolerance": 1.0e-8,
+        }
+        for phase, solver in (
+            ("dc_electric", "petsc_ksp_hypre_boomeramg"),
+            ("ampere_magnetic", "petsc_ksp_hypre_ams"),
+        )
+    ]
     return SimpleNamespace(
         mesh=mesh,
         run_data_only=lambda: result,
         linear_solver_diagnostics=diagnostics,
+        initialization_solver_diagnostics=initialization_diagnostics,
     ), data
 
 
@@ -471,6 +503,9 @@ def test_run_selects_only_canonical_outputs_and_reports_honest_metadata(monkeypa
     assert result["material_fit"]["material_gate_pass"] is True
     assert result["coordinate_system"] == "z_down"
     assert result["coordinate_transform"]["output_component_signs"]["Hz"] == 1.0
+    assert [
+        item["phase"] for item in result["initialization_solver_diagnostics"]
+    ] == ["dc_electric", "ampere_magnetic"]
 
 
 def test_run_rejects_missing_per_step_external_solver_diagnostics(monkeypatch, lei_case):
@@ -491,7 +526,50 @@ def test_run_rejects_missing_per_step_external_solver_diagnostics(monkeypatch, l
         )
 
 
-def test_resource_metadata_discloses_unvalidated_sparse_direct_s0_risk(song_case):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backend_reported_converged", False),
+        ("backend_reason", -3),
+        ("backend_iterations", -1),
+        ("external_true_relative_residual", np.nan),
+        ("external_true_relative_residual", 1.01e-8),
+        ("balance_relative_residual", np.inf),
+        ("balance_relative_residual", 1.01e-8),
+    ],
+)
+def test_run_rejects_failed_initialization_diagnostic(
+    monkeypatch,
+    lei_case,
+    field,
+    value,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        simulation.initialization_solver_diagnostics[0][field] = value
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="initialization solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
+
+
+def test_run_rejects_missing_initialization_phase(monkeypatch, lei_case):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        simulation.initialization_solver_diagnostics.pop()
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="initialization solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
+
+
+def test_resource_metadata_discloses_petsc_initialization_and_full_scale_rerun_gate(
+    song_case,
+):
     config = build_benchmark_config(
         song_case,
         variant="noip",
@@ -501,10 +579,11 @@ def test_resource_metadata_discloses_unvalidated_sparse_direct_s0_risk(song_case
     )
 
     note = config["adapter_metadata"]["resource_note"].lower()
-    assert "production s0" in note
-    assert "sparse-direct initialization" in note
-    assert "substantial memory" in note
-    assert "not yet full-scale validated" in note
+    assert "petsc/hypre initialization" in note
+    assert "external residual" in note
+    assert "prior sparse-direct oom" in note
+    assert "full-scale s0" in note
+    assert "not yet rerun" in note
 
 
 def test_run_rejects_nonfinite_solver_output(monkeypatch, lei_case):
@@ -563,6 +642,7 @@ def test_generated_noip_schema_runs_the_real_solver_on_a_tiny_mesh(lei_case):
     # Keep this cross-platform schema smoke independent of the WSL-only PETSc
     # production backend.  PETSc/AMS has dedicated real-solver tests.
     config["solver"] = {"type": "direct"}
+    config["initialization_solver"] = {"type": "direct"}
 
     result = build_simulation(config).run_data_only()
 
@@ -620,6 +700,7 @@ def test_adapter_tiny_layered_z_up_matches_upstream_e_and_faraday_b_path(song_ca
         "origin": [-1.5, -1.5, -2.0],
     }
     config["solver"] = {"type": "direct"}
+    config["initialization_solver"] = {"type": "direct"}
 
     ours_simulation = build_simulation(config)
     ours = ours_simulation.run()

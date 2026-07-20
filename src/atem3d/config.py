@@ -86,6 +86,7 @@ def build_simulation(config: dict[str, Any]) -> TDEMIPSimulation | HJMagneticSim
     receivers = _build_receivers(config)
     ip_model = DebyeIPModel(sigma_inf, terms)
     initial_ip_model = ip_model if boundary_cfg.apply_to_initial else physical_ip_model
+    initialization_cfg = _build_initialization_solver_config(config)
 
     if formulation == "hj":
         return HJMagneticSimulation(
@@ -125,6 +126,17 @@ def build_simulation(config: dict[str, Any]) -> TDEMIPSimulation | HJMagneticSim
         sources=[source],
         receivers=receivers,
         initial_magnetic_mode=str(config.get("initial_magnetic_field", "ampere")),
+        initialization_solver=str(initialization_cfg["type"]),
+        initialization_tolerance=initialization_cfg["tolerance"],
+        initialization_internal_tolerance=initialization_cfg["internal_tolerance"],
+        initialization_maxiter=initialization_cfg["maxiter"],
+        initialization_refinement_steps=initialization_cfg[
+            "residual_replacement_steps"
+        ],
+        initialization_dc_ksp_type=str(initialization_cfg["dc_ksp_type"]),
+        initialization_magnetic_ksp_type=str(
+            initialization_cfg["magnetic_ksp_type"]
+        ),
         linear_solver=str(config.get("solver", {}).get("type", "direct")),
         cg_tolerance=float(config.get("solver", {}).get("tolerance", 1.0e-8)),
         cg_maxiter=config.get("solver", {}).get("maxiter"),
@@ -152,6 +164,38 @@ def build_simulation(config: dict[str, Any]) -> TDEMIPSimulation | HJMagneticSim
         ),
         magnetic_recovery_source_history=_build_source_history_correction(config),
     )
+
+
+def _build_initialization_solver_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("initialization_solver", {"type": "direct"})
+    if isinstance(raw, str):
+        raw = {"type": raw}
+    if not isinstance(raw, dict):
+        raise ValueError("initialization_solver must be a string or mapping")
+    solver_type = str(raw.get("type", "direct"))
+    if solver_type not in {"direct", "petsc_hypre"}:
+        raise ValueError("initialization_solver.type must be 'direct' or 'petsc_hypre'")
+    dc_preconditioner = str(raw.get("dc_preconditioner", "hypre_boomeramg"))
+    magnetic_preconditioner = str(
+        raw.get("magnetic_preconditioner", "hypre_ams")
+    )
+    if solver_type == "petsc_hypre" and dc_preconditioner != "hypre_boomeramg":
+        raise ValueError(
+            "PETSc initialization requires dc_preconditioner='hypre_boomeramg'"
+        )
+    if solver_type == "petsc_hypre" and magnetic_preconditioner != "hypre_ams":
+        raise ValueError(
+            "PETSc initialization requires magnetic_preconditioner='hypre_ams'"
+        )
+    return {
+        "type": solver_type,
+        "tolerance": raw.get("tolerance", 1.0e-8),
+        "internal_tolerance": raw.get("internal_tolerance"),
+        "maxiter": raw.get("maxiter", 2000),
+        "residual_replacement_steps": raw.get("residual_replacement_steps", 2),
+        "dc_ksp_type": str(raw.get("dc_ksp_type", "cg")),
+        "magnetic_ksp_type": str(raw.get("magnetic_ksp_type", "gmres")),
+    }
 
 
 def _build_mesh(mesh_cfg: dict[str, Any]) -> TensorMesh:

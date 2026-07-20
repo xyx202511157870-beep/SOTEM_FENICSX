@@ -22,7 +22,7 @@ class PetscAmsConvergenceError(RuntimeError):
     def __init__(self, diagnostic: dict[str, Any]) -> None:
         self.diagnostics = dict(diagnostic)
         super().__init__(
-            "PETSc/HYPRE AMS solver failed convergence gate: "
+            "PETSc/HYPRE solver failed convergence gate: "
             + json.dumps(
                 self.diagnostics,
                 sort_keys=True,
@@ -94,6 +94,8 @@ def require_true_residual(
     tolerance: float,
     backend_reason: int,
     backend_iterations: int,
+    solver: str = "petsc_ksp_hypre_ams",
+    diagnostic_schema: str = "atem3d.petsc-ams-convergence-diagnostic",
 ) -> float:
     """Fail closed unless both PETSc and the external residual accept a solve."""
 
@@ -111,10 +113,10 @@ def require_true_residual(
         else "external_true_residual_above_tolerance"
     )
     diagnostic = {
-        "diagnostic_schema": "atem3d.petsc-ams-convergence-diagnostic",
+        "diagnostic_schema": str(diagnostic_schema),
         "diagnostic_schema_version": 1,
         "reason": reason,
-        "solver": "petsc_ksp_hypre_ams",
+        "solver": str(solver),
         "backend_reason": int(backend_reason),
         "backend_reported_converged": backend_converged,
         "backend_iterations": int(backend_iterations),

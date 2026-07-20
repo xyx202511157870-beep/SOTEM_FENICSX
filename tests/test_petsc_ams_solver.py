@@ -156,6 +156,92 @@ def test_petsc_hypre_ams_solves_medium_tensor_curl_curl_mass_system():
     assert solver.last_diagnostics["external_true_relative_residual"] <= 1.0e-8
 
 
+def test_petsc_hypre_ams_solves_gauge_stabilized_ampere_initialization_system():
+    pytest.importorskip("petsc4py")
+    pytest.importorskip("discretize")
+
+    from discretize import TensorMesh
+
+    from atem3d.solvers.petsc_ams import (
+        PetscHypreAmsSolver,
+        tensor_mesh_ams_auxiliary_space,
+    )
+
+    mesh = TensorMesh([np.ones(6), np.ones(5), np.ones(4)], x0="CCC")
+    curl = mesh.edge_curl.tocsr()
+    gradient = mesh.nodal_gradient.tocsr()
+    face_mass = mesh.get_face_inner_product(np.ones(mesh.n_cells)).tocsr()
+    matrix = (curl.T @ face_mass @ curl + gradient @ gradient.T).tocsr()
+    auxiliary_gradient, constants = tensor_mesh_ams_auxiliary_space(mesh)
+    exact = np.sin(np.arange(mesh.n_edges, dtype=float) + 0.25)
+    rhs = matrix @ exact
+
+    solver = PetscHypreAmsSolver(
+        matrix,
+        nodal_gradient=auxiliary_gradient,
+        edge_constant_vectors=constants,
+        tolerance=1.0e-8,
+        internal_tolerance=1.0e-11,
+        maxiter=1000,
+    )
+    computed = solver.solve(rhs)
+    solver.destroy()
+
+    relative_residual = np.linalg.norm(rhs - matrix @ computed) / np.linalg.norm(rhs)
+    assert np.all(np.isfinite(computed))
+    assert relative_residual <= 1.0e-8
+    assert solver.last_diagnostics["backend_reason"] > 0
+    assert solver.last_diagnostics["backend_reported_converged"] is True
+
+
+def test_medium_tdem_petsc_initialization_passes_algebraic_and_physical_gates():
+    pytest.importorskip("petsc4py")
+    pytest.importorskip("discretize")
+
+    from discretize import TensorMesh
+
+    from atem3d.ip import DebyeIPModel
+    from atem3d.simulation import TDEMIPSimulation
+    from atem3d.sources import GroundedWireSource, StepOffWaveform
+
+    mesh = TensorMesh([np.ones(20), np.ones(18), np.ones(16)], x0="CCC")
+    source = GroundedWireSource(
+        start=(-5.0, 0.0, 0.0),
+        end=(5.0, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(off_time=0.0, on_value=1.0),
+    )
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[1.0e-3],
+        sources=[source],
+        initialization_solver="petsc_hypre",
+        initialization_tolerance=1.0e-8,
+        initialization_internal_tolerance=1.0e-11,
+        initialization_maxiter=1000,
+    )
+
+    electric = simulation.initial_electric_field()
+    magnetic = simulation.initial_magnetic_flux_density(electric)
+
+    assert mesh.n_cells == 5760
+    assert mesh.n_edges == 19270
+    assert np.all(np.isfinite(electric))
+    assert np.all(np.isfinite(magnetic))
+    assert [
+        diagnostic["phase"]
+        for diagnostic in simulation.initialization_solver_diagnostics
+    ] == ["dc_electric", "ampere_magnetic"]
+    assert all(
+        diagnostic["backend_reason"] > 0
+        and diagnostic["backend_reported_converged"] is True
+        and diagnostic["external_true_relative_residual"] <= 1.0e-8
+        and diagnostic["balance_relative_residual"] <= 1.0e-8
+        for diagnostic in simulation.initialization_solver_diagnostics
+    )
+
+
 def test_petsc_ams_constructor_releases_partial_native_state(monkeypatch):
     pytest.importorskip("petsc4py")
 
