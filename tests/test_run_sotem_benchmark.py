@@ -137,7 +137,31 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
     monkeypatch.setattr(
         pipeline,
         "build_source",
-        lambda msh, spaces, config, cell_tags: {"mode": "test-source"},
+        lambda msh, spaces, config, cell_tags: {
+            "mode": "test-source",
+            "vector": object(),
+            "projection_diagnostics": {
+                "endpoint_norm": 1.0,
+                "before_residual": 0.0,
+                "after_residual": 0.0,
+                "correction_l2_over_raw": 0.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_make_zero_tangential_bc",
+        lambda msh, spaces, facet_tags, config: (object(), object(), object()),
+    )
+    passing_boundary_elimination = {
+        "passed": True,
+        "constrained_global_dofs": 1,
+        "relative_residual": 0.0,
+    }
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_source_after_boundary_elimination",
+        lambda msh, spaces, source_vector, config, bc_global: passing_boundary_elimination,
     )
     passing_quality = {
         "passed": True,
@@ -210,7 +234,10 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
         (1e-5, 1e-4, 1e-3, 1e-2, 1e-1)
     )
     assert diagnostics["config"] is captured["config"]
-    assert diagnostics["source"] == {"mode": "test-source"}
+    assert diagnostics["source"]["mode"] == "test-source"
+    assert diagnostics["source"]["boundary_elimination_diagnostics"] == (
+        passing_boundary_elimination
+    )
     assert diagnostics["mesh_quality"]["passed"] is True
 
 
