@@ -5,6 +5,12 @@ from __future__ import annotations
 import numpy as np
 
 from atem3d.metrics import robust_component_errors
+from atem3d.sotem_acceptance import (
+    CANONICAL_SOTEM_COMPONENT_ORDER,
+    SOTEM_ACCEPTANCE_COMPONENTS,
+    ey_symmetry_diagnostics,
+    symmetric_sotem_component_contract,
+)
 
 
 _ZERO_CROSSING_TIME_TOLERANCE = 0.05
@@ -107,6 +113,17 @@ def compare_signed_response(
         raise ValueError("components must be unique")
     if len(component_names) != prediction_values.shape[1]:
         raise ValueError("components must match response columns")
+    has_canonical_profile_columns = bool(
+        len(component_names) == len(CANONICAL_SOTEM_COMPONENT_ORDER)
+        and set(component_names) == set(CANONICAL_SOTEM_COMPONENT_ORDER)
+    )
+    if has_canonical_profile_columns:
+        symmetric_sotem_component_contract(component_names)
+    symmetric_profile = tuple(component_names) == CANONICAL_SOTEM_COMPONENT_ORDER
+    acceptance_components = (
+        SOTEM_ACCEPTANCE_COMPONENTS if symmetric_profile else tuple(component_names)
+    )
+    acceptance_component_set = set(acceptance_components)
 
     if isinstance(threshold, (bool, np.bool_)):
         raise ValueError("threshold must be finite and positive, not boolean")
@@ -125,6 +142,14 @@ def compare_signed_response(
                 f"reference peak for component {component!r} must be finite and positive"
             )
         floor_by_component[component] = 0.01 * reference_peak
+    metric_contract = (
+        {
+            "acceptance_components": acceptance_components,
+            "diagnostic_only_components": {"Ey": "transverse_symmetry"},
+        }
+        if symmetric_profile
+        else {}
+    )
     diagnostic_rows, summary = robust_component_errors(
         time_values,
         prediction_values,
@@ -132,6 +157,7 @@ def compare_signed_response(
         component_names,
         threshold=threshold_value,
         floor_overrides=floor_by_component,
+        **metric_contract,
     )
     rows = _acceptance_rows(
         diagnostic_rows,
@@ -145,6 +171,8 @@ def compare_signed_response(
     max_acceptance_error_by_component: dict[str, float] = {}
     amplitude_failed_components: list[str] = []
     amplitude_failed_times: set[float] = set()
+    diagnostic_amplitude_failed_components: list[str] = []
+    diagnostic_amplitude_failed_times: set[float] = set()
     for component in component_names:
         component_rows = rows[rows["component"] == component]
         max_acceptance_error_by_component[component] = float(
@@ -152,11 +180,20 @@ def compare_signed_response(
         )
         failed_rows = component_rows[~component_rows["pass_threshold"]]
         if failed_rows.size:
-            amplitude_failed_components.append(component)
-            amplitude_failed_times.update(float(time) for time in failed_rows["time_obs"])
+            if component in acceptance_component_set:
+                amplitude_failed_components.append(component)
+                amplitude_failed_times.update(
+                    float(time) for time in failed_rows["time_obs"]
+                )
+            else:
+                diagnostic_amplitude_failed_components.append(component)
+                diagnostic_amplitude_failed_times.update(
+                    float(time) for time in failed_rows["time_obs"]
+                )
 
     zero_crossings = {}
     zero_crossing_failed_components: list[str] = []
+    diagnostic_zero_crossing_failed_components: list[str] = []
     for index, component in enumerate(component_names):
         prediction_crossings = linear_zero_crossings(
             time_values, prediction_values[:, index]
@@ -180,7 +217,10 @@ def compare_signed_response(
             count_match and max_error <= _ZERO_CROSSING_TIME_TOLERANCE
         )
         if not crossing_passed:
-            zero_crossing_failed_components.append(component)
+            if component in acceptance_component_set:
+                zero_crossing_failed_components.append(component)
+            else:
+                diagnostic_zero_crossing_failed_components.append(component)
         zero_crossings[component] = {
             "prediction": prediction_crossings.tolist(),
             "reference": reference_crossings.tolist(),
@@ -189,16 +229,26 @@ def compare_signed_response(
             "passed": crossing_passed,
         }
 
-    robust_failed_components = list(summary["failed_components"])
-    robust_failed_times = list(summary["failed_times"])
+    robust_failed_components = sorted(
+        set(summary["failed_components"])
+        | set(summary.get("diagnostic_failed_components", []))
+    )
+    robust_failed_times = sorted(
+        set(summary["failed_times"])
+        | set(summary.get("diagnostic_failed_times", []))
+    )
     amplitude_passed = not amplitude_failed_components
     zero_crossings_passed = not zero_crossing_failed_components
     failed_components = sorted(
         set(amplitude_failed_components) | set(zero_crossing_failed_components)
     )
+    diagnostic_failed_components = sorted(
+        set(diagnostic_amplitude_failed_components)
+        | set(diagnostic_zero_crossing_failed_components)
+    )
     summary.update(
         {
-            "robust_diagnostic_pass_all_components": bool(summary["pass_all_components"]),
+            "robust_diagnostic_pass_all_components": not robust_failed_components,
             "robust_diagnostic_failed_components": robust_failed_components,
             "robust_diagnostic_failed_times": robust_failed_times,
             "legacy_pass_5pct_is_threshold_alias": True,
@@ -206,15 +256,28 @@ def compare_signed_response(
             "amplitude_pass_all_components": amplitude_passed,
             "amplitude_failed_components": amplitude_failed_components,
             "amplitude_failed_times": sorted(amplitude_failed_times),
+            "diagnostic_amplitude_failed_components": diagnostic_amplitude_failed_components,
+            "diagnostic_amplitude_failed_times": sorted(
+                diagnostic_amplitude_failed_times
+            ),
             "max_acceptance_error_by_component": max_acceptance_error_by_component,
             "zero_crossing_time_tolerance": _ZERO_CROSSING_TIME_TOLERANCE,
             "zero_crossings_pass_all_components": zero_crossings_passed,
             "zero_crossing_failed_components": zero_crossing_failed_components,
+            "diagnostic_zero_crossing_failed_components": diagnostic_zero_crossing_failed_components,
             "pass_all_components": bool(amplitude_passed and zero_crossings_passed),
             "failed_components": failed_components,
             "failed_times": sorted(amplitude_failed_times),
+            "diagnostic_pass_all_components": not diagnostic_failed_components,
+            "diagnostic_failed_components": diagnostic_failed_components,
+            "diagnostic_failed_times": sorted(diagnostic_amplitude_failed_times),
         }
     )
+    if symmetric_profile:
+        summary.update(symmetric_sotem_component_contract(component_names))
+        summary["symmetry_diagnostics"] = ey_symmetry_diagnostics(
+            prediction_values, reference_values, component_names
+        )
     return {
         "rows": rows,
         "summary": summary,

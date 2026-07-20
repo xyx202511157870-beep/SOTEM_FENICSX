@@ -11,6 +11,14 @@ import numpy as np
 
 from atem3d.materials.prony import PronyConductivity
 from atem3d.metrics import robust_component_errors
+from atem3d.sotem_acceptance import (
+    CANONICAL_SOTEM_COMPONENT_ORDER,
+    SOTEM_ACCEPTANCE_COMPONENTS,
+    SOTEM_ACCEPTANCE_PROFILE,
+    SOTEM_DIAGNOSTIC_ONLY_COMPONENTS,
+    ey_symmetry_diagnostics,
+    symmetric_sotem_component_contract,
+)
 from atem3d.yaml_io import safe_dump_yaml
 
 REQUIRED_TIME_MIN = 1.0e-5
@@ -51,13 +59,34 @@ def write_three_component_validation_artifacts(case: ThreeComponentValidationInp
     output_dir = Path(case.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     times, predictions, reference, component_names = _validated_arrays(case)
+    has_canonical_profile_columns = bool(
+        len(component_names) == len(CANONICAL_SOTEM_COMPONENT_ORDER)
+        and set(component_names) == set(CANONICAL_SOTEM_COMPONENT_ORDER)
+    )
+    if has_canonical_profile_columns:
+        symmetric_sotem_component_contract(component_names)
+    symmetric_profile = tuple(component_names) == CANONICAL_SOTEM_COMPONENT_ORDER
+    metric_contract = (
+        {
+            "acceptance_components": SOTEM_ACCEPTANCE_COMPONENTS,
+            "diagnostic_only_components": {"Ey": "transverse_symmetry"},
+        }
+        if symmetric_profile
+        else {}
+    )
     rows, summary = robust_component_errors(
         times,
         predictions,
         reference,
         component_names,
         threshold=case.threshold,
+        **metric_contract,
     )
+    if symmetric_profile:
+        summary.update(symmetric_sotem_component_contract(component_names))
+        summary["symmetry_diagnostics"] = ey_symmetry_diagnostics(
+            predictions, reference, component_names
+        )
     summary = _augment_summary(case, summary)
     acceptance_status = validation_acceptance_status(
         times,
@@ -196,9 +225,50 @@ def validation_acceptance_status(
     full_window_covered = bool(
         times.size > 0 and time_min <= float(required_time_min) and time_max >= float(required_time_max)
     )
-    electric_present = {"Ex", "Ey"}.issubset(component_names)
-    magnetic_present = any(name in component_names for name in ("Hz", "dBzdt"))
-    required_components_present = bool(electric_present and magnetic_present)
+    canonical_profile_columns = bool(
+        len(component_names) == len(CANONICAL_SOTEM_COMPONENT_ORDER)
+        and set(component_names) == set(CANONICAL_SOTEM_COMPONENT_ORDER)
+    )
+    symmetric_profile = canonical_profile_columns
+    if symmetric_profile:
+        expected_contract = symmetric_sotem_component_contract(
+            CANONICAL_SOTEM_COMPONENT_ORDER
+        )
+        acceptance_components = list(SOTEM_ACCEPTANCE_COMPONENTS)
+        diagnostic_only_components = list(SOTEM_DIAGNOSTIC_ONLY_COMPONENTS)
+        acceptance_components_present = all(
+            name in component_names for name in acceptance_components
+        )
+        diagnostic_components_present = all(
+            name in component_names for name in diagnostic_only_components
+        )
+        component_order_preserved = bool(
+            tuple(component_names) == CANONICAL_SOTEM_COMPONENT_ORDER
+            and tuple(summary.get("component_order", ()))
+            == CANONICAL_SOTEM_COMPONENT_ORDER
+        )
+        acceptance_contract_valid = bool(
+            summary.get("acceptance_profile") == SOTEM_ACCEPTANCE_PROFILE
+            and summary.get("acceptance_components") == acceptance_components
+            and summary.get("diagnostic_only_components")
+            == diagnostic_only_components
+            and summary.get("component_roles") == expected_contract["component_roles"]
+        )
+        electric_present = "Ex" in component_names
+        magnetic_present = {"Hz", "dBzdt"}.issubset(component_names)
+        required_components_present = bool(
+            acceptance_components_present and diagnostic_components_present
+        )
+    else:
+        acceptance_components = list(component_names)
+        diagnostic_only_components = []
+        acceptance_components_present = True
+        diagnostic_components_present = True
+        component_order_preserved = True
+        acceptance_contract_valid = True
+        electric_present = {"Ex", "Ey"}.issubset(component_names)
+        magnetic_present = any(name in component_names for name in ("Hz", "dBzdt"))
+        required_components_present = bool(electric_present and magnetic_present)
     scope_is_final = str(validation_scope) == FINAL_ACCEPTANCE_SCOPE
     case_type_ok = case_type in {"noip", "ip"}
     reference_type_supported = reference_type in SUPPORTED_REFERENCE_TYPES
@@ -218,6 +288,10 @@ def validation_acceptance_status(
         blocking_reasons.append("time_window_not_covered")
     if not required_components_present:
         blocking_reasons.append("required_components_missing")
+    if symmetric_profile and not component_order_preserved:
+        blocking_reasons.append("component_order_not_canonical")
+    if symmetric_profile and not acceptance_contract_valid:
+        blocking_reasons.append("acceptance_component_contract_invalid")
     if not case_type_ok:
         blocking_reasons.append("case_type_invalid")
     if not reference_type_supported:
@@ -237,6 +311,8 @@ def validation_acceptance_status(
         scope_is_final
         and full_window_covered
         and required_components_present
+        and component_order_preserved
+        and acceptance_contract_valid
         and case_type_ok
         and reference_type_ok
         and threshold_ok
@@ -254,6 +330,15 @@ def validation_acceptance_status(
         "electric_components_present": bool(electric_present),
         "magnetic_component_present": bool(magnetic_present),
         "required_components_present": required_components_present,
+        "acceptance_profile": (
+            SOTEM_ACCEPTANCE_PROFILE if symmetric_profile else "legacy_three_component"
+        ),
+        "acceptance_components": acceptance_components,
+        "diagnostic_only_components": diagnostic_only_components,
+        "acceptance_components_present": bool(acceptance_components_present),
+        "diagnostic_components_present": bool(diagnostic_components_present),
+        "component_order_preserved": bool(component_order_preserved),
+        "acceptance_component_contract_valid": bool(acceptance_contract_valid),
         "case_type_ok": bool(case_type_ok),
         "reference_type_ok": bool(reference_type_ok),
         "reference_type_supported": bool(reference_type_supported),
@@ -349,6 +434,15 @@ def _automatic_failure_diagnostics(
         "physical_failed_components": list(
             summary.get("physical_failed_components", summary.get("failed_components", []))
         ),
+        "diagnostic_failed_components": list(
+            summary.get("diagnostic_failed_components", [])
+        ),
+        "acceptance_components": list(summary.get("acceptance_components", [])),
+        "diagnostic_only_components": list(
+            summary.get("diagnostic_only_components", [])
+        ),
+        "component_roles": dict(summary.get("component_roles", {})),
+        "symmetry_diagnostics": dict(summary.get("symmetry_diagnostics", {})),
         "failed_times": list(summary.get("failed_times", [])),
         "recommended_check_order": [
             "time_step_error",

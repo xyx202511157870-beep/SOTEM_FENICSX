@@ -6841,6 +6841,12 @@ def _write_component_csv(path: Path, times, data, components) -> None:
 
 def _robust_error_rows(times, pred_data, ref_data, components, threshold: float):
     import numpy as np
+    from atem3d.sotem_acceptance import (
+        CANONICAL_SOTEM_COMPONENT_ORDER,
+        SOTEM_ACCEPTANCE_COMPONENTS,
+        ey_symmetry_diagnostics,
+        symmetric_sotem_component_contract,
+    )
 
     pred = np.asarray(pred_data, dtype=float)
     ref = np.asarray(ref_data, dtype=float)
@@ -6849,6 +6855,23 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
         raise ValueError("prediction and reference arrays must have matching shapes")
     if pred.ndim != 2 or pred.shape[0] != times.size:
         raise ValueError("validation arrays must have shape (n_times, n_components)")
+    component_names = tuple(str(name) for name in components)
+    has_canonical_profile_columns = bool(
+        len(component_names) == len(CANONICAL_SOTEM_COMPONENT_ORDER)
+        and set(component_names) == set(CANONICAL_SOTEM_COMPONENT_ORDER)
+    )
+    symmetric_profile = component_names == CANONICAL_SOTEM_COMPONENT_ORDER
+    if has_canonical_profile_columns:
+        # This call also rejects re-ordered canonical columns before any
+        # acceptance summary can be published.
+        contract = symmetric_sotem_component_contract(component_names)
+    else:
+        contract = {}
+    acceptance_components = (
+        set(SOTEM_ACCEPTANCE_COMPONENTS)
+        if symmetric_profile
+        else {str(name) for name in components}
+    )
     rows: list[dict[str, Any]] = []
     summary: dict[str, Any] = {
         "pass_all_components": True,
@@ -6857,6 +6880,8 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
     }
     failed_components: set[str] = set()
     failed_times: set[float] = set()
+    diagnostic_failed_components: set[str] = set()
+    diagnostic_failed_times: set[float] = set()
     magnetic_quantity = None
     magnetic_components: list[str] = []
     for col, component in enumerate(components):
@@ -6874,8 +6899,12 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
             peak = float(abs_error / max(max_abs_ref, floor))
             passed = bool(robust <= threshold and peak <= threshold)
             if not passed:
-                failed_components.add(component)
-                failed_times.add(float(time))
+                if component in acceptance_components:
+                    failed_components.add(component)
+                    failed_times.add(float(time))
+                else:
+                    diagnostic_failed_components.add(component)
+                    diagnostic_failed_times.add(float(time))
             robust_values.append(robust)
             peak_values.append(peak)
             rows.append(
@@ -6911,18 +6940,26 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
         tolerance=float(threshold),
         weak_reference_fraction=0.1,
     )
-    weak_components = set(weak_gate["weak_components"])
-    physical_failed_components = sorted(
-        component for component in failed_components if component not in weak_components
-    )
-    if not weak_gate["passed"]:
-        physical_failed_components.extend(
-            component for component in weak_gate["weak_components"] if component not in physical_failed_components
+    if symmetric_profile:
+        physical_failed_components = sorted(failed_components)
+    else:
+        weak_components = set(weak_gate["weak_components"])
+        physical_failed_components = sorted(
+            component for component in failed_components if component not in weak_components
         )
+        if not weak_gate["passed"]:
+            physical_failed_components.extend(
+                component
+                for component in weak_gate["weak_components"]
+                if component not in physical_failed_components
+            )
 
     summary["pass_all_components"] = len(failed_components) == 0
     summary["failed_components"] = sorted(failed_components)
     summary["failed_times"] = sorted(failed_times)
+    summary["diagnostic_pass_all_components"] = len(diagnostic_failed_components) == 0
+    summary["diagnostic_failed_components"] = sorted(diagnostic_failed_components)
+    summary["diagnostic_failed_times"] = sorted(diagnostic_failed_times)
     summary["physical_pass_all_components"] = len(physical_failed_components) == 0
     summary["physical_failed_components"] = sorted(physical_failed_components)
     summary["weak_component_passed"] = bool(weak_gate["passed"])
@@ -6932,6 +6969,11 @@ def _robust_error_rows(times, pred_data, ref_data, components, threshold: float)
     summary["weak_component_reference_max"] = dict(weak_gate["reference_maxima"])
     summary["magnetic_quantity"] = magnetic_quantity or ""
     summary["magnetic_components"] = magnetic_components
+    if symmetric_profile:
+        summary.update(contract)
+        summary["symmetry_diagnostics"] = ey_symmetry_diagnostics(
+            pred, ref, components
+        )
     return rows, summary
 
 
@@ -7018,6 +7060,11 @@ def _automatic_failure_diagnostics(summary: dict[str, Any], *, magnetic_receiver
         "acceptance_blocking_reasons": list(acceptance_status.get("blocking_reasons", [])),
         "failed_components": summary.get("failed_components", []),
         "physical_failed_components": summary.get("physical_failed_components", summary.get("failed_components", [])),
+        "diagnostic_failed_components": summary.get("diagnostic_failed_components", []),
+        "acceptance_components": summary.get("acceptance_components", []),
+        "diagnostic_only_components": summary.get("diagnostic_only_components", []),
+        "component_roles": summary.get("component_roles", {}),
+        "symmetry_diagnostics": summary.get("symmetry_diagnostics", {}),
         "failed_times": summary.get("failed_times", []),
         "recommended_check_order": checks,
         "magnetic_receiver_mode": magnetic_receiver_mode,
@@ -8143,6 +8190,34 @@ def write_report(
         for key, label in runtime_labels:
             if key in runtime:
                 lines.append(f"  {label}: {float(runtime[key]):.3f} s")
+    from atem3d.sotem_acceptance import (
+        CANONICAL_SOTEM_COMPONENT_ORDER,
+        ey_symmetry_diagnostics,
+    )
+
+    if tuple(fem_result.get("components", ())) == CANONICAL_SOTEM_COMPONENT_ORDER:
+        symmetry = ey_symmetry_diagnostics(
+            fem_result["data"], ref_result["data"], fem_result["components"]
+        )["Ey"]
+
+        def format_symmetry_ratio(value):
+            return "undefined" if value is None else f"{float(value):.6e}"
+
+        lines.append("")
+        lines.append("formal acceptance components: Ex, Hz, dBzdt")
+        lines.append(
+            "Ey: excluded_by_design from formal acceptance; retained in all response "
+            "tables as a transverse symmetry diagnostic"
+        )
+        lines.append(
+            "  transverse symmetry diagnostic: "
+            f"prediction_peak_abs={symmetry['prediction_peak_abs']:.6e}; "
+            f"reference_peak_abs={symmetry['reference_peak_abs']:.6e}; "
+            "prediction_to_Ex_peak_ratio="
+            f"{format_symmetry_ratio(symmetry['prediction_to_Ex_peak_ratio'])}; "
+            "reference_to_Ex_peak_ratio="
+            f"{format_symmetry_ratio(symmetry['reference_to_Ex_peak_ratio'])}"
+        )
     lines.append("")
     lines.append("geometry:")
     lines.append(f"  x,y extent: +/- {config.x_extent:g} m")

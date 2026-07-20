@@ -65,6 +65,8 @@ def robust_component_errors(
     *,
     threshold: float = 0.05,
     floor_overrides: dict[str, float] | None = None,
+    acceptance_components=None,
+    diagnostic_only_components: dict[str, str] | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Return row-wise robust error table and summary for validation outputs."""
 
@@ -81,6 +83,37 @@ def robust_component_errors(
         raise ValueError("component_names length must match component columns")
     if threshold <= 0.0:
         raise ValueError("threshold must be positive")
+
+    component_names = [str(name) for name in component_names]
+    if len(set(component_names)) != len(component_names):
+        raise ValueError("component_names must be unique")
+    if acceptance_components is None:
+        acceptance_names = tuple(component_names)
+        diagnostic_roles: dict[str, str] = {}
+        explicit_acceptance_contract = False
+    else:
+        acceptance_names = tuple(str(name) for name in acceptance_components)
+        if not acceptance_names or len(set(acceptance_names)) != len(acceptance_names):
+            raise ValueError("acceptance_components must be nonempty and unique")
+        missing_acceptance = [name for name in acceptance_names if name not in component_names]
+        if missing_acceptance:
+            raise ValueError(
+                "acceptance_components are absent from component_names: "
+                + ", ".join(missing_acceptance)
+            )
+        diagnostic_roles = {
+            str(name): str(role)
+            for name, role in dict(diagnostic_only_components or {}).items()
+        }
+        expected_diagnostics = [name for name in component_names if name not in acceptance_names]
+        if set(diagnostic_roles) != set(expected_diagnostics):
+            raise ValueError(
+                "diagnostic_only_components must name every non-acceptance component"
+            )
+        if any(not role for role in diagnostic_roles.values()):
+            raise ValueError("diagnostic-only component roles must be nonempty")
+        explicit_acceptance_contract = True
+    acceptance_name_set = set(acceptance_names)
 
     dtype = [
         ("time_obs", "f8"),
@@ -102,6 +135,8 @@ def robust_component_errors(
     floor_overrides = floor_overrides or {}
     failed_components: set[str] = set()
     failed_times: set[float] = set()
+    diagnostic_failed_components: set[str] = set()
+    diagnostic_failed_times: set[float] = set()
     magnetic_component = None
     magnetic_components: list[str] = []
 
@@ -120,8 +155,12 @@ def robust_component_errors(
             peak = float(abs_error / max(max_abs_ref, floor))
             passed = bool(robust <= threshold and peak <= threshold)
             if not passed:
-                failed_components.add(component)
-                failed_times.add(float(time))
+                if component in acceptance_name_set:
+                    failed_components.add(component)
+                    failed_times.add(float(time))
+                else:
+                    diagnostic_failed_components.add(component)
+                    diagnostic_failed_times.add(float(time))
             robust_values.append(robust)
             peak_values.append(peak)
             rows.append((float(time), component, float(pred), float(ref), abs_error, ordinary, robust, peak, passed))
@@ -143,18 +182,26 @@ def robust_component_errors(
         component_names,
         threshold=float(threshold),
     )
-    weak_components = set(weak_gate["weak_components"])
-    physical_failed_components = sorted(
-        component for component in failed_components if component not in weak_components
-    )
-    if not weak_gate["passed"]:
-        physical_failed_components.extend(
-            component for component in weak_gate["weak_components"] if component not in physical_failed_components
+    if explicit_acceptance_contract:
+        physical_failed_components = sorted(failed_components)
+    else:
+        weak_components = set(weak_gate["weak_components"])
+        physical_failed_components = sorted(
+            component for component in failed_components if component not in weak_components
         )
+        if not weak_gate["passed"]:
+            physical_failed_components.extend(
+                component
+                for component in weak_gate["weak_components"]
+                if component not in physical_failed_components
+            )
 
     summary["pass_all_components"] = len(failed_components) == 0
     summary["failed_components"] = strict_failed_components
     summary["failed_times"] = sorted(failed_times)
+    summary["diagnostic_pass_all_components"] = len(diagnostic_failed_components) == 0
+    summary["diagnostic_failed_components"] = sorted(diagnostic_failed_components)
+    summary["diagnostic_failed_times"] = sorted(diagnostic_failed_times)
     summary["physical_pass_all_components"] = len(physical_failed_components) == 0
     summary["physical_failed_components"] = sorted(physical_failed_components)
     summary["weak_component_passed"] = bool(weak_gate["passed"])
@@ -162,6 +209,19 @@ def robust_component_errors(
     summary["weak_component_primary_scale"] = float(weak_gate["primary_scale"])
     summary["weak_component_scaled_abs_error_max"] = dict(weak_gate["maxima"])
     summary["weak_component_reference_max"] = dict(weak_gate["reference_maxima"])
+    summary["acceptance_components"] = list(acceptance_names)
+    summary["diagnostic_only_components"] = list(diagnostic_roles)
+    summary["component_roles"] = {
+        component: (
+            {"acceptance_status": "included", "diagnostic_role": None}
+            if component in acceptance_name_set
+            else {
+                "acceptance_status": "excluded_by_design",
+                "diagnostic_role": diagnostic_roles[component],
+            }
+        )
+        for component in component_names
+    }
     if magnetic_component is not None:
         summary["magnetic_quantity"] = magnetic_component
     summary["magnetic_components"] = magnetic_components
