@@ -2825,12 +2825,49 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
     import numpy as np
 
     parameter_tolerance = 1.0e-12
+    source_length = float(
+        np.linalg.norm(np.asarray(config.source_end) - np.asarray(config.source_start))
+    )
+
+    def failed_result(*, serial: bool, affine_tetrahedra: bool, reason: str):
+        diagnostics = {
+            "candidate_positive_interval_count": 0,
+            "atomic_interval_count": 0,
+            "multi_candidate_atomic_interval_count": 0,
+            "candidate_overlap_parameter_length": 0.0,
+            "union_coverage_fraction": 0.0,
+            "gap_parameter_length": 1.0,
+            "assigned_overlap_parameter_length": 0.0,
+            "overlap_parameter_length": 0.0,
+            "start_endpoint_covered": False,
+            "end_endpoint_covered": False,
+            "positive_intervals": False,
+            "serial": bool(serial),
+            "affine_tetrahedra": bool(affine_tetrahedra),
+            "parameter_tolerance": parameter_tolerance,
+            "source_length": source_length,
+            "interval_total_length": 0.0,
+            "gap_length": source_length,
+            "overlap_length": 0.0,
+            "failure_reason": str(reason),
+            "passed": False,
+        }
+        return {"intervals": [], "diagnostics": diagnostics}
+
     serial = int(msh.comm.size) == 1
     if not serial:
-        raise RuntimeError("exact manual-line source integration currently requires serial assembly")
+        return failed_result(
+            serial=False,
+            affine_tetrahedra=False,
+            reason="serial_assembly_required",
+        )
     tdim = int(msh.topology.dim)
     if tdim != 3:
-        raise RuntimeError("exact manual-line source integration requires a three-dimensional mesh")
+        return failed_result(
+            serial=True,
+            affine_tetrahedra=False,
+            reason="three_dimensional_mesh_required",
+        )
     n_local = int(msh.topology.index_map(tdim).size_local)
     local_ids = np.arange(n_local, dtype=np.int32)
     global_ids = msh.topology.index_map(tdim).local_to_global(local_ids)
@@ -2841,15 +2878,26 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
         and geometry_dofmap.shape[1] == 4
     )
     if not affine_tetra:
-        raise RuntimeError("exact manual-line source integration requires affine tetrahedra")
+        return failed_result(
+            serial=True,
+            affine_tetrahedra=False,
+            reason="affine_tetrahedra_required",
+        )
     candidates = []
     for cell in range(n_local):
         vertices = np.asarray(msh.geometry.x[geometry_dofmap[cell]], dtype=float)
-        interval = _line_tetra_positive_interval(
-            vertices,
-            config.source_start,
-            config.source_end,
-        )
+        try:
+            interval = _line_tetra_positive_interval(
+                vertices,
+                config.source_start,
+                config.source_end,
+            )
+        except (ValueError, np.linalg.LinAlgError):
+            return failed_result(
+                serial=True,
+                affine_tetrahedra=False,
+                reason=f"invalid_affine_tetrahedron:{cell}",
+            )
         if interval is None:
             continue
         candidates.append(
@@ -2865,9 +2913,6 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
         parameter_tolerance=parameter_tolerance,
     )
     diagnostics = result["diagnostics"]
-    source_length = float(
-        np.linalg.norm(np.asarray(config.source_end) - np.asarray(config.source_start))
-    )
     diagnostics.update(
         {
             "serial": serial,
@@ -2886,17 +2931,6 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
         and abs(diagnostics["interval_total_length"] - source_length)
         <= parameter_tolerance * max(source_length, 1.0)
     )
-    if not diagnostics["passed"]:
-        raise RuntimeError(
-            "exact source line tetrahedron interval gate failed: "
-            f"coverage={diagnostics['union_coverage_fraction']:.16g}, "
-            f"gap={diagnostics['gap_length']:.6e} m, "
-            f"overlap={diagnostics['overlap_length']:.6e} m, "
-            f"start={diagnostics['start_endpoint_covered']}, "
-            f"end={diagnostics['end_endpoint_covered']}, "
-            f"positive={diagnostics['positive_intervals']}, "
-            f"affine={diagnostics['affine_tetrahedra']}, serial={diagnostics['serial']}"
-        )
     return {"intervals": result["intervals"], "diagnostics": diagnostics}
 
 
@@ -2987,6 +3021,46 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     cell_l1_contributions: dict[int, float] = {}
     dof_l1_contributions: dict[int, float] = {}
     interval_lengths = []
+    if not bool(interval_gate.get("passed", False)) or not intervals:
+        source_vec.assemble()
+        local_diagnostics = _summarize_manual_line_source_local_diagnostics(
+            npts=0,
+            added=0,
+            missed=0,
+            hit_cell_ids=[],
+            svals=[],
+            cell_l1_contributions={},
+            dof_l1_contributions={},
+        )
+        local_diagnostics.update(
+            {
+                "integration_mode": "exact_tetra_intervals",
+                "formal_acceptance_eligible": True,
+                "assembly_complete": False,
+                "segment_count": int(len(intervals)),
+                "segment_total_length": 0.0,
+                "segment_min_length": 0.0,
+                "segment_max_length": 0.0,
+                "segment_mean_length": 0.0,
+                "quadrature_points_per_segment_min": quadrature_order,
+                "quadrature_points_per_segment_max": quadrature_order,
+                "quadrature_points_per_segment_mean": float(quadrature_order),
+                "quadrature_points": 0,
+                "interval_gate": interval_gate,
+            }
+        )
+        log(
+            "[source] exact tetra interval gate failed; returning a safe empty source "
+            f"for evidence publication; coverage={float(interval_gate.get('union_coverage_fraction', math.nan)):.16g}, "
+            f"gap={float(interval_gate.get('gap_length', math.nan)):.6e} m",
+            comm=msh.comm,
+        )
+        return {
+            "mode": "manual_line",
+            "coeff": None,
+            "vector": source_vec,
+            "local_projection_diagnostics": local_diagnostics,
+        }
     for interval in intervals:
         s_start = float(interval["s_start"])
         s_end = float(interval["s_end"])
@@ -3045,6 +3119,7 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     integration_diagnostics = {
         "integration_mode": "exact_tetra_intervals",
         "formal_acceptance_eligible": True,
+        "assembly_complete": True,
         "segment_count": int(len(intervals)),
         "segment_total_length": float(sum(interval_lengths)),
         "segment_min_length": float(min(interval_lengths)),
@@ -3201,6 +3276,9 @@ def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=
         return source
     if requested in {"auto", "line", "manual_line"}:
         source = _build_manual_line_source(msh, spaces, config)
+        local = source.get("local_projection_diagnostics", {})
+        if not bool(local.get("assembly_complete", False)):
+            return source
         source["vector"], source["projection_diagnostics"] = _enforce_source_charge_conservation(
             msh,
             spaces,
@@ -3545,6 +3623,11 @@ def _source_boundary_elimination_gate_diagnostics(source_info) -> dict[str, Any]
 
 
 def _source_integration_gate_diagnostics(source_info) -> dict[str, Any]:
+    mode = (
+        str(source_info.get("mode", "")).strip().lower()
+        if isinstance(source_info, dict)
+        else ""
+    )
     local = (
         source_info.get("local_projection_diagnostics")
         if isinstance(source_info, dict)
@@ -3553,12 +3636,121 @@ def _source_integration_gate_diagnostics(source_info) -> dict[str, Any]:
     eligible = bool(
         isinstance(local, dict) and local.get("formal_acceptance_eligible", False)
     )
-    return {
-        "passed": eligible,
-        "failed_metrics": [] if eligible else ["formal_acceptance_eligible"],
-        "metrics": {"formal_acceptance_eligible": eligible},
-        "thresholds": {},
+    metrics: dict[str, Any] = {"formal_acceptance_eligible": eligible}
+    thresholds: dict[str, Any] = {"formal_acceptance_eligible": True}
+    failed_metrics = [] if eligible else ["formal_acceptance_eligible"]
+    if mode == "manual_line_collision_diagnostic":
+        return {
+            "passed": not failed_metrics,
+            "failed_metrics": failed_metrics,
+            "metrics": metrics,
+            "thresholds": thresholds,
+        }
+
+    interval_gate = local.get("interval_gate") if isinstance(local, dict) else None
+    if not isinstance(interval_gate, dict):
+        failed_metrics.append("missing_interval_gate_diagnostics")
+        return {
+            "passed": False,
+            "failed_metrics": failed_metrics,
+            "metrics": metrics,
+            "thresholds": thresholds,
+        }
+
+    def finite_metric(name: str) -> float:
+        try:
+            value = float(interval_gate.get(name, math.nan))
+        except (TypeError, ValueError):
+            value = math.nan
+        metrics[name] = value if math.isfinite(value) else None
+        return value
+
+    parameter_tolerance = finite_metric("parameter_tolerance")
+    if not math.isfinite(parameter_tolerance) or parameter_tolerance <= 0.0:
+        parameter_tolerance = 1.0e-12
+    source_length = finite_metric("source_length")
+    length_tolerance = parameter_tolerance * max(source_length, 1.0) if source_length > 0.0 else 0.0
+    coverage = finite_metric("union_coverage_fraction")
+    gap_length = finite_metric("gap_length")
+    overlap_length = finite_metric("overlap_length")
+    interval_total_length = finite_metric("interval_total_length")
+    boolean_metrics = {
+        "assembly_complete": bool(local.get("assembly_complete", False)),
+        "serial": bool(interval_gate.get("serial", False)),
+        "affine_tetrahedra": bool(interval_gate.get("affine_tetrahedra", False)),
+        "start_endpoint_covered": bool(interval_gate.get("start_endpoint_covered", False)),
+        "end_endpoint_covered": bool(interval_gate.get("end_endpoint_covered", False)),
+        "positive_intervals": bool(interval_gate.get("positive_intervals", False)),
+        "interval_gate_passed": bool(interval_gate.get("passed", False)),
     }
+    metrics.update(boolean_metrics)
+    thresholds.update(
+        {
+            "union_coverage_fraction": 1.0,
+            "gap_length": length_tolerance,
+            "overlap_length": length_tolerance,
+            "assembly_complete": True,
+            "serial": True,
+            "affine_tetrahedra": True,
+            "start_endpoint_covered": True,
+            "end_endpoint_covered": True,
+            "positive_intervals": True,
+            "interval_total_length": source_length if math.isfinite(source_length) else None,
+            "interval_gate_passed": True,
+        }
+    )
+    checks = (
+        ("union_coverage_fraction", math.isfinite(coverage) and abs(coverage - 1.0) <= parameter_tolerance),
+        ("gap_length", math.isfinite(gap_length) and 0.0 <= gap_length <= length_tolerance),
+        ("overlap_length", math.isfinite(overlap_length) and 0.0 <= overlap_length <= length_tolerance),
+        ("serial", boolean_metrics["serial"]),
+        ("affine_tetrahedra", boolean_metrics["affine_tetrahedra"]),
+        ("start_endpoint_covered", boolean_metrics["start_endpoint_covered"]),
+        ("end_endpoint_covered", boolean_metrics["end_endpoint_covered"]),
+        ("positive_intervals", boolean_metrics["positive_intervals"]),
+        ("assembly_complete", boolean_metrics["assembly_complete"]),
+        (
+            "interval_total_length",
+            math.isfinite(source_length)
+            and source_length > 0.0
+            and math.isfinite(interval_total_length)
+            and abs(interval_total_length - source_length) <= length_tolerance,
+        ),
+        ("interval_gate_passed", boolean_metrics["interval_gate_passed"]),
+    )
+    failed_metrics.extend(name for name, passed in checks if not passed)
+    return {
+        "passed": not failed_metrics,
+        "failed_metrics": failed_metrics,
+        "metrics": metrics,
+        "thresholds": thresholds,
+    }
+
+
+def _source_requires_formal_integration_gate(source_info) -> bool:
+    if not isinstance(source_info, dict):
+        return False
+    return str(source_info.get("mode", "")).strip().lower() in {
+        "manual_line",
+        "manual_line_collision_diagnostic",
+    }
+
+
+def _require_source_integration_gate(source_info) -> dict[str, Any]:
+    gate = _source_integration_gate_diagnostics(source_info)
+    if gate["passed"]:
+        return gate
+    details = []
+    for metric in gate["failed_metrics"]:
+        value = gate["metrics"].get(metric)
+        if isinstance(value, bool):
+            value_text = str(value)
+        elif value is None:
+            value_text = "invalid"
+        else:
+            value_text = f"{float(value):.6e}"
+        details.append(f"source_integration.{metric}={value_text}")
+    raise RuntimeError("source integration quality gate failed: " + "; ".join(details))
 
 
 def _source_preflight_gate_diagnostics(source_info) -> dict[str, Any]:
@@ -3569,11 +3761,7 @@ def _source_preflight_gate_diagnostics(source_info) -> dict[str, Any]:
         ),
     }
     order = ["source_projection", "source_boundary_elimination"]
-    if (
-        isinstance(source_info, dict)
-        and str(source_info.get("mode", "")).strip().lower()
-        == "manual_line_collision_diagnostic"
-    ):
+    if _source_requires_formal_integration_gate(source_info):
         gates["source_integration"] = _source_integration_gate_diagnostics(source_info)
         order.append("source_integration")
     failed_gates = [name for name in order if not gates[name]["passed"]]
@@ -6161,6 +6349,8 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
     from dolfinx import fem
     from petsc4py import PETSc
 
+    if _source_requires_formal_integration_gate(source):
+        _require_source_integration_gate(source)
     if times is None:
         times = generate_time_array(config)
     schedule = _forward_observation_schedule(times, config)
@@ -6649,6 +6839,8 @@ def run_h_forward(msh, cell_tags, facet_tags, spaces, materials, source, config:
     import numpy as np
     from dolfinx import fem
 
+    if _source_requires_formal_integration_gate(source):
+        _require_source_integration_gate(source)
     if times is None:
         times = generate_time_array(config)
     schedule = _forward_observation_schedule(times, config)
@@ -8633,6 +8825,19 @@ def write_source_only_diagnostics(
         f"relative={source_boundary_elimination_gate['metrics'].get('relative_residual')}; "
         f"limits={source_boundary_elimination_gate['thresholds']}"
     )
+    source_integration_gate = source_preflight_gates["gates"].get("source_integration")
+    if isinstance(source_integration_gate, dict):
+        integration_metrics = source_integration_gate.get("metrics", {})
+        lines.append(
+            "source integration gate: "
+            f"{'PASS' if source_integration_gate.get('passed') else 'FAIL'}; "
+            f"failed={','.join(source_integration_gate.get('failed_metrics', ())) or 'none'}; "
+            f"coverage={integration_metrics.get('union_coverage_fraction')}; "
+            f"gap={integration_metrics.get('gap_length')} m; "
+            f"overlap={integration_metrics.get('overlap_length')} m; "
+            f"serial={integration_metrics.get('serial')}; "
+            f"affine={integration_metrics.get('affine_tetrahedra')}"
+        )
     if source_projection is not None:
         lines.append(
             "source projection: "
@@ -11224,6 +11429,20 @@ def _main_locked(argv: list[str]) -> int:
     apply_transient_sponge(msh, materials, config)
 
     source = build_source(msh, spaces, config, cell_tags)
+    if (
+        _source_requires_formal_integration_gate(source)
+        and not _source_integration_gate_diagnostics(source)["passed"]
+    ):
+        runtime["setup_seconds"] = time.perf_counter() - t0
+        if config.source_only and msh.comm.rank == 0:
+            runtime["total_seconds"] = time.perf_counter() - run_t0
+            write_source_only_diagnostics(
+                config,
+                env,
+                source,
+                runtime=runtime,
+            )
+        _require_source_preflight_gates(source)
     if config.formulation == "h":
         source["current_density"] = _build_regularized_current_density(msh, spaces, config, cell_tags)
     elif str(config.source_term_mode).strip().lower() == "impressed_current":

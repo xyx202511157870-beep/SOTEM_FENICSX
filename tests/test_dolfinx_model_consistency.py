@@ -493,6 +493,60 @@ def test_collision_sampling_source_is_explicitly_ineligible_for_formal_acceptanc
         sp._require_source_preflight_gates(source_info)
 
 
+def _failed_exact_interval_source_info():
+    return {
+        "mode": "manual_line",
+        "vector": object(),
+        "projection_diagnostics": {
+            "endpoint_norm": 1.0,
+            "before_residual": 0.0,
+            "after_residual": 0.0,
+            "correction_l2_over_raw": 0.0,
+        },
+        "boundary_elimination_diagnostics": {"relative_residual": 0.0},
+        "local_projection_diagnostics": {
+            "integration_mode": "exact_tetra_intervals",
+            "formal_acceptance_eligible": True,
+            "assembly_complete": False,
+            "interval_gate": {
+                "passed": False,
+                "serial": True,
+                "affine_tetrahedra": True,
+                "union_coverage_fraction": 0.9,
+                "gap_length": 100.0,
+                "overlap_length": 0.0,
+                "start_endpoint_covered": True,
+                "end_endpoint_covered": True,
+                "positive_intervals": True,
+                "source_length": 1000.0,
+                "interval_total_length": 900.0,
+                "parameter_tolerance": 1.0e-12,
+            },
+        },
+    }
+
+
+def test_formal_exact_manual_line_integration_gate_checks_each_interval_invariant():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp._source_preflight_gate_diagnostics(
+        _failed_exact_interval_source_info()
+    )
+
+    assert diagnostics["passed"] is False
+    assert diagnostics["failed_gates"] == ["source_integration"]
+    gate = diagnostics["gates"]["source_integration"]
+    assert gate["failed_metrics"] == [
+        "union_coverage_fraction",
+        "gap_length",
+        "assembly_complete",
+        "interval_total_length",
+        "interval_gate_passed",
+    ]
+    assert gate["metrics"]["union_coverage_fraction"] == pytest.approx(0.9)
+    assert gate["metrics"]["gap_length"] == pytest.approx(100.0)
+
+
 def _source_projection_info(*, raw_relative, correction_relative, after_relative):
     return {
         "projection_diagnostics": {
@@ -2600,6 +2654,42 @@ def test_source_only_writes_both_failed_source_gates_before_raising(
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_source_only_writes_failed_exact_interval_gate_before_raising(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    events = []
+    _patch_formal_forward_seams(monkeypatch, sp, events, audit_scale=1.0001)
+    source_info = _failed_exact_interval_source_info()
+    source_info.pop("boundary_elimination_diagnostics")
+    monkeypatch.setattr(sp, "build_source", lambda *_args: source_info)
+    monkeypatch.setattr(
+        sp,
+        "_validate_source_after_boundary_elimination",
+        lambda *_args: pytest.fail("invalid interval source must not reach boundary assembly"),
+    )
+    monkeypatch.setattr(
+        sp,
+        "run_fetd_forward",
+        lambda *_args, **_kwargs: pytest.fail("invalid interval source must not reach forward"),
+    )
+
+    with pytest.raises(RuntimeError, match="source_integration.union_coverage_fraction"):
+        sp.main(["--workdir", str(tmp_path), "--source-only", "--no-install"])
+
+    payload = json.loads(
+        (tmp_path / "source_diagnostics.json").read_text(encoding="utf-8")
+    )
+    report = (tmp_path / "source_diagnostics_report.txt").read_text(encoding="utf-8")
+    integration = payload["source_preflight_gates"]["gates"]["source_integration"]
+    assert integration["passed"] is False
+    assert integration["metrics"]["union_coverage_fraction"] == pytest.approx(0.9)
+    assert integration["metrics"]["gap_length"] == pytest.approx(100.0)
+    assert "source integration gate: FAIL" in report
+    assert events == ["mesh"]
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_formal_forward_projection_gate_failure_precedes_reference_and_solver(
     monkeypatch, tmp_path
 ):
@@ -2684,6 +2774,61 @@ def test_direct_fetd_call_requires_both_source_gates_before_any_field_solve(monk
     message = str(exc_info.value)
     assert "source_projection.raw_endpoint_relative_residual" in message
     assert "source_boundary_elimination.relative_residual" in message
+
+
+def test_direct_fetd_call_blocks_failed_exact_interval_gate_before_field_solve(monkeypatch):
+    sp = _load_pipeline_module()
+    monkeypatch.setitem(sys.modules, "dolfinx", SimpleNamespace(fem=object()))
+    monkeypatch.setitem(sys.modules, "petsc4py", SimpleNamespace(PETSc=object()))
+    monkeypatch.setattr(
+        sp,
+        "assemble_operators",
+        lambda *_args, **_kwargs: {"bc_global": []},
+    )
+    monkeypatch.setattr(
+        sp,
+        "_validate_source_after_boundary_elimination",
+        lambda *_args: {"relative_residual": 0.0, "passed": True},
+    )
+    monkeypatch.setattr(
+        sp,
+        "_solve_initial_dc_field",
+        lambda *_args, **_kwargs: pytest.fail("field solve reached after interval gate failure"),
+    )
+
+    with pytest.raises(RuntimeError, match="source_integration.union_coverage_fraction"):
+        sp.run_fetd_forward(
+            object(),
+            object(),
+            object(),
+            {},
+            {},
+            _failed_exact_interval_source_info(),
+            sp.PipelineConfig(ramp_off_time=0.0),
+            times=[1.0e-5],
+        )
+
+
+def test_direct_h_call_blocks_failed_exact_interval_gate_before_operator_assembly(monkeypatch):
+    sp = _load_pipeline_module()
+    monkeypatch.setitem(sys.modules, "dolfinx", SimpleNamespace(fem=object()))
+    monkeypatch.setattr(
+        sp,
+        "assemble_h_operators",
+        lambda *_args, **_kwargs: pytest.fail("H operators reached after interval gate failure"),
+    )
+
+    with pytest.raises(RuntimeError, match="source_integration.union_coverage_fraction"):
+        sp.run_h_forward(
+            object(),
+            object(),
+            object(),
+            {},
+            {},
+            _failed_exact_interval_source_info(),
+            sp.PipelineConfig(formulation="h", ramp_off_time=0.0),
+            times=[1.0e-5],
+        )
 
 
 def test_check_env_only_neither_locks_nor_creates_workdir(monkeypatch, tmp_path):

@@ -204,6 +204,80 @@ def test_order_one_single_cell_source_passes_fixed_projection_gate():
     source["vector"].destroy()
 
 
+def test_exact_builder_returns_safe_empty_source_when_interval_gate_fails(monkeypatch):
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    config = sp.PipelineConfig(
+        nedelec_order=1,
+        source_start=(0.1, 0.1, 0.1),
+        source_end=(0.9, 0.1, 0.1),
+        source_mode="manual_line",
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    failed_gate = {
+        "passed": False,
+        "serial": True,
+        "affine_tetrahedra": True,
+        "union_coverage_fraction": 0.9,
+        "gap_length": 0.08,
+        "overlap_length": 0.0,
+        "start_endpoint_covered": True,
+        "end_endpoint_covered": True,
+        "positive_intervals": True,
+        "source_length": 0.8,
+        "interval_total_length": 0.72,
+        "parameter_tolerance": 1.0e-12,
+    }
+    monkeypatch.setattr(
+        sp,
+        "_exact_source_line_cell_intervals",
+        lambda *_args: {"intervals": [], "diagnostics": failed_gate},
+    )
+
+    source = sp._build_manual_line_source(msh, spaces, config)
+
+    assert source["vector"].norm() == pytest.approx(0.0)
+    assert source["local_projection_diagnostics"]["interval_gate"] == failed_gate
+    assert source["local_projection_diagnostics"]["formal_acceptance_eligible"] is True
+    assert source["local_projection_diagnostics"]["assembly_complete"] is False
+    source["vector"].destroy()
+
+
+def test_exact_geometry_returns_complete_failed_diagnostics_for_uncovered_line():
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 1, 1, 1)
+    config = sp.PipelineConfig(
+        source_start=(2.0, 0.2, 0.2),
+        source_end=(3.0, 0.2, 0.2),
+        source_mode="manual_line",
+    )
+
+    result = sp._exact_source_line_cell_intervals(msh, config)
+
+    assert result["intervals"] == []
+    diagnostics = result["diagnostics"]
+    assert diagnostics["passed"] is False
+    assert diagnostics["serial"] is True
+    assert diagnostics["affine_tetrahedra"] is True
+    assert diagnostics["union_coverage_fraction"] == pytest.approx(0.0)
+    assert diagnostics["gap_length"] == pytest.approx(1.0)
+    assert diagnostics["overlap_length"] == pytest.approx(0.0)
+    assert diagnostics["start_endpoint_covered"] is False
+    assert diagnostics["end_endpoint_covered"] is False
+    assert diagnostics["positive_intervals"] is False
+    assert diagnostics["source_length"] == pytest.approx(1.0)
+    assert diagnostics["interval_total_length"] == pytest.approx(0.0)
+
+
 @pytest.mark.parametrize("nedelec_order", [1, 2])
 def test_cross_cell_exact_segments_satisfy_raw_de_rham_and_reverse_orientation(nedelec_order):
     pytest.importorskip("dolfinx.fem")
