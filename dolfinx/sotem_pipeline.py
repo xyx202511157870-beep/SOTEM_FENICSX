@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import csv
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields as dataclass_fields, replace
 import hashlib
 import importlib
 import importlib.util
@@ -61,12 +61,13 @@ PHYS_SOURCE_LINE = 301
 SPONGE_ALL_SIDES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
 MESH_GENERATOR_CONTRACT_VERSION = "sotem-air-earth-unembedded-probes/v2"
 LOCAL_MESH_MIN_QUALITY = 0.01
-_FORWARD_ARTIFACT_SCHEMA_VERSION = 2
+_FORWARD_ARTIFACT_SCHEMA_VERSION = 3
 _FORWARD_ARTIFACT_IDENTITY_KEYS = (
     "producer_schema_version",
     "producer_nedelec_order",
     "producer_curl_degree",
     "producer_dbdt_observation_schema",
+    "producer_forward_config_fingerprint",
 )
 LOCAL_MESH_MAX_ASPECT = 100.0
 _CHECKOUT_SHARED_MODULES: dict[str, Any] = {}
@@ -3113,6 +3114,81 @@ def _require_source_projection_gate(source_info) -> dict[str, Any]:
     return gate
 
 
+def _source_boundary_elimination_gate_diagnostics(source_info) -> dict[str, Any]:
+    diagnostics = None
+    if isinstance(source_info, dict):
+        candidate = source_info.get("boundary_elimination_diagnostics")
+        if isinstance(candidate, dict):
+            diagnostics = candidate
+        elif "relative_residual" in source_info:
+            diagnostics = source_info
+    thresholds = {"relative_residual": SOURCE_PROJECTION_MAX_AFTER_RELATIVE_RESIDUAL}
+    if diagnostics is None:
+        return {
+            "passed": False,
+            "failed_metrics": ["missing_boundary_elimination_diagnostics"],
+            "metrics": {},
+            "thresholds": thresholds,
+        }
+    try:
+        relative_residual = float(diagnostics.get("relative_residual", math.nan))
+    except (TypeError, ValueError):
+        relative_residual = math.nan
+    metrics = {
+        "relative_residual": relative_residual if math.isfinite(relative_residual) else None
+    }
+    failed_metrics = []
+    if (
+        not math.isfinite(relative_residual)
+        or relative_residual < 0.0
+        or relative_residual > thresholds["relative_residual"]
+    ):
+        failed_metrics.append("relative_residual")
+    return {
+        "passed": not failed_metrics,
+        "failed_metrics": failed_metrics,
+        "metrics": metrics,
+        "thresholds": thresholds,
+    }
+
+
+def _source_preflight_gate_diagnostics(source_info) -> dict[str, Any]:
+    gates = {
+        "source_projection": _source_projection_gate_diagnostics(source_info),
+        "source_boundary_elimination": _source_boundary_elimination_gate_diagnostics(
+            source_info
+        ),
+    }
+    order = ["source_projection", "source_boundary_elimination"]
+    failed_gates = [name for name in order if not gates[name]["passed"]]
+    return {
+        "passed": not failed_gates,
+        "gate_order": order,
+        "failed_gates": failed_gates,
+        "gates": gates,
+    }
+
+
+def _require_source_preflight_gates(source_info) -> dict[str, Any]:
+    aggregate = _source_preflight_gate_diagnostics(source_info)
+    if aggregate["passed"]:
+        return aggregate
+    details = []
+    for gate_name in aggregate["gate_order"]:
+        gate = aggregate["gates"][gate_name]
+        for metric in gate["failed_metrics"]:
+            qualified = f"{gate_name}.{metric}"
+            if metric not in gate["metrics"]:
+                details.append(qualified)
+                continue
+            value = gate["metrics"][metric]
+            value_text = "invalid" if value is None else f"{value:.6e}"
+            limit = gate["thresholds"].get(metric)
+            limit_text = "n/a" if limit is None else f"{limit:.6e}"
+            details.append(f"{qualified}={value_text} (limit={limit_text})")
+    raise RuntimeError("source preflight quality gates failed: " + "; ".join(details))
+
+
 def _finalize_source_projection_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
     gate = _source_projection_gate_diagnostics(diagnostics)
     diagnostics["before_relative_residual"] = gate["metrics"].get(
@@ -3323,9 +3399,10 @@ def _validate_source_after_boundary_elimination(
     config: PipelineConfig,
     boundary_edge_dofs,
 ) -> dict[str, Any]:
-    """Gate the source actually retained after strong edge-BC elimination."""
+    """Diagnose the retained source in the constrained S0 -> V0 de Rham complex."""
 
     import numpy as np
+    from dolfinx import fem, mesh as dmesh
     from dolfinx.fem import petsc as fem_petsc
 
     S = spaces["S"]
@@ -3347,21 +3424,65 @@ def _validate_source_after_boundary_elimination(
     residual.axpy(-1.0, endpoint)
     endpoint_norm = float(endpoint.norm())
     residual_norm = float(residual.norm())
-    relative_residual = residual_norm / endpoint_norm if endpoint_norm > 0.0 else math.inf
+    full_relative_residual = residual_norm / endpoint_norm if endpoint_norm > 0.0 else math.inf
+    boundary_mode = str(config.outer_boundary_mode).strip().lower()
+    if boundary_mode == "pec":
+        boundary_facets = dmesh.locate_entities_boundary(
+            msh,
+            msh.topology.dim - 1,
+            lambda x: np.ones(x.shape[1], dtype=bool),
+        )
+        boundary_scalar_dofs = np.unique(
+            fem.locate_dofs_topological(
+                S, msh.topology.dim - 1, boundary_facets
+            ).astype(np.int32)
+        )
+        constant_constraint_dofs = np.empty(0, dtype=np.int32)
+        constraint_space = "S0"
+    else:
+        boundary_scalar_dofs = np.empty(0, dtype=np.int32)
+        constant_constraint_dofs = _scalar_potential_gauge_dofs(S)
+        constraint_space = "S/mod_constants"
+    scalar_owned = int(S.dofmap.index_map.size_local)
+    boundary_owned = boundary_scalar_dofs[boundary_scalar_dofs < scalar_owned]
+    free_mask = np.ones(scalar_owned, dtype=bool)
+    free_mask[boundary_owned] = False
+    free_mask[constant_constraint_dofs] = False
+    residual_array = residual.getArray(readonly=True)[:scalar_owned]
+    endpoint_array = endpoint.getArray(readonly=True)[:scalar_owned]
+    local_residual_sq = float(np.dot(residual_array[free_mask], residual_array[free_mask]))
+    local_endpoint_sq = float(np.dot(endpoint_array[free_mask], endpoint_array[free_mask]))
+    free_residual_norm = math.sqrt(float(msh.comm.allreduce(local_residual_sq)))
+    free_endpoint_norm = math.sqrt(float(msh.comm.allreduce(local_endpoint_sq)))
+    relative_residual = (
+        free_residual_norm / free_endpoint_norm if free_endpoint_norm > 0.0 else math.inf
+    )
     relative_tolerance = SOURCE_PROJECTION_MAX_AFTER_RELATIVE_RESIDUAL
-    tolerance = max(1.0e-12, relative_tolerance * endpoint_norm)
+    tolerance = max(1.0e-12, relative_tolerance * free_endpoint_norm)
     diagnostics = {
+        "constraint_space": constraint_space,
         "gradient_shape": [int(value) for value in gradient.getSize()],
         "boundary_edge_dof_count": int(len(boundary_edge_dofs)),
+        "boundary_scalar_dof_count": int(len(boundary_scalar_dofs)),
+        "constant_constraint_dof_count": int(
+            msh.comm.allreduce(int(len(constant_constraint_dofs)))
+        ),
+        "free_scalar_dof_count": int(msh.comm.allreduce(int(np.count_nonzero(free_mask)))),
         "source_l2_norm": source_norm,
         "eliminated_l2_norm": eliminated_norm,
         "eliminated_l2_over_source": eliminated_norm / source_norm if source_norm > 0.0 else 0.0,
-        "endpoint_norm": endpoint_norm,
-        "residual_norm": residual_norm,
+        "endpoint_norm": free_endpoint_norm,
+        "residual_norm": free_residual_norm,
         "relative_residual": relative_residual,
+        "full_scalar_endpoint_norm": endpoint_norm,
+        "full_scalar_residual_norm": residual_norm,
+        "full_scalar_relative_residual": full_relative_residual,
+        "free_scalar_endpoint_norm": free_endpoint_norm,
+        "free_scalar_residual_norm": free_residual_norm,
+        "free_scalar_relative_residual": relative_residual,
         "relative_tolerance": relative_tolerance,
         "absolute_tolerance": tolerance,
-        "passed": bool(np.isfinite(residual_norm) and residual_norm <= tolerance),
+        "passed": bool(np.isfinite(free_residual_norm) and free_residual_norm <= tolerance),
     }
     residual.destroy()
     actual_divergence.destroy()
@@ -3369,18 +3490,15 @@ def _validate_source_after_boundary_elimination(
     gradient.destroy()
     eliminated.destroy()
     actual.destroy()
-    if not diagnostics["passed"]:
-        raise RuntimeError(
-            "source charge balance failed after PEC boundary elimination: "
-            f"residual={residual_norm:.6e}, endpoint_norm={endpoint_norm:.6e}, "
-            f"relative={relative_residual:.6e}, tolerance={tolerance:.6e}"
-        )
     log(
-        "[source] charge balance after boundary elimination passed; "
-        f"residual={residual_norm:.6e}, relative={relative_residual:.6e}, "
+        "[source] constrained charge balance after boundary elimination "
+        f"{'passed' if diagnostics['passed'] else 'failed'}; "
+        f"S0_residual={free_residual_norm:.6e}, S0_relative={relative_residual:.6e}, "
+        f"full_S_relative={full_relative_residual:.6e}, "
         f"eliminated_l2/source={diagnostics['eliminated_l2_over_source']:.6e}",
         comm=msh.comm,
     )
+    diagnostics["gate"] = _source_boundary_elimination_gate_diagnostics(diagnostics)
     return diagnostics
 
 
@@ -5627,8 +5745,6 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
     from dolfinx import fem
     from petsc4py import PETSc
 
-    if str(config.source_term_mode).strip().lower() == "impressed_current":
-        _require_source_projection_gate(source)
     if times is None:
         times = generate_time_array(config)
     schedule = _forward_observation_schedule(times, config)
@@ -5647,6 +5763,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             config,
             operators["bc_global"],
         )
+        _require_source_preflight_gates(source)
     divergence_cleaner = None
     if str(config.divergence_cleaning).strip().lower() == "conductivity":
         if debye is not None:
@@ -7818,6 +7935,9 @@ def write_validation_artifacts(
     diagnostics["validation_failure"] = dict(diagnostics)
     source_projection = _source_projection_diagnostics_from_info(source_info)
     source_projection_gate = _source_projection_gate_diagnostics(source_info)
+    source_boundary_elimination_gate = _source_boundary_elimination_gate_diagnostics(
+        source_info
+    )
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
     initial_field_diagnostics = _source_initial_field_diagnostics_from_info(source_info)
     diagnostics["source_consistency"] = diagnose_source_consistency(
@@ -7829,6 +7949,8 @@ def write_validation_artifacts(
     if source_projection is not None:
         diagnostics["source_projection"] = source_projection
     diagnostics["source_projection_gate"] = source_projection_gate
+    diagnostics["source_boundary_elimination_gate"] = source_boundary_elimination_gate
+    diagnostics["source_preflight_gates"] = _source_preflight_gate_diagnostics(source_info)
     if initial_field_diagnostics is not None:
         diagnostics["initial_field"] = initial_field_diagnostics
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
@@ -8006,6 +8128,12 @@ def _write_pre_forward_diagnostics(
     return path
 
 
+def _atomic_write_text(path: Path, payload: str) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(path)
+
+
 def write_source_only_diagnostics(
     config: PipelineConfig,
     env: dict[str, Any],
@@ -8022,6 +8150,10 @@ def write_source_only_diagnostics(
     workdir.mkdir(parents=True, exist_ok=True)
     source_projection = _source_projection_diagnostics_from_info(source_info)
     source_projection_gate = _source_projection_gate_diagnostics(source_info)
+    source_boundary_elimination_gate = _source_boundary_elimination_gate_diagnostics(
+        source_info
+    )
+    source_preflight_gates = _source_preflight_gate_diagnostics(source_info)
     source_local_projection = _source_local_projection_diagnostics_from_info(source_info)
     source_line_orientation = _source_line_orientation_diagnostics_from_info(source_info)
     source_consistency_inputs = _source_consistency_inputs_from_info(source_info)
@@ -8030,6 +8162,8 @@ def write_source_only_diagnostics(
         "source_only": True,
         "source_mode": str(source_info.get("mode")) if isinstance(source_info, dict) else None,
         "source_projection_gate": source_projection_gate,
+        "source_boundary_elimination_gate": source_boundary_elimination_gate,
+        "source_preflight_gates": source_preflight_gates,
         "source_consistency": diagnose_source_consistency(
             config,
             source_projection_residual=source_projection.get("after_residual") if source_projection else None,
@@ -8063,14 +8197,6 @@ def write_source_only_diagnostics(
         diagnostics["preflight"] = json.loads(
             json.dumps(preflight, allow_nan=False, default=float)
         )
-    (workdir / "source_diagnostics.json").write_text(
-        json.dumps(diagnostics, indent=2, sort_keys=True, allow_nan=False),
-        encoding="utf-8",
-    )
-    (workdir / "source_run_config_resolved.yaml").write_text(
-        _resolved_config_yaml(config), encoding="utf-8"
-    )
-
     lines = ["SOTEM source-only diagnostics", "============================", ""]
     lines.append(f"python: {env.get('python', sys.executable)}")
     lines.append(f"source mode: {diagnostics['source_mode']}")
@@ -8083,6 +8209,13 @@ def write_source_only_diagnostics(
         f"correction_l2/raw={source_projection_gate['metrics'].get('correction_l2_over_raw')}; "
         f"after/endpoint={source_projection_gate['metrics'].get('projected_endpoint_relative_residual')}; "
         f"limits={source_projection_gate['thresholds']}"
+    )
+    lines.append(
+        "source boundary elimination gate: "
+        f"{'PASS' if source_boundary_elimination_gate['passed'] else 'FAIL'}; "
+        f"failed={','.join(source_boundary_elimination_gate['failed_metrics']) or 'none'}; "
+        f"relative={source_boundary_elimination_gate['metrics'].get('relative_residual')}; "
+        f"limits={source_boundary_elimination_gate['thresholds']}"
     )
     if source_projection is not None:
         lines.append(
@@ -8191,7 +8324,18 @@ def write_source_only_diagnostics(
         for key, value in sorted(runtime.items()):
             if isinstance(value, (int, float)):
                 lines.append(f"  {key}: {float(value):.6g} s")
-    (workdir / "source_diagnostics_report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(
+        workdir / "source_diagnostics.json",
+        json.dumps(diagnostics, indent=2, sort_keys=True, allow_nan=False) + "\n",
+    )
+    _atomic_write_text(
+        workdir / "source_run_config_resolved.yaml",
+        _resolved_config_yaml(config),
+    )
+    _atomic_write_text(
+        workdir / "source_diagnostics_report.txt",
+        "\n".join(lines) + "\n",
+    )
     return diagnostics
 
 
@@ -9419,6 +9563,83 @@ def _dbdt_observation_schema(config: PipelineConfig) -> str:
     return json.dumps(schema, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+_FORWARD_FINGERPRINT_EXCLUDED_CONFIG_FIELDS = {
+    "workdir",
+    "msh_name",
+    "force_mesh",
+    "checkpoint_forward",
+    "resume_forward",
+    "stop_after_outputs",
+    "source_only",
+    "memory_limit_gb",
+    "memory_safety_fraction",
+}
+
+
+def _canonical_forward_identity_value(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_canonical_forward_identity_value(item) for item in value]
+    if isinstance(value, list):
+        return [_canonical_forward_identity_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_forward_identity_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, float) and not math.isfinite(value):
+        if math.isnan(value):
+            return "NaN"
+        return "Infinity" if value > 0.0 else "-Infinity"
+    return value
+
+
+def _forward_config_identity_payload(config: PipelineConfig) -> dict[str, Any]:
+    config_values = {
+        item.name: _canonical_forward_identity_value(getattr(config, item.name))
+        for item in dataclass_fields(config)
+        if item.name not in _FORWARD_FINGERPRINT_EXCLUDED_CONFIG_FIELDS
+    }
+    mesh_hashes = {
+        "mesh_sha256": _sha256_path(config.mesh_path()) if config.mesh_path().is_file() else None,
+        "dolfinx_mesh_sha256": (
+            _sha256_path(config.dolfinx_mesh_path())
+            if config.dolfinx_mesh_path().is_file()
+            else None
+        ),
+        "mesh_contract_sha256": (
+            _sha256_path(_mesh_contract_path(config))
+            if _mesh_contract_path(config).is_file()
+            else None
+        ),
+    }
+    times = generate_time_array(config)
+    schedule = _forward_observation_schedule(times, config)
+    resolved_schedule = {
+        "step_times": _canonical_forward_identity_value(schedule["step_times"].tolist()),
+        "return_times": _canonical_forward_identity_value(schedule["return_times"].tolist()),
+        "output_step_indices": [int(value) for value in schedule["output_step_indices"]],
+    }
+    return {
+        "schema": "sotem-forward-config/v1",
+        "mesh": mesh_hashes,
+        "config": config_values,
+        "resolved_schedule": resolved_schedule,
+        "dbdt_observation_schema": json.loads(_dbdt_observation_schema(config)),
+    }
+
+
+def _forward_config_fingerprint(config: PipelineConfig) -> str:
+    canonical = json.dumps(
+        _forward_config_identity_payload(config),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _forward_artifact_identity(config: PipelineConfig):
     import numpy as np
 
@@ -9428,6 +9649,9 @@ def _forward_artifact_identity(config: PipelineConfig):
         "producer_nedelec_order": np.asarray(nedelec_order, dtype=np.int64),
         "producer_curl_degree": np.asarray(nedelec_order - 1, dtype=np.int64),
         "producer_dbdt_observation_schema": np.asarray(_dbdt_observation_schema(config)),
+        "producer_forward_config_fingerprint": np.asarray(
+            _forward_config_fingerprint(config)
+        ),
     }
 
 
@@ -10546,7 +10770,7 @@ def _main_locked(argv: list[str]) -> int:
     source = build_source(msh, spaces, config, cell_tags)
     if config.formulation == "h":
         source["current_density"] = _build_regularized_current_density(msh, spaces, config, cell_tags)
-    elif config.source_only and str(config.source_term_mode).strip().lower() == "impressed_current":
+    elif str(config.source_term_mode).strip().lower() == "impressed_current":
         _bc, _bc_dofs, bc_global = _make_zero_tangential_bc(msh, spaces, facet_tags, config)
         source["boundary_elimination_diagnostics"] = _validate_source_after_boundary_elimination(
             msh,
@@ -10583,7 +10807,7 @@ def _main_locked(argv: list[str]) -> int:
             str(config.formulation).strip().lower() == "e"
             and str(config.source_term_mode).strip().lower() == "impressed_current"
         ):
-            _require_source_projection_gate(source)
+            _require_source_preflight_gates(source)
         _require_local_mesh_quality_gate(mesh_quality)
         return 0
     _require_local_mesh_quality_gate(mesh_quality)
@@ -10591,7 +10815,7 @@ def _main_locked(argv: list[str]) -> int:
         str(config.formulation).strip().lower() == "e"
         and str(config.source_term_mode).strip().lower() == "impressed_current"
     ):
-        _require_source_projection_gate(source)
+        _require_source_preflight_gates(source)
     times = generate_time_array(config)
     t0 = time.perf_counter()
     precomputed_ref_result = get_empymod_reference(times, config, mode=ref_mode)

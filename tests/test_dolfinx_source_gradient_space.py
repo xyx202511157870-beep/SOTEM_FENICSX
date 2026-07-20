@@ -247,10 +247,66 @@ def test_order_one_cross_cell_global_gauss_is_rejected_despite_projected_p1_bala
     source["vector"].destroy()
 
 
-def test_actual_source_after_pec_boundary_elimination_keeps_full_p2_balance_and_gates_bad_free_edge():
+@pytest.mark.parametrize("nedelec_order", [1, 2])
+def test_pec_source_gate_uses_free_s0_dofs_not_full_scalar_space(nedelec_order):
     pytest.importorskip("dolfinx.fem")
     pytest.importorskip("dolfinx.mesh")
     from dolfinx import fem, mesh
+    from mpi4py import MPI
+
+    sp = _load_pipeline_module()
+    msh = mesh.create_unit_cube(MPI.COMM_WORLD, 3, 3, 3)
+    config = sp.PipelineConfig(
+        nedelec_order=nedelec_order,
+        source_start=(0.2, 0.285, 0.389),
+        source_end=(0.8, 0.285, 0.389),
+        source_mode="manual_line",
+        source_quadrature_points=257,
+        source_projection_mode="charge_conserving",
+        outer_boundary_mode="pec",
+        rtol=1.0e-11,
+        atol=1.0e-13,
+        max_it=1000,
+    )
+    spaces = sp.build_function_spaces(msh, config)
+    source = sp.build_source(msh, spaces, config)
+    assert sp._require_source_projection_gate(source)["passed"] is True
+    facets = mesh.locate_entities_boundary(
+        msh,
+        msh.topology.dim - 1,
+        lambda x: np.ones(x.shape[1], dtype=bool),
+    )
+    edge_dofs = np.unique(
+        fem.locate_dofs_topological(spaces["V"], msh.topology.dim - 1, facets)
+    )
+    edge_global = spaces["V"].dofmap.index_map.local_to_global(edge_dofs).astype(np.int32)
+
+    diagnostics = sp._validate_source_after_boundary_elimination(
+        msh,
+        spaces,
+        source["vector"],
+        config,
+        edge_global,
+    )
+
+    assert diagnostics["constraint_space"] == "S0"
+    assert diagnostics["boundary_scalar_dof_count"] > 0
+    assert diagnostics["full_scalar_relative_residual"] > 0.05
+    assert diagnostics["free_scalar_relative_residual"] < 1.0e-12
+    assert diagnostics["relative_residual"] == pytest.approx(
+        diagnostics["free_scalar_relative_residual"]
+    )
+    assert diagnostics["passed"] is True
+    source["boundary_elimination_diagnostics"] = diagnostics
+    assert sp._require_source_preflight_gates(source)["passed"] is True
+    source["vector"].destroy()
+
+
+def test_actual_source_after_pec_boundary_elimination_gates_bad_s0_gradient():
+    pytest.importorskip("dolfinx.fem")
+    pytest.importorskip("dolfinx.mesh")
+    from dolfinx import fem, mesh
+    from dolfinx.fem import petsc as fem_petsc
     from mpi4py import MPI
     from petsc4py import PETSc
 
@@ -290,17 +346,37 @@ def test_actual_source_after_pec_boundary_elimination_keeps_full_p2_balance_and_
     assert diagnostics["eliminated_l2_over_source"] < 1.0e-11
 
     bad_source = source["vector"].copy()
-    all_dofs = set(range(spaces["V"].dofmap.index_map.size_global))
-    free_dof = min(all_dofs.difference(int(value) for value in bc_global))
-    bad_source.setValue(free_dof, 1.0, addv=PETSc.InsertMode.ADD_VALUES)
-    bad_source.assemble()
-    with pytest.raises(RuntimeError, match="after PEC boundary elimination"):
-        sp._validate_source_after_boundary_elimination(
-            msh,
-            spaces,
-            bad_source,
-            config,
-            bc_global,
+    boundary_scalar = np.unique(
+        fem.locate_dofs_topological(spaces["S"], msh.topology.dim - 1, facets)
+    )
+    interior_scalar = min(
+        set(range(spaces["S"].dofmap.index_map.size_global)).difference(
+            int(value) for value in boundary_scalar
         )
+    )
+    scalar = fem.Function(spaces["S"])
+    scalar.x.petsc_vec.setValue(interior_scalar, 1.0, addv=PETSc.InsertMode.INSERT_VALUES)
+    scalar.x.petsc_vec.assemble()
+    gradient = fem_petsc.discrete_gradient(spaces["S"], spaces["V"])
+    gradient.assemble()
+    perturbation = bad_source.duplicate()
+    perturbation.set(0.0)
+    gradient.mult(scalar.x.petsc_vec, perturbation)
+    bad_source.axpy(1.0, perturbation)
+    bad_source.assemble()
+    bad_diagnostics = sp._validate_source_after_boundary_elimination(
+        msh,
+        spaces,
+        bad_source,
+        config,
+        bc_global,
+    )
+    assert bad_diagnostics["passed"] is False
+    bad_info = dict(source)
+    bad_info["boundary_elimination_diagnostics"] = bad_diagnostics
+    with pytest.raises(RuntimeError, match="source_boundary_elimination.relative_residual"):
+        sp._require_source_preflight_gates(bad_info)
     bad_source.destroy()
+    perturbation.destroy()
+    gradient.destroy()
     source["vector"].destroy()

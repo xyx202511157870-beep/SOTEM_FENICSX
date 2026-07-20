@@ -1929,7 +1929,11 @@ def _patch_formal_forward_seams(monkeypatch, sp, events, *, audit_scale):
     monkeypatch.setattr(
         sp,
         "_validate_source_after_boundary_elimination",
-        lambda *_args: {"passed": True},
+        lambda *_args: {
+            "passed": True,
+            "relative_residual": 1.0e-12,
+            "relative_tolerance": 1.0e-8,
+        },
     )
     passing_quality = {
         "passed": True,
@@ -2500,7 +2504,7 @@ def test_stage_writer_modes_hold_lock_through_last_stage_action(
     assert events[-1] == "lock:exit"
 
 
-def test_source_only_writes_failed_projection_gate_evidence_before_raising(
+def test_source_only_writes_both_failed_source_gates_before_raising(
     monkeypatch, tmp_path
 ):
     sp = _load_pipeline_module()
@@ -2513,15 +2517,28 @@ def test_source_only_writes_failed_projection_gate_evidence_before_raising(
             "mode": "test",
             "vector": object(),
             "projection_diagnostics": {
-                "before_residual": 0.04,
+                "before_residual": 0.087624,
                 "after_residual": 1.0e-9,
                 "endpoint_norm": 1.0,
-                "correction_l2_over_raw": 0.0100001,
+                "correction_l2_over_raw": 0.005,
             },
         },
     )
+    monkeypatch.setattr(
+        sp,
+        "_validate_source_after_boundary_elimination",
+        lambda *_args: {
+            "passed": False,
+            "relative_residual": 2.6606e-8,
+            "relative_tolerance": 1.0e-8,
+            "absolute_tolerance": 1.0e-8,
+            "endpoint_norm": 1.0,
+            "residual_norm": 2.6606e-8,
+            "eliminated_l2_over_source": 1.0e-8,
+        },
+    )
 
-    with pytest.raises(RuntimeError, match="correction_l2_over_raw"):
+    with pytest.raises(RuntimeError) as exc_info:
         sp.main(["--workdir", str(tmp_path), "--source-only", "--no-install"])
 
     payload = json.loads(
@@ -2530,10 +2547,29 @@ def test_source_only_writes_failed_projection_gate_evidence_before_raising(
     report = (tmp_path / "source_diagnostics_report.txt").read_text(encoding="utf-8")
     assert payload["source_projection_gate"]["passed"] is False
     assert payload["source_projection_gate"]["failed_metrics"] == [
-        "correction_l2_over_raw"
+        "raw_endpoint_relative_residual"
+    ]
+    assert payload["source_boundary_elimination_gate"]["passed"] is False
+    assert payload["source_boundary_elimination_gate"]["failed_metrics"] == [
+        "relative_residual"
+    ]
+    assert payload["source_boundary_elimination_gate"]["thresholds"] == {
+        "relative_residual": 1.0e-8
+    }
+    assert payload["source_preflight_gates"]["failed_gates"] == [
+        "source_projection",
+        "source_boundary_elimination",
     ]
     assert "source projection gate: FAIL" in report
+    assert "source boundary elimination gate: FAIL" in report
+    message = str(exc_info.value)
+    assert "raw_endpoint_relative_residual" in message
+    assert "source_boundary_elimination.relative_residual" in message
+    assert message.index("raw_endpoint_relative_residual") < message.index(
+        "source_boundary_elimination.relative_residual"
+    )
     assert events == ["mesh"]
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_formal_forward_projection_gate_failure_precedes_reference_and_solver(
@@ -2547,6 +2583,7 @@ def test_formal_forward_projection_gate_failure_precedes_reference_and_solver(
         "build_source",
         lambda *_args: {
             "mode": "test",
+            "vector": object(),
             "projection_diagnostics": {
                 "before_residual": 0.050001,
                 "after_residual": 1.0e-9,
@@ -2567,7 +2604,7 @@ def test_formal_forward_projection_gate_failure_precedes_reference_and_solver(
     assert events == ["mesh"]
 
 
-def test_direct_fetd_call_requires_projection_gate_before_operator_assembly(monkeypatch):
+def test_direct_fetd_call_requires_both_source_gates_before_any_field_solve(monkeypatch):
     sp = _load_pipeline_module()
     monkeypatch.setitem(sys.modules, "dolfinx", SimpleNamespace(fem=object()))
     monkeypatch.setitem(
@@ -2578,13 +2615,47 @@ def test_direct_fetd_call_requires_projection_gate_before_operator_assembly(monk
     monkeypatch.setattr(
         sp,
         "assemble_operators",
-        lambda *_args, **_kwargs: pytest.fail("operators assembled before source gate"),
+        lambda *_args, **_kwargs: {"bc_global": []},
     )
+    monkeypatch.setattr(
+        sp,
+        "_validate_source_after_boundary_elimination",
+        lambda *_args: {
+            "relative_residual": 2.6606e-8,
+            "relative_tolerance": 1.0e-8,
+            "passed": False,
+        },
+    )
+    monkeypatch.setattr(
+        sp,
+        "_solve_initial_dc_field",
+        lambda *_args, **_kwargs: pytest.fail("field solve reached after source gate failure"),
+    )
+    source = {
+        "mode": "test",
+        "vector": object(),
+        "projection_diagnostics": {
+            "before_residual": 0.087624,
+            "after_residual": 1.0e-9,
+            "endpoint_norm": 1.0,
+            "correction_l2_over_raw": 0.005,
+        },
+    }
 
-    with pytest.raises(RuntimeError, match="missing_projection_diagnostics"):
+    with pytest.raises(RuntimeError) as exc_info:
         sp.run_fetd_forward(
-            object(), object(), object(), {}, {}, {"mode": "test"}, sp.PipelineConfig()
+            object(),
+            object(),
+            object(),
+            {},
+            {},
+            source,
+            sp.PipelineConfig(ramp_off_time=0.0),
+            times=[1.0e-5],
         )
+    message = str(exc_info.value)
+    assert "source_projection.raw_endpoint_relative_residual" in message
+    assert "source_boundary_elimination.relative_residual" in message
 
 
 def test_check_env_only_neither_locks_nor_creates_workdir(monkeypatch, tmp_path):

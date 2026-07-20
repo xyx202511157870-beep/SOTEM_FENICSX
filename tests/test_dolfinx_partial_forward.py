@@ -110,6 +110,61 @@ def test_forward_partial_rejects_curl_degree_mismatch(tmp_path):
         sp._load_forward_partial(config)
 
 
+@pytest.mark.parametrize(
+    "changed_config",
+    [
+        {"rho_earth": 250.0},
+        {"source_current": 3.0},
+        {"receiver": (125.0, -300.0, -0.1)},
+        {"ramp_off_time": 2.0e-5},
+        {"outer_boundary_mode": "natural"},
+        {"polarization": "cole-cole"},
+        {"empymod_srcpts": 17},
+    ],
+)
+def test_forward_partial_rejects_any_resolved_forward_identity_change(
+    tmp_path, changed_config
+):
+    sp = _load_pipeline_module()
+    saved = sp.PipelineConfig(workdir=tmp_path)
+    sp._save_forward_partial(saved, [1.0e-5], [[1.0, 2.0]], ["Ex", "dBzdt"], [])
+
+    resumed = sp.PipelineConfig(workdir=tmp_path, **changed_config)
+    with pytest.raises(ValueError, match="producer_forward_config_fingerprint"):
+        sp._load_forward_partial(resumed)
+
+
+def test_forward_partial_rejects_mesh_content_change(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    config.mesh_path().write_bytes(b"mesh-v1")
+    config.dolfinx_mesh_path().write_bytes(b"companion-v1")
+    sp._save_forward_partial(config, [1.0e-5], [[1.0, 2.0]], ["Ex", "dBzdt"], [])
+
+    config.dolfinx_mesh_path().write_bytes(b"companion-v2")
+    with pytest.raises(ValueError, match="producer_forward_config_fingerprint"):
+        sp._load_forward_partial(config)
+
+
+def test_forward_fingerprint_ignores_runtime_and_output_control_fields(tmp_path):
+    sp = _load_pipeline_module()
+    baseline = sp.PipelineConfig(workdir=tmp_path)
+    runtime_variant = sp.PipelineConfig(
+        workdir=tmp_path / "other-output",
+        force_mesh=True,
+        checkpoint_forward=True,
+        resume_forward=True,
+        stop_after_outputs=3,
+        source_only=True,
+        memory_limit_gb=12.0,
+        memory_safety_fraction=0.8,
+    )
+
+    assert sp._forward_config_fingerprint(baseline) == sp._forward_config_fingerprint(
+        runtime_variant
+    )
+
+
 def test_save_forward_partial_round_trips_divergence_cleaning_output_stats(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path)
@@ -422,6 +477,42 @@ def test_forward_checkpoint_rejects_dbdt_observation_schema_mismatch(tmp_path):
         sp._load_forward_checkpoint(config, schedule=schedule)
 
 
+@pytest.mark.parametrize(
+    "changed_config",
+    [
+        {"rho_earth": 250.0},
+        {"source_current": 3.0},
+        {"receiver": (125.0, -300.0, -0.1)},
+        {"time_method": "bdf2"},
+    ],
+)
+def test_forward_checkpoint_rejects_resolved_forward_fingerprint_change(
+    tmp_path, changed_config
+):
+    sp = _load_pipeline_module()
+    saved = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
+    schedule = _checkpoint_schedule(sp, saved)
+    sp._save_forward_checkpoint(
+        saved,
+        schedule=schedule,
+        completed_step=0,
+        previous_time=1.0e-5,
+        E_old=_FakeFunction([1.0, 2.0, 3.0]),
+        memories=[],
+        rows=[[7.0, 8.0]],
+        components=["Ex", "dBzdt"],
+        solver_log=[],
+    )
+    resumed = sp.PipelineConfig(
+        workdir=tmp_path,
+        ramp_off_time=0.0,
+        **changed_config,
+    )
+
+    with pytest.raises(ValueError, match="producer_forward_config_fingerprint"):
+        sp._load_forward_checkpoint(resumed, schedule=_checkpoint_schedule(sp, resumed))
+
+
 def test_forward_checkpoint_rejects_resume_with_different_time_level(tmp_path):
     sp = _load_pipeline_module()
     saved_config = sp.PipelineConfig(
@@ -448,7 +539,7 @@ def test_forward_checkpoint_rejects_resume_with_different_time_level(tmp_path):
     )
     resumed_schedule = _checkpoint_schedule(sp, resumed_config)
 
-    with pytest.raises(ValueError, match="forward checkpoint schedule mismatch"):
+    with pytest.raises(ValueError, match="producer_forward_config_fingerprint"):
         sp._load_forward_checkpoint(resumed_config, schedule=resumed_schedule)
 
 
