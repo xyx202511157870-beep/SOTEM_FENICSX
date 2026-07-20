@@ -3026,6 +3026,9 @@ source-term substitution inside the existing total-field equation.
   source-only and full verification reports. This makes source direction,
   integration length, monotonicity, and reversed-orientation status visible
   without digging through nested local-projection diagnostics.
+- Source-only runs write their stage configuration to
+  `source_run_config_resolved.yaml`; the formal acceptance bundle keeps the
+  distinct required name `run_config_resolved.yaml`.
 - Average receiver sampling and simultaneous point/average diagnostic CSV/PNG
   artifact output are implemented and smoke-tested for the E-form DOLFINx
   verification pipeline. Biot-Savart `Hz` now honors average receiver sampling.

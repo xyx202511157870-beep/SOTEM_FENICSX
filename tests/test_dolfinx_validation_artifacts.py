@@ -539,7 +539,8 @@ def test_write_source_only_diagnostics_generates_source_artifacts(tmp_path):
     assert "source line orientation:" in report_text
     assert "reversed=False" in report_text
     assert (tmp_path / "source_diagnostics_report.txt").is_file()
-    assert (tmp_path / "run_config_resolved.yaml").is_file()
+    assert (tmp_path / "source_run_config_resolved.yaml").is_file()
+    assert not (tmp_path / "run_config_resolved.yaml").exists()
 
 
 def test_faraday_integrated_hz_trace_uses_trapezoid_dbdt():

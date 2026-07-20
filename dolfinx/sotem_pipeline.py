@@ -15,6 +15,7 @@ import csv
 from dataclasses import dataclass, field, replace
 import hashlib
 import importlib
+import importlib.util
 import json
 import math
 from numbers import Integral
@@ -7188,7 +7189,9 @@ def write_validation_artifacts(
     diagnostics["divergence_cleaning"] = _divergence_cleaning_summary(solver_log)
     diagnostics["divergence_control"] = _divergence_control_summary(solver_log)
     (workdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
-    (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
+    (workdir / "run_config_resolved.yaml").write_text(
+        _resolved_config_yaml(config), encoding="utf-8"
+    )
     _write_validation_plots(workdir, times, pred_data, ref_data, rows, components)
     return summary
 
@@ -7293,7 +7296,9 @@ def write_source_only_diagnostics(
     if initial_field_diagnostics is not None:
         diagnostics["initial_field"] = initial_field_diagnostics
     (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
-    (workdir / "run_config_resolved.yaml").write_text(_resolved_config_yaml(config), encoding="utf-8")
+    (workdir / "source_run_config_resolved.yaml").write_text(
+        _resolved_config_yaml(config), encoding="utf-8"
+    )
 
     lines = ["SOTEM source-only diagnostics", "============================", ""]
     lines.append(f"python: {env.get('python', sys.executable)}")
@@ -9127,7 +9132,7 @@ def _parse_string_csv(value: str | None) -> tuple[str, ...]:
     return tuple(raw.strip() for raw in str(value).split(",") if raw.strip())
 
 
-def _formal_cli_preflight(argv: list[str]) -> tuple[Path, bool]:
+def _writer_cli_preflight(argv: list[str]) -> tuple[Path, bool]:
     default_workdir = Path(__file__).resolve().parent
     if "-h" in argv or "--help" in argv:
         return default_workdir, False
@@ -9138,16 +9143,13 @@ def _formal_cli_preflight(argv: list[str]) -> tuple[Path, bool]:
     parser.add_argument("--postprocess-partial", action="store_true")
     parser.add_argument("--check-env-only", action="store_true")
     args, _unknown = parser.parse_known_args(argv)
-    is_formal = not args.check_env_only and (
-        args.postprocess_partial or (not args.mesh_only and not args.source_only)
-    )
-    return args.workdir, is_formal
+    return args.workdir, not args.check_env_only
 
 
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    workdir, is_formal = _formal_cli_preflight(raw_argv)
-    if is_formal:
+    workdir, is_writer = _writer_cli_preflight(raw_argv)
+    if is_writer:
         with _formal_run_lock(workdir):
             return _main_locked(raw_argv)
     return _main_locked(raw_argv)
@@ -9433,12 +9435,10 @@ def _main_locked(argv: list[str]) -> int:
         config.formulation = validate_formulation(config)
     except ValueError as exc:
         raise SystemExit(f"[formulation] {exc}") from None
-    is_formal_run = not args.check_env_only and (
-        args.postprocess_partial or (not args.mesh_only and not args.source_only)
-    )
-    if is_formal_run:
+    is_writer_run = not args.check_env_only
+    if is_writer_run:
         _require_fresh_formal_output_directory(config)
-    config.workdir.mkdir(parents=True, exist_ok=True)
+        config.workdir.mkdir(parents=True, exist_ok=True)
     print(
         "[model] "
         f"source_length={model['source_length']:.6g} m; "

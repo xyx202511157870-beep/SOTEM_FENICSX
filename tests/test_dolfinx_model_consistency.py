@@ -1966,6 +1966,8 @@ def test_formal_forward_passes_reference_gate_before_solver_and_reuses_precomput
         ("error_summary.json", []),
         ("verification_result.png", ["--resume-forward"]),
         ("verification_report.txt", ["--postprocess-partial"]),
+        ("run_config_resolved.yaml", ["--source-only"]),
+        ("error_summary.json", ["--mesh-only"]),
     ],
 )
 def test_formal_main_rejects_stale_acceptance_artifacts_before_environment_reference_or_solver(
@@ -1980,6 +1982,9 @@ def test_formal_main_rejects_stale_acceptance_artifacts_before_environment_refer
     audit_path = workdir / "reference_source_quadrature_audit.json"
     audit_bytes = b'{"artifact_scope":"reference-only","old":true}\n'
     audit_path.write_bytes(audit_bytes)
+    mesh_path = workdir / "verification_mesh.msh"
+    mesh_bytes = b"old-mesh-must-not-change"
+    mesh_path.write_bytes(mesh_bytes)
 
     for seam in (
         "check_environment",
@@ -2012,6 +2017,7 @@ def test_formal_main_rejects_stale_acceptance_artifacts_before_environment_refer
 
     assert stale_path.read_bytes() == stale_bytes
     assert audit_path.read_bytes() == audit_bytes
+    assert mesh_path.read_bytes() == mesh_bytes
 
 
 def test_direct_postprocess_rejects_stale_acceptance_artifact_before_loading_partial_or_reference(
@@ -2060,6 +2066,10 @@ def test_formal_artifact_guard_preserves_legal_reference_and_resume_stage_files(
         config.reference_source_quadrature_audit_json(): b"reference-stage-audit",
         config.forward_partial_npz(): b"partial-stage",
         config.forward_checkpoint_npz(): b"resume-stage",
+        config.mesh_path(): b"source-stage-mesh",
+        tmp_path / "source_diagnostics.json": b"source-stage-diagnostics",
+        tmp_path / "source_diagnostics_report.txt": b"source-stage-report",
+        tmp_path / "source_run_config_resolved.yaml": b"source-stage-config",
     }
     for path, payload in stage_files.items():
         path.write_bytes(payload)
@@ -2181,6 +2191,61 @@ def test_formal_run_lock_is_reentrant_releases_after_exception_and_rejects_proce
         pass
 
 
+def test_mesh_source_and_formal_cli_writers_reject_competing_process(tmp_path):
+    sp = _load_pipeline_module()
+    pipeline_path = Path(__file__).resolve().parents[1] / "dolfinx" / "sotem_pipeline.py"
+    workdir = tmp_path / "contended-writer"
+
+    with sp._formal_run_lock(workdir):
+        for mode_args in (("--mesh-only",), ("--source-only",), ()):
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(pipeline_path),
+                    "--workdir",
+                    str(workdir),
+                    *mode_args,
+                    "--no-install",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert completed.returncode != 0
+            assert "another writer holds the run lock" in completed.stderr
+
+    assert not workdir.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX os.fork")
+def test_forked_child_cannot_reenter_parent_formal_run_lock(tmp_path):
+    sp = _load_pipeline_module()
+    run_dir = tmp_path / "fork-locked-run"
+    read_fd, write_fd = os.pipe()
+
+    with sp._formal_run_lock(run_dir):
+        child_pid = os.fork()
+        if child_pid == 0:
+            os.close(read_fd)
+            try:
+                try:
+                    with sp._formal_run_lock(run_dir):
+                        outcome = b"acquired"
+                except RuntimeError:
+                    outcome = b"blocked"
+                os.write(write_fd, outcome)
+            finally:
+                os.close(write_fd)
+                os._exit(0)
+        os.close(write_fd)
+        outcome = os.read(read_fd, 64)
+        os.close(read_fd)
+        waited_pid, status = os.waitpid(child_pid, 0)
+
+    assert waited_pid == child_pid
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert outcome == b"blocked"
+
+
 def test_formal_artifact_guard_rejects_dangling_link_without_following_target(tmp_path):
     sp = _load_pipeline_module()
     workdir = tmp_path / "link-workdir"
@@ -2237,6 +2302,57 @@ def test_formal_main_holds_writer_lock_through_reference_solver_and_failure(
         sp.main(["--workdir", str(tmp_path), "--no-install"])
 
     assert events[-2:] == ["solver:inside-lock", "lock:exit"]
+
+
+@pytest.mark.parametrize("stage_flag", ["--mesh-only", "--source-only"])
+def test_stage_writer_modes_hold_lock_through_last_stage_action(
+    monkeypatch, tmp_path, stage_flag
+):
+    sp = _load_pipeline_module()
+    events = []
+    _patch_formal_forward_seams(monkeypatch, sp, events, audit_scale=1.0001)
+
+    class RecordingLock:
+        def __enter__(self):
+            events.append("lock:enter")
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append("lock:exit")
+
+    monkeypatch.setattr(sp, "_formal_run_lock", lambda _workdir: RecordingLock())
+    monkeypatch.setattr(
+        sp,
+        "write_source_only_diagnostics",
+        lambda *_args, **_kwargs: events.append("write:source-only"),
+    )
+
+    assert sp.main(["--workdir", str(tmp_path), stage_flag, "--no-install"]) == 0
+
+    assert events[0] == "lock:enter"
+    assert "mesh" in events
+    if stage_flag == "--source-only":
+        assert "write:source-only" in events
+    assert events[-1] == "lock:exit"
+
+
+def test_check_env_only_neither_locks_nor_creates_workdir(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    workdir = tmp_path / "check-only"
+    monkeypatch.setattr(
+        sp,
+        "_formal_run_lock",
+        lambda _workdir: pytest.fail("check-env-only must not acquire writer lock"),
+    )
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+
+    assert (
+        sp.main(
+            ["--workdir", str(workdir), "--check-env-only", "--no-install"]
+        )
+        == 0
+    )
+
+    assert not workdir.exists()
 
 
 def test_help_does_not_acquire_formal_writer_lock(monkeypatch):
