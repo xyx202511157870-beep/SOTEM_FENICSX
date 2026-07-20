@@ -119,7 +119,7 @@ class PipelineConfig:
     source_term_mode: str = "impressed_current"  # impressed_current, primary_dc
     formulation: str = "e"  # e, h
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
-    magnetic_receiver_mode: str = "curl"  # curl, biot_current, biot_ohmic, faraday_integrated
+    magnetic_receiver_mode: str = "faraday_integrated"  # curl, biot_current, biot_ohmic, faraday_integrated
     magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
     divergence_cleaning: str = "none"  # none, conductivity
@@ -213,6 +213,9 @@ class PipelineConfig:
 
     def forward_checkpoint_npz(self) -> Path:
         return self.workdir / "forward_checkpoint.npz"
+
+    def reference_source_quadrature_audit_json(self) -> Path:
+        return self.workdir / "reference_source_quadrature_audit.json"
 
     def receiver_diagnostics_csv(self) -> Path:
         return self.workdir / "receiver_diagnostics.csv"
@@ -898,6 +901,11 @@ def validate_formulation(config: PipelineConfig) -> str:
     formulation = str(config.formulation).strip().lower()
     if formulation not in {"e", "h"}:
         raise ValueError("formulation must be 'e' or 'h'")
+    if formulation == "h" and bool(config.resume_forward):
+        raise ValueError(
+            "formulation='h' does not support resume_forward; refusing to rerun "
+            "without a valid H-form checkpoint restore"
+        )
     return formulation
 
 
@@ -6178,6 +6186,38 @@ def _reference_source_quadrature_audit(
     }
 
 
+def _validated_reference_source_quadrature_times(primary_result, audit_result):
+    import numpy as np
+
+    primary_times = np.asarray(primary_result.get("times"), dtype=float)
+    audit_times = np.asarray(audit_result.get("times"), dtype=float)
+    if primary_times.ndim != 1 or audit_times.ndim != 1:
+        raise ValueError("primary and audit reference time axes must be one-dimensional")
+    if primary_times.shape != audit_times.shape:
+        raise ValueError("primary and audit reference time axes must have the same shape")
+    if primary_times.size == 0:
+        raise ValueError("primary and audit reference time axes must contain at least one time")
+    if not np.all(np.isfinite(primary_times)) or not np.all(np.isfinite(audit_times)):
+        raise ValueError("primary and audit reference time axes must contain only finite values")
+    if np.any(primary_times <= 0.0) or np.any(audit_times <= 0.0):
+        raise ValueError("primary and audit reference time axes must be positive")
+    if np.any(np.diff(primary_times) <= 0.0) or np.any(np.diff(audit_times) <= 0.0):
+        raise ValueError("primary and audit reference time axes must be strictly increasing")
+    if not np.array_equal(primary_times, audit_times):
+        raise ValueError("primary and audit reference time axes must be exactly equal")
+
+    primary_data = np.asarray(primary_result.get("data"))
+    audit_data = np.asarray(audit_result.get("data"))
+    if (
+        primary_data.ndim < 1
+        or audit_data.ndim < 1
+        or primary_data.shape[0] != primary_times.size
+        or audit_data.shape[0] != audit_times.size
+    ):
+        raise ValueError("primary and audit references must contain one data row per time")
+    return primary_times.copy()
+
+
 def _require_reference_source_quadrature_audit(
     config: PipelineConfig,
     primary_result,
@@ -6192,6 +6232,7 @@ def _require_reference_source_quadrature_audit(
             "reference_audit_srcpts must be greater than empymod_srcpts so the "
             "acceptance source-quadrature audit cannot be skipped"
         )
+    times = _validated_reference_source_quadrature_times(primary_result, audit_result)
     if tuple(primary_result.get("components", ())) != tuple(
         audit_result.get("components", ())
     ):
@@ -6200,6 +6241,24 @@ def _require_reference_source_quadrature_audit(
         primary_result["data"],
         audit_result["data"],
         primary_result["components"],
+    )
+    for component_summary in summary["components"].values():
+        component_summary["time_at_max"] = float(
+            times[int(component_summary["max_index"])]
+        )
+    summary.update(
+        {
+            "artifact_schema": "atem3d.reference_source_quadrature_audit.v1",
+            "approved_reference_identity": _require_approved_empymod_reference_identity(
+                config
+            ),
+            "primary_srcpts": primary_srcpts,
+            "audit_srcpts": audit_srcpts,
+            "primary_times": times.tolist(),
+            "audit_times": times.tolist(),
+            "time_axes_equal": True,
+            "global_pass": bool(summary["passed"]),
+        }
     )
     if not summary["passed"]:
         details = ", ".join(
@@ -6212,6 +6271,26 @@ def _require_reference_source_quadrature_audit(
             f"{summary['threshold']:.6g}): {details}"
         )
     return summary
+
+
+def _write_reference_source_quadrature_audit(
+    config: PipelineConfig, summary: dict[str, Any]
+) -> Path:
+    if not bool(summary.get("global_pass")):
+        raise ValueError("cannot publish a failed reference source-quadrature audit")
+    payload = json.dumps(
+        summary,
+        allow_nan=False,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    path = config.reference_source_quadrature_audit_json()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(payload + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+    return path
 
 
 def _select_precomputed_reference_times(reference_result, requested_times) -> dict[str, Any]:
@@ -6919,6 +6998,7 @@ def write_validation_artifacts(
     solver_log=None,
     validation_scope: str = "smoke",
     reference_mode: str | None = None,
+    reference_source_quadrature_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write P2 validation CSV/JSON/plot artifacts for a three-component run."""
 
@@ -6937,6 +7017,10 @@ def write_validation_artifacts(
     )
     if reference_mode is not None:
         summary["reference_mode"] = str(reference_mode)
+    if reference_source_quadrature_audit is not None:
+        summary["reference_source_quadrature_audit"] = (
+            reference_source_quadrature_audit
+        )
     from atem3d.validation_3comp import validation_acceptance_status
 
     acceptance_status = validation_acceptance_status(
@@ -7368,6 +7452,7 @@ def write_report(
     source_info,
     debye=None,
     reference_audit_errors=None,
+    reference_source_quadrature_audit=None,
     runtime=None,
 ) -> None:
     """Write a text report with diagnostics and optimization guidance."""
@@ -7755,6 +7840,43 @@ def write_report(
             )
             if values["reference_too_small"]:
                 lines.append(f"    note: {comp} audit denominator is small; weak-component reference may be transform/source-integration sensitive.")
+
+    if reference_source_quadrature_audit is not None:
+        gate = reference_source_quadrature_audit
+        lines.append("")
+        lines.append(
+            "reference source-quadrature acceptance gate "
+            "(distinct from the ordinary 1e-6 floor error metric):"
+        )
+        lines.append(f"  artifact schema: {gate['artifact_schema']}")
+        lines.append(
+            "  approved reference identity: "
+            + json.dumps(
+                gate["approved_reference_identity"],
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        lines.append(
+            f"  primary srcpts={gate['primary_srcpts']}; "
+            f"audit srcpts={gate['audit_srcpts']}; "
+            f"time_count={len(gate['primary_times'])}; "
+            f"time_axes_equal={gate['time_axes_equal']}"
+        )
+        lines.append(
+            f"  threshold={gate['threshold']:.6g}; "
+            f"floor rule={gate['floor_rule']}; "
+            f"global pass={gate['global_pass']}"
+        )
+        for component in ("Ex", "Hz", "dBzdt"):
+            values = gate["components"][component]
+            lines.append(
+                f"  {component}: max={values['max_acceptance_error']:.6e}; "
+                f"index={values['max_index']}; "
+                f"time={values['time_at_max']:.6e} s; "
+                f"pass={values['passed']}"
+            )
 
     lines.append("")
     lines.append("solver log:")
@@ -8818,6 +8940,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
     reference_audit_summary = _require_reference_source_quadrature_audit(
         config, ref_result, audit_ref_result
     )
+    _write_reference_source_quadrature_audit(config, reference_audit_summary)
     reference_audit_errors = compute_error(
         ref_result["data"], audit_ref_result["data"], ref_result["components"]
     )
@@ -8837,6 +8960,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         source_info={"mode": f"postprocess_partial/{config.source_mode}"},
         receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
         solver_log=fem_result.get("solver_log"),
+        reference_source_quadrature_audit=reference_audit_summary,
     )
     runtime["postprocess_seconds"] = time.perf_counter() - t_post
     runtime["total_seconds"] = time.perf_counter() - t0
@@ -8848,6 +8972,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         errors,
         {"mode": f"postprocess_partial/{config.source_mode}"},
         reference_audit_errors=reference_audit_errors,
+        reference_source_quadrature_audit=reference_audit_summary,
         runtime=runtime,
     )
     return {
@@ -8911,7 +9036,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--magnetic-receiver-mode",
         choices=["curl", "biot_current", "biot_ohmic", "faraday_integrated"],
-        default="curl",
+        default="faraday_integrated",
     )
     parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate"], default="curl")
     parser.add_argument("--outer-boundary-mode", choices=["pec", "natural", "robin"], default="pec")
@@ -9153,7 +9278,6 @@ def main(argv: list[str] | None = None) -> int:
         layer_depths=_parse_float_csv(args.layer_depths, "--layer-depths"),
         layer_resistivities=_parse_float_csv(args.layer_resistivities, "--layer-resistivities"),
     )
-    config.workdir.mkdir(parents=True, exist_ok=True)
     try:
         model = validate_model_consistency(config)
     except ValueError as exc:
@@ -9162,6 +9286,7 @@ def main(argv: list[str] | None = None) -> int:
         config.formulation = validate_formulation(config)
     except ValueError as exc:
         raise SystemExit(f"[formulation] {exc}") from None
+    config.workdir.mkdir(parents=True, exist_ok=True)
     print(
         "[model] "
         f"source_length={model['source_length']:.6g} m; "
@@ -9230,9 +9355,10 @@ def main(argv: list[str] | None = None) -> int:
         mode=ref_mode,
         srcpts=int(config.reference_audit_srcpts),
     )
-    _require_reference_source_quadrature_audit(
+    reference_audit_summary = _require_reference_source_quadrature_audit(
         config, precomputed_ref_result, precomputed_audit_ref_result
     )
+    _write_reference_source_quadrature_audit(config, reference_audit_summary)
     runtime["reference_seconds"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     if config.formulation == "h":
@@ -9269,6 +9395,7 @@ def main(argv: list[str] | None = None) -> int:
             source_info=source,
             receiver_diagnostic_rows=fem_result.get("receiver_diagnostic_rows"),
             solver_log=fem_result.get("solver_log"),
+            reference_source_quadrature_audit=reference_audit_summary,
         )
         runtime["postprocess_seconds"] = time.perf_counter() - t0
         runtime["total_seconds"] = time.perf_counter() - run_t0
@@ -9281,6 +9408,7 @@ def main(argv: list[str] | None = None) -> int:
             source,
             debye=debye,
             reference_audit_errors=reference_audit_errors,
+            reference_source_quadrature_audit=reference_audit_summary,
             runtime=runtime,
         )
     return 0

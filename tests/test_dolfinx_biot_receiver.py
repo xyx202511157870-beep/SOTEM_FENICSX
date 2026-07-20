@@ -424,7 +424,8 @@ def test_empymod_reference_has_distinct_exact_and_debye_modes(monkeypatch):
     seen_materials.clear()
     debye = sp.get_empymod_reference(np.array([1.0e-4, 1.0e-3]), config, mode="cole-cole-debye")
 
-    assert exact["data"].shape == debye["data"].shape == (2, 3)
+    assert exact["data"].shape == debye["data"].shape == (2, 4)
+    assert exact["components"] == debye["components"] == ["Ex", "Ey", "Hz", "dBzdt"]
     assert exact["reference_mode"] == "cole-cole-exact"
     assert debye["reference_mode"] == "cole-cole-debye"
     assert exact_materials and seen_materials
@@ -448,7 +449,8 @@ def test_exact_empymod_reference_never_calls_debye_fit(monkeypatch):
 
     result = sp.get_empymod_reference(np.array([1.0e-4, 1.0e-3]), config, mode="cole-cole-exact")
 
-    assert result["data"].shape == (2, 3)
+    assert result["data"].shape == (2, 4)
+    assert result["components"] == ["Ex", "Ey", "Hz", "dBzdt"]
 
 
 def test_debye_empymod_reference_obeys_material_fit_gate(monkeypatch):

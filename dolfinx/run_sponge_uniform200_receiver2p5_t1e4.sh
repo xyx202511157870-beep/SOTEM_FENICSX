@@ -26,6 +26,8 @@ python dolfinx/sotem_pipeline.py \
   --sponge-strength 0.01 \
   --sponge-thickness 1500 \
   --sponge-sides x_min,x_max,y_min,y_max,z_min,z_max \
+  --magnetic-receiver-mode faraday_integrated \
   --empymod-srcpts 65 \
+  --reference-audit-srcpts 129 \
   --max-it 1000 \
   --rtol 1e-8

@@ -21,6 +21,45 @@ def _load_pipeline_module():
     return module
 
 
+def test_error_summary_preserves_reference_source_quadrature_evidence(tmp_path):
+    sp = _load_pipeline_module()
+    times = np.asarray([1.0e-5, 1.0e-4])
+    components = ["Ex", "Ey", "dBzdt"]
+    data = np.asarray([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0]])
+    evidence = {
+        "artifact_schema": "atem3d.reference_source_quadrature_audit.v1",
+        "approved_reference_identity": sp._approved_empymod_reference_identity(),
+        "primary_srcpts": 9,
+        "audit_srcpts": 17,
+        "primary_times": times.tolist(),
+        "audit_times": times.tolist(),
+        "time_axes_equal": True,
+        "threshold": 0.005,
+        "floor_rule": "0.01 * peak(abs(higher-order reference)) per component",
+        "components": {},
+        "failed_components": [],
+        "passed": True,
+        "global_pass": True,
+    }
+
+    returned = sp.write_validation_artifacts(
+        times,
+        data,
+        data.copy(),
+        components,
+        sp.PipelineConfig(workdir=tmp_path),
+        case_type="noip",
+        reference_type="empymod",
+        reference_source_quadrature_audit=evidence,
+    )
+
+    persisted = json.loads(
+        (tmp_path / "error_summary.json").read_text(encoding="utf-8")
+    )
+    assert returned["reference_source_quadrature_audit"] == evidence
+    assert persisted["reference_source_quadrature_audit"] == evidence
+
+
 def test_write_validation_artifacts_generates_required_p2_outputs(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path)

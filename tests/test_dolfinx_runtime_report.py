@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -114,12 +115,20 @@ def test_postprocess_saved_forward_uses_forward_partial_without_rerunning_fem(tm
     result = sp.postprocess_saved_forward(config, env={})
 
     assert reference_srcpts == [None, 17]
+    evidence = json.loads(
+        config.reference_source_quadrature_audit_json().read_text(encoding="utf-8")
+    )
+    summary = json.loads((tmp_path / "error_summary.json").read_text(encoding="utf-8"))
+    assert evidence == result["reference_audit_summary"]
+    assert summary["reference_source_quadrature_audit"] == evidence
     assert result["fem_result"]["data"].shape == (2, 4)
     assert config.output_npz().is_file()
     assert config.output_png().is_file()
     assert config.output_report().is_file()
     text = config.output_report().read_text(encoding="utf-8")
     assert "source mode: postprocess_partial/auto" in text
+    assert "reference source-quadrature acceptance gate" in text
+    assert "distinct from the ordinary 1e-6 floor error metric" in text
 
 
 def test_write_report_records_model_runtime(tmp_path):

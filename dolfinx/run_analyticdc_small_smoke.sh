@@ -23,6 +23,8 @@ python dolfinx/sotem_pipeline.py \
   --receiver-refinement-radius 60 \
   --memory-limit-gb 32 \
   --memory-safety-fraction 0.95 \
+  --magnetic-receiver-mode faraday_integrated \
   --empymod-srcpts 17 \
+  --reference-audit-srcpts 33 \
   --max-it 300 \
   --rtol 1e-7

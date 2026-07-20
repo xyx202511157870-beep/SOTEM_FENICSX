@@ -861,7 +861,7 @@ Expected: FAIL because `dolfinx/run_sotem_benchmark.py` does not exist.
 
 - [ ] **Step 3: 实现仅做参数翻译的 runner**
 
-`build_pipeline_argv(case, variant, level, workdir)` must emit explicit flags for every approved physical parameter, `--time-method theta --time-theta 1`, `--initial-dc-mode fem`, `--magnetic-receiver-mode faraday_integrated`, `--magnetic-dbdt-mode curl`, explicit observations, S/T/B level mesh settings, `--error-min-time 0`, and `--reference-audit-srcpts 9`.
+`build_pipeline_argv(case, variant, level, workdir)` must emit explicit flags for every approved physical parameter, `--time-method theta --time-theta 1`, `--initial-dc-mode fem`, `--magnetic-receiver-mode faraday_integrated`, `--magnetic-dbdt-mode curl`, explicit observations, S/T/B level mesh settings, `--error-min-time 0`, `--empymod-srcpts 9`, and `--reference-audit-srcpts 17`.
 
 For Song no-IP emit `--polarization none --layer-depths 300 --layer-resistivities 100,100`. For Song IP additionally emit `--polarization cole-cole --cole-rho0 100 --cole-m 0.3 --cole-tau 1 --cole-c 0.3 --cole-n-terms 16 --cole-f-min 0.001 --cole-f-max 10000 --cole-n-freq 81 --cole-fit-tolerance 0.01 --cole-layer-top 0 --cole-layer-bottom 300`.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -447,10 +448,15 @@ def test_empymod_receiver_mapping_supports_hz_and_dbdt():
     assert dbdt_factor < 0.0
 
 
-def test_forward_components_include_hz_for_biot_magnetic_receiver():
+def test_forward_components_include_hz_for_formal_default_and_biot_receiver():
     sp = _load_pipeline_module()
 
-    assert sp._forward_components(sp.PipelineConfig()) == ["Ex", "Ey", "dBzdt"]
+    assert sp._forward_components(sp.PipelineConfig()) == ["Ex", "Ey", "Hz", "dBzdt"]
+    assert sp._forward_components(sp.PipelineConfig(magnetic_receiver_mode="curl")) == [
+        "Ex",
+        "Ey",
+        "dBzdt",
+    ]
     assert sp._forward_components(sp.PipelineConfig(magnetic_receiver_mode="biot_current")) == [
         "Ex",
         "Ey",
@@ -615,6 +621,17 @@ def test_pipeline_defaults_to_verified_source_quadrature_pair():
 
     assert config.empymod_srcpts == 9
     assert config.reference_audit_srcpts == 17
+
+
+def test_default_formal_configuration_produces_all_four_real_forward_components():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig()
+
+    diagnostics = sp.validate_model_consistency(config)
+
+    assert config.magnetic_receiver_mode == "faraday_integrated"
+    assert diagnostics["magnetic_receiver_mode"] == "faraday_integrated"
+    assert sp._forward_components(config) == ["Ex", "Ey", "Hz", "dBzdt"]
 
 
 @pytest.mark.parametrize("audit_srcpts", [0, 9])
@@ -847,6 +864,62 @@ def test_pipeline_cli_resolves_independent_qwe_sampling_density(tmp_path, monkey
         "empymod_srcpts": 9,
         "reference_audit_srcpts": 17,
     }
+
+
+def test_pipeline_cli_default_resolves_real_four_component_formal_contract(
+    tmp_path, monkeypatch
+):
+    sp = _load_pipeline_module()
+    captured = {}
+    real_validate = sp.validate_model_consistency
+
+    def capture_config(config):
+        captured["config"] = config
+        return real_validate(config)
+
+    monkeypatch.setattr(sp, "validate_model_consistency", capture_config)
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+
+    assert (
+        sp.main(
+            [
+                "--workdir",
+                str(tmp_path / "four-component-default"),
+                "--check-env-only",
+                "--no-install",
+            ]
+        )
+        == 0
+    )
+
+    config = captured["config"]
+    assert config.magnetic_receiver_mode == "faraday_integrated"
+    assert sp._forward_components(config) == ["Ex", "Ey", "Hz", "dBzdt"]
+
+
+def test_tracked_smoke_scripts_use_explicit_approved_quadrature_pairs_and_hz_mode():
+    root = Path(__file__).resolve().parents[1]
+    contracts = {
+        "run_analyticdc_small_smoke.sh": (17, 33),
+        "run_sponge_uniform200_receiver2p5_t1e4.sh": (65, 129),
+    }
+
+    for name, (primary, audit) in contracts.items():
+        text = (root / "dolfinx" / name).read_text(encoding="utf-8")
+        assert f"--empymod-srcpts {primary}" in text
+        assert f"--reference-audit-srcpts {audit}" in text
+        assert "--magnetic-receiver-mode faraday_integrated" in text
+
+
+def test_reviewed_plan_records_nonconflicting_primary_and_audit_source_quadrature():
+    root = Path(__file__).resolve().parents[1]
+    plan = (
+        root / "docs" / "superpowers" / "plans" / "2026-07-19-lei-song-sotem-validation.md"
+    ).read_text(encoding="utf-8")
+
+    assert "`--empymod-srcpts 9`" in plan
+    assert "`--reference-audit-srcpts 17`" in plan
+    assert "`--reference-audit-srcpts 9`" not in plan
 
 
 def test_receiver_evaluation_mode_defaults_to_median():
@@ -1588,10 +1661,12 @@ def test_postprocess_reference_quadrature_failure_blocks_acceptance_writes(
         ),
     )
 
+    config = sp.PipelineConfig(workdir=tmp_path)
     with pytest.raises(RuntimeError, match="source-quadrature audit failed.*Ex"):
-        sp.postprocess_saved_forward(sp.PipelineConfig(workdir=tmp_path), {})
+        sp.postprocess_saved_forward(config, {})
 
     assert calls == [None, 17]
+    assert not config.reference_source_quadrature_audit_json().exists()
     assert not any(tmp_path.iterdir())
 
 
@@ -1638,6 +1713,56 @@ def test_reference_source_quadrature_audit_accepts_all_three_required_components
     assert summary["passed"] is True
     assert summary["failed_components"] == []
     assert set(summary["components"]) == {"Ex", "Hz", "dBzdt"}
+
+
+@pytest.mark.parametrize(
+    "primary_times,audit_times,error",
+    [
+        ([], [], "at least one"),
+        ([[1.0e-4, 1.0e-3]], [[1.0e-4, 1.0e-3]], "one-dimensional"),
+        ([1.0e-4], [1.0e-4, 1.0e-3], "same shape"),
+        ([1.0e-4, 1.0e-3], [1.0e-4, 2.0e-3], "exactly equal"),
+        ([1.0e-4, float("nan")], [1.0e-4, float("nan")], "finite"),
+        ([1.0e-4, 1.0e-3], [0.0, 1.0e-3], "positive"),
+        ([1.0e-4, 1.0e-3], [1.0e-3, 1.0e-4], "strictly increasing"),
+    ],
+)
+def test_required_reference_source_quadrature_rejects_invalid_or_unequal_time_axes(
+    primary_times, audit_times, error
+):
+    sp = _load_pipeline_module()
+    components = ("Ex", "Hz", "dBzdt")
+    primary = {
+        "times": np.asarray(primary_times),
+        "data": np.ones((len(primary_times), len(components))),
+        "components": components,
+    }
+    audit = {
+        "times": np.asarray(audit_times),
+        "data": np.ones((len(audit_times), len(components))),
+        "components": components,
+    }
+
+    with pytest.raises(ValueError, match=error):
+        sp._require_reference_source_quadrature_audit(
+            sp.PipelineConfig(), primary, audit
+        )
+
+
+def test_required_reference_source_quadrature_rejects_time_axis_without_data_row():
+    sp = _load_pipeline_module()
+    components = ("Ex", "Hz", "dBzdt")
+    times = np.asarray([1.0e-4, 1.0e-3])
+    result = {
+        "times": times,
+        "data": np.ones((1, len(components))),
+        "components": components,
+    }
+
+    with pytest.raises(ValueError, match="one data row per time"):
+        sp._require_reference_source_quadrature_audit(
+            sp.PipelineConfig(), result, dict(result)
+        )
 
 
 def _patch_formal_forward_seams(monkeypatch, sp, events, *, audit_scale):
@@ -1769,12 +1894,18 @@ def test_formal_forward_passes_reference_gate_before_solver_and_reuses_precomput
     monkeypatch.setattr(
         sp, "plot_verification", lambda *_args, **_kwargs: events.append("write:plot")
     )
-    monkeypatch.setattr(
-        sp,
-        "write_validation_artifacts",
-        lambda *_args, **_kwargs: events.append("write:acceptance"),
-    )
-    monkeypatch.setattr(sp, "write_report", lambda *_args, **_kwargs: events.append("write:report"))
+    evidence_chain = {}
+
+    def capture_validation(*_args, reference_source_quadrature_audit=None, **_kwargs):
+        evidence_chain["validation"] = reference_source_quadrature_audit
+        events.append("write:acceptance")
+
+    def capture_report(*_args, reference_source_quadrature_audit=None, **_kwargs):
+        evidence_chain["report"] = reference_source_quadrature_audit
+        events.append("write:report")
+
+    monkeypatch.setattr(sp, "write_validation_artifacts", capture_validation)
+    monkeypatch.setattr(sp, "write_report", capture_report)
 
     assert (
         sp.main(
@@ -1797,6 +1928,72 @@ def test_formal_forward_passes_reference_gate_before_solver_and_reuses_precomput
     ]
     assert events.count("reference:None") == 1
     assert events.count("reference:17") == 1
+    evidence = json.loads(
+        (tmp_path / "reference_source_quadrature_audit.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert evidence == evidence_chain["validation"] == evidence_chain["report"]
+    assert evidence["artifact_schema"] == "atem3d.reference_source_quadrature_audit.v1"
+    assert evidence["approved_reference_identity"] == sp._approved_empymod_reference_identity()
+    assert evidence["primary_srcpts"] == 9
+    assert evidence["audit_srcpts"] == 17
+    assert evidence["primary_times"] == times.tolist()
+    assert evidence["audit_times"] == times.tolist()
+    assert evidence["time_axes_equal"] is True
+    assert evidence["threshold"] == pytest.approx(0.005)
+    assert evidence["floor_rule"] == "0.01 * peak(abs(higher-order reference)) per component"
+    assert evidence["global_pass"] is True
+    assert set(evidence["components"]) == {"Ex", "Hz", "dBzdt"}
+    for component in evidence["components"].values():
+        assert set(component) >= {
+            "max_acceptance_error",
+            "max_index",
+            "time_at_max",
+            "passed",
+        }
+
+
+def test_h_form_resume_fails_before_environment_mesh_reference_forward_or_writes(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    workdir = tmp_path / "h-resume"
+
+    for seam in (
+        "check_environment",
+        "generate_verification_mesh",
+        "get_empymod_reference",
+        "run_h_forward",
+        "_save_forward_partial",
+        "_save_forward_checkpoint",
+        "_save_npz",
+        "plot_verification",
+        "write_validation_artifacts",
+        "write_report",
+    ):
+        monkeypatch.setattr(
+            sp,
+            seam,
+            lambda *_args, _seam=seam, **_kwargs: pytest.fail(
+                f"H resume reached forbidden seam: {_seam}"
+            ),
+        )
+
+    with pytest.raises(SystemExit, match="formulation.*h.*resume_forward"):
+        sp.main(
+            [
+                "--workdir",
+                str(workdir),
+                "--formulation",
+                "h",
+                "--resume-forward",
+                "--check-env-only",
+                "--no-install",
+            ]
+        )
+
+    assert not workdir.exists()
 
 
 def test_report_uses_reference_mode_from_reference_result(tmp_path):
