@@ -4883,6 +4883,15 @@ def _receiver_candidate_geometry_stats(sample_metadata) -> dict[str, float | int
     }
 
 
+def _receiver_curl_observation_description(config: PipelineConfig) -> str:
+    curl_degree = int(config.nedelec_order) - 1
+    return (
+        f"dBz/dt comes from a vector DG{curl_degree} interpolation of -curl(E); "
+        "at shared receiver points, the selected mode combines the colliding "
+        "cellwise traces."
+    )
+
+
 def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     """Evaluate Ex, Ey and dBz/dt at the configured receiver point."""
 
@@ -4892,8 +4901,7 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
         log(
             f"[receiver] Ex/Ey and dBz/dt are evaluated with receiver_type={config.receiver_type}, "
             f"receiver_evaluation_mode={config.receiver_evaluation_mode}. "
-            "dBz/dt comes from a DG0 interpolation of -curl(E); at shared receiver points, "
-            "the selected mode combines the colliding cellwise-constant candidates.",
+            + _receiver_curl_observation_description(config),
             comm=msh.comm,
         )
         setattr(evaluate_receivers, "_logged_dbdt_mode", True)

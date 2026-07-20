@@ -90,6 +90,26 @@ def test_compute_dbdt_uses_dedicated_curl_observation_space(monkeypatch):
     assert result.name == "dBdt"
 
 
+@pytest.mark.parametrize(
+    "nedelec_order, expected",
+    [
+        (1, "vector DG0 interpolation of -curl(E)"),
+        (2, "vector DG1 interpolation of -curl(E)"),
+    ],
+)
+def test_receiver_log_describes_the_actual_curl_observation_space(
+    nedelec_order, expected
+):
+    sp = _load_pipeline_module()
+
+    description = sp._receiver_curl_observation_description(
+        sp.PipelineConfig(nedelec_order=nedelec_order)
+    )
+
+    assert expected in description
+    assert "colliding cellwise traces" in description
+
+
 def test_nedelec_order_two_linear_curl_is_recovered_exactly_and_beats_dg0():
     pytest.importorskip("dolfinx.fem")
     pytest.importorskip("dolfinx.mesh")
