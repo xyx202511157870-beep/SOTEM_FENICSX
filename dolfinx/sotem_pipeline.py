@@ -108,6 +108,7 @@ class PipelineConfig:
     ramp_solver_t_min: float = 1.0e-6
     min_steps_during_turnoff: int = 10
     min_steps_before_first_observation: int = 1
+    output_interval_substeps: int = 1
 
     source_mode: str = "auto"  # auto, line, manual_line, regularized
     source_projection_mode: str = "charge_conserving"  # charge_conserving, raw
@@ -629,6 +630,12 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "min_steps_before_first_observation must be positive; "
             f"got {min_steps_before_first_observation}"
         )
+    output_interval_substeps = int(config.output_interval_substeps)
+    if output_interval_substeps <= 0:
+        raise ValueError(
+            "output_interval_substeps must be positive; "
+            f"got {output_interval_substeps}"
+        )
     if not math.isfinite(float(config.error_min_time)) or float(config.error_min_time) < 0.0:
         raise ValueError(f"error_min_time must be finite and nonnegative; got {float(config.error_min_time):.12g}")
     weak_fraction = float(config.weak_component_reference_fraction)
@@ -807,6 +814,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "ramp_solver_t_min": float(config.ramp_solver_t_min),
             "min_steps_during_turnoff": min_steps_during_turnoff,
             "min_steps_before_first_observation": min_steps_before_first_observation,
+            "output_interval_substeps": output_interval_substeps,
             "empymod_srcpts": empymod_srcpts,
             "empymod_ht": empymod_ht,
             "empymod_ft": empymod_ft,
@@ -970,25 +978,35 @@ def _forward_observation_schedule(times, config: PipelineConfig):
         raise ValueError("times must be strictly increasing")
 
     time_origin = str(config.time_origin).strip().lower()
+    output_interval_substeps = max(1, int(config.output_interval_substeps))
     if time_origin == "ramp_start":
-        step_times = observation_times.copy()
         output_internal_times = observation_times.copy()
+        interval_steps = []
+        previous_time = 0.0
+        for output_time in output_internal_times:
+            interval_steps.extend(
+                np.linspace(previous_time, output_time, output_interval_substeps + 1)[1:]
+            )
+            previous_time = output_time
+        step_times = np.asarray(interval_steps, dtype=float)
     elif time_origin == "after_ramp":
         ramp_time = float(config.ramp_off_time)
-        if ramp_time == 0.0:
-            return {
-                "step_times": observation_times.copy(),
-                "output_internal_times": observation_times.copy(),
-                "return_times": observation_times.copy(),
-                "output_step_indices": list(range(observation_times.size)),
-            }
-        min_steps = max(1, int(config.min_steps_during_turnoff))
-        ramp_start = min(float(config.ramp_solver_t_min), ramp_time / min_steps)
-        ramp_steps = np.linspace(ramp_start, ramp_time, min_steps)
         output_internal_times = ramp_time + observation_times
-        first_obs_steps = int(config.min_steps_before_first_observation)
-        first_obs_internal_steps = np.linspace(ramp_time, output_internal_times[0], first_obs_steps + 1)[1:]
-        step_times = np.unique(np.r_[ramp_steps, first_obs_internal_steps, output_internal_times])
+        if ramp_time > 0.0:
+            min_steps = max(1, int(config.min_steps_during_turnoff))
+            ramp_start = min(float(config.ramp_solver_t_min), ramp_time / min_steps)
+            ramp_steps = np.linspace(ramp_start, ramp_time, min_steps)
+        else:
+            ramp_steps = np.empty(0, dtype=float)
+        interval_steps = []
+        previous_time = ramp_time
+        for index, output_time in enumerate(output_internal_times):
+            substeps = output_interval_substeps
+            if index == 0:
+                substeps = max(substeps, int(config.min_steps_before_first_observation))
+            interval_steps.extend(np.linspace(previous_time, output_time, substeps + 1)[1:])
+            previous_time = output_time
+        step_times = np.unique(np.r_[ramp_steps, interval_steps])
     else:
         raise ValueError("time_origin must be 'after_ramp' or 'ramp_start'")
 
@@ -6607,6 +6625,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "observation_times": observation_times.tolist(),
         "min_steps_during_turnoff": int(config.min_steps_during_turnoff),
         "min_steps_before_first_observation": int(config.min_steps_before_first_observation),
+        "output_interval_substeps": int(config.output_interval_substeps),
         "components": "runtime",
         "outer_boundary_mode": str(config.outer_boundary_mode),
         "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
@@ -7119,7 +7138,8 @@ def write_report(
         f"configured_t_max={config.t_max:g} s; effective_t_max={_effective_t_max(config):g} s; "
         f"ramp_solver_t_min={config.ramp_solver_t_min:g} s; "
         f"min_steps_during_turnoff={config.min_steps_during_turnoff}; "
-        f"min_steps_before_first_observation={config.min_steps_before_first_observation}"
+        f"min_steps_before_first_observation={config.min_steps_before_first_observation}; "
+        f"output_interval_substeps={config.output_interval_substeps}"
     )
     lines.append(f"  empymod srcpts: {config.empymod_srcpts}; ht={config.empymod_ht}; ft={config.empymod_ft}")
     if str(config.polarization).strip().lower() == "cole-cole":
@@ -8482,6 +8502,12 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="Internal solve steps from ramp-off end to the first after-ramp observation; 1 keeps only the output step.",
     )
+    parser.add_argument(
+        "--output-interval-substeps",
+        type=int,
+        default=1,
+        help="Minimum internal solve substeps in every interval ending at an output time.",
+    )
     parser.add_argument("--x-extent", type=float, default=25_000.0)
     parser.add_argument("--y-extent", type=float, default=25_000.0)
     parser.add_argument("--air-height", type=float, default=10_000.0)
@@ -8562,6 +8588,7 @@ def main(argv: list[str] | None = None) -> int:
         time_origin=args.time_origin,
         min_steps_during_turnoff=args.min_steps_during_turnoff,
         min_steps_before_first_observation=args.min_steps_before_first_observation,
+        output_interval_substeps=args.output_interval_substeps,
         empymod_srcpts=args.empymod_srcpts,
         empymod_ht=args.empymod_ht,
         empymod_ft=args.empymod_ft,

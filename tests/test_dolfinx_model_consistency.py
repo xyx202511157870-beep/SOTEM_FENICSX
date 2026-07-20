@@ -838,6 +838,40 @@ def test_ideal_step_off_schedule_has_no_synthetic_ramp_steps():
     assert schedule["output_step_indices"] == [0, 1, 2]
 
 
+def test_ideal_step_off_schedule_subdivides_every_output_interval():
+    sp = _load_pipeline_module()
+    times = np.array([1.0e-5, 1.0e-4, 1.0e-3])
+
+    schedule = sp._forward_observation_schedule(
+        times,
+        sp.PipelineConfig(
+            ramp_off_time=0.0,
+            time_origin="after_ramp",
+            output_interval_substeps=4,
+        ),
+    )
+
+    assert schedule["step_times"].tolist() == pytest.approx(
+        [
+            2.5e-6,
+            5.0e-6,
+            7.5e-6,
+            1.0e-5,
+            3.25e-5,
+            5.5e-5,
+            7.75e-5,
+            1.0e-4,
+            3.25e-4,
+            5.5e-4,
+            7.75e-4,
+            1.0e-3,
+        ]
+    )
+    assert schedule["output_internal_times"].tolist() == pytest.approx(times)
+    assert schedule["return_times"].tolist() == pytest.approx(times)
+    assert schedule["output_step_indices"] == [3, 7, 11]
+
+
 def test_explicit_observation_times_round_trip_through_cli_and_resolved_yaml(monkeypatch, tmp_path):
     sp = _load_pipeline_module()
     captured = {}
@@ -856,6 +890,8 @@ def test_explicit_observation_times_round_trip_through_cli_and_resolved_yaml(mon
             str(tmp_path),
             "--observation-times",
             "1e-5,1e-4,1e-3",
+            "--output-interval-substeps",
+            "4",
             "--check-env-only",
             "--no-install",
         ]
@@ -863,6 +899,7 @@ def test_explicit_observation_times_round_trip_through_cli_and_resolved_yaml(mon
 
     assert result == 0
     assert captured["config"].observation_times == pytest.approx((1.0e-5, 1.0e-4, 1.0e-3))
+    assert captured["config"].output_interval_substeps == 4
     resolved = sp._resolved_config_yaml(captured["config"])
     assert "observation_times: [1e-05, 0.0001, 0.001]\n" in resolved
     assert "configured_t_max: 1\n" in resolved
