@@ -1100,6 +1100,52 @@ def test_cg_linear_solver_mode_matches_direct_solution_for_small_problem():
     np.testing.assert_allclose(cg.e, direct.e, rtol=1.0e-8, atol=1.0e-10)
 
 
+@pytest.mark.parametrize("cg_tolerance", [np.nan, np.inf, -np.inf, True, "1e-8"])
+def test_cg_rejects_nonfinite_or_nonreal_tolerance(cg_tolerance):
+    mesh = _mesh()
+    with pytest.raises(ValueError, match="cg_tolerance must be finite and positive"):
+        TDEMIPSimulation(
+            mesh=mesh,
+            ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+            time_steps=[0.1],
+            linear_solver="cg",
+            cg_tolerance=cg_tolerance,
+        )
+
+
+@pytest.mark.parametrize(
+    "cg_maxiter",
+    [True, False, 0, -1, 1.5, np.nan, np.inf, "2000"],
+)
+def test_cg_rejects_nonpositive_or_noninteger_maxiter(cg_maxiter):
+    mesh = _mesh()
+    with pytest.raises(
+        ValueError,
+        match="cg_maxiter must be a positive integer excluding bool or None",
+    ):
+        TDEMIPSimulation(
+            mesh=mesh,
+            ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+            time_steps=[0.1],
+            linear_solver="cg",
+            cg_maxiter=cg_maxiter,
+        )
+
+
+def test_cg_normalizes_numpy_integer_maxiter_for_json_diagnostics():
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+        time_steps=[0.1],
+        linear_solver="cg",
+        cg_maxiter=np.int64(17),
+    )
+
+    assert simulation.cg_maxiter == 17
+    assert type(simulation.cg_maxiter) is int
+
+
 def _cg_failure_payload(error: RuntimeError) -> dict:
     prefix = "CG solver failed convergence gate: "
     message = str(error)
@@ -1129,6 +1175,8 @@ def test_cg_failure_reports_step_dt_residual_and_matrix_diagnostics(monkeypatch)
         simulation._solver_for_step(0)(rhs)
 
     payload = _cg_failure_payload(caught.value)
+    assert payload["diagnostic_schema"] == "atem3d.cg-convergence-diagnostic"
+    assert payload["diagnostic_schema_version"] == 2
     assert payload["reason"] == "backend_failed"
     assert payload["step_index"] == 0
     assert payload["dt_s"] == pytest.approx(0.125)
@@ -1140,7 +1188,8 @@ def test_cg_failure_reports_step_dt_residual_and_matrix_diagnostics(monkeypatch)
     assert payload["relative_true_residual"] == {
         "initial": pytest.approx(1.0),
         "final": pytest.approx(1.0),
-        "best": pytest.approx(1.0),
+        "best": None,
+        "history_available": False,
     }
     assert payload["matrix"]["shape"] == [mesh.n_edges, mesh.n_edges]
     assert payload["matrix"]["diagonal_min"] > 0.0
@@ -1175,6 +1224,43 @@ def test_cg_rejects_backend_success_when_external_true_residual_misses_rtol(
     assert payload["backend_reported_converged"] is True
     assert payload["relative_true_residual"]["final"] == pytest.approx(1.0)
     assert payload["relative_true_residual"]["final"] > payload["rtol"]
+
+
+def test_cg_callback_only_counts_iterations_and_true_residual_is_recomputed_once(
+    monkeypatch,
+):
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.ones(mesh.n_cells)),
+        time_steps=[0.25],
+        linear_solver="cg",
+        cg_tolerance=1.0e-8,
+    )
+
+    class CountingIdentity:
+        shape = (mesh.n_edges, mesh.n_edges)
+        matvec_count = 0
+
+        def __matmul__(self, values):
+            self.matvec_count += 1
+            return np.asarray(values)
+
+    matrix = CountingIdentity()
+    monkeypatch.setattr(simulation, "system_matrix", lambda _step_index: matrix)
+    monkeypatch.setattr(simulation, "_cg_preconditioner", lambda _matrix: None)
+
+    def successful_cg(_matrix, rhs, *, callback, **_kwargs):
+        for _ in range(5):
+            callback(np.zeros_like(rhs))
+        return np.asarray(rhs).copy(), 0
+
+    monkeypatch.setattr(simulation_module.spla, "cg", successful_cg)
+
+    solution = simulation._solver_for_step(0)(np.ones(mesh.n_edges))
+
+    np.testing.assert_array_equal(solution, np.ones(mesh.n_edges))
+    assert matrix.matvec_count == 1
 
 
 def test_pardiso_linear_solver_mode_matches_direct_solution_for_small_problem():

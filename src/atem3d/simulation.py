@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Sequence
 
 import numpy as np
@@ -121,10 +122,24 @@ class TDEMIPSimulation:
             )
         if self.linear_solver not in {"direct", "cg", "pardiso"}:
             raise ValueError("linear_solver must be 'direct', 'cg', or 'pardiso'")
-        if self.cg_tolerance <= 0.0:
-            raise ValueError("cg_tolerance must be positive")
-        if self.cg_maxiter is not None and self.cg_maxiter <= 0:
-            raise ValueError("cg_maxiter must be positive or None")
+        if (
+            isinstance(self.cg_tolerance, bool)
+            or not isinstance(self.cg_tolerance, Real)
+            or not np.isfinite(self.cg_tolerance)
+            or self.cg_tolerance <= 0.0
+        ):
+            raise ValueError("cg_tolerance must be finite and positive")
+        self.cg_tolerance = float(self.cg_tolerance)
+        if self.cg_maxiter is not None:
+            if (
+                isinstance(self.cg_maxiter, bool)
+                or not isinstance(self.cg_maxiter, Integral)
+                or self.cg_maxiter <= 0
+            ):
+                raise ValueError(
+                    "cg_maxiter must be a positive integer excluding bool or None"
+                )
+            self.cg_maxiter = int(self.cg_maxiter)
         if self.cg_preconditioner not in {"none", "jacobi"}:
             raise ValueError("cg_preconditioner must be 'none' or 'jacobi'")
         if self.magnetic_receiver_mode not in {
@@ -875,7 +890,6 @@ class TDEMIPSimulation:
                 rhs = np.asarray(rhs, dtype=float)
                 rhs_norm = float(np.linalg.norm(rhs))
                 initial_relative_residual = 0.0 if rhs_norm == 0.0 else 1.0
-                best_relative_residual = initial_relative_residual
                 iterations = 0
 
                 def relative_true_residual(iterate: np.ndarray) -> float:
@@ -884,11 +898,9 @@ class TDEMIPSimulation:
                         return 0.0 if residual_norm == 0.0 else float("inf")
                     return residual_norm / rhs_norm
 
-                def record_true_residual(iterate: np.ndarray) -> None:
-                    nonlocal best_relative_residual, iterations
+                def count_iteration(_iterate: np.ndarray) -> None:
+                    nonlocal iterations
                     iterations += 1
-                    value = relative_true_residual(iterate)
-                    best_relative_residual = min(best_relative_residual, value)
 
                 solution, info = spla.cg(
                     matrix,
@@ -897,13 +909,9 @@ class TDEMIPSimulation:
                     atol=0.0,
                     maxiter=self.cg_maxiter,
                     M=preconditioner,
-                    callback=record_true_residual,
+                    callback=count_iteration,
                 )
                 final_relative_residual = relative_true_residual(solution)
-                best_relative_residual = min(
-                    best_relative_residual,
-                    final_relative_residual,
-                )
                 external_gate_pass = bool(
                     np.isfinite(final_relative_residual)
                     and final_relative_residual <= float(self.cg_tolerance)
@@ -922,7 +930,6 @@ class TDEMIPSimulation:
                         iterations=iterations,
                         initial_relative_residual=initial_relative_residual,
                         final_relative_residual=final_relative_residual,
-                        best_relative_residual=best_relative_residual,
                     )
                     raise RuntimeError(
                         "CG solver failed convergence gate: "
@@ -967,7 +974,6 @@ class TDEMIPSimulation:
         iterations: int,
         initial_relative_residual: float,
         final_relative_residual: float,
-        best_relative_residual: float,
     ) -> dict[str, object]:
         matrix = matrix.tocsr()
         diagonal = np.asarray(matrix.diagonal(), dtype=float)
@@ -984,11 +990,13 @@ class TDEMIPSimulation:
             return "nan" if np.isnan(value) else ("inf" if value > 0.0 else "-inf")
 
         return {
+            "diagnostic_schema": "atem3d.cg-convergence-diagnostic",
+            "diagnostic_schema_version": 2,
             "reason": reason,
             "solver": "scipy_cg",
             "preconditioner": self.cg_preconditioner,
             "step_index": int(step_index),
-            "dt_s": float(self.time_steps[step_index]),
+            "dt_s": finite_value(self.time_steps[step_index]),
             "iterations": int(iterations),
             "backend_info": int(backend_info),
             "backend_reported_converged": bool(backend_info == 0),
@@ -998,7 +1006,8 @@ class TDEMIPSimulation:
             "relative_true_residual": {
                 "initial": finite_value(initial_relative_residual),
                 "final": finite_value(final_relative_residual),
-                "best": finite_value(best_relative_residual),
+                "best": None,
+                "history_available": False,
             },
             "matrix": {
                 "shape": [int(matrix.shape[0]), int(matrix.shape[1])],
