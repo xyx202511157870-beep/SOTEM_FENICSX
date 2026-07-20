@@ -158,6 +158,55 @@ def test_final_acceptance_requires_canonical_columns_but_not_ey_error_pass():
     assert "strict_error_gate_failed" not in status["blocking_reasons"]
 
 
+@pytest.mark.parametrize("physical_gate_value", [False, None, 0, 1, "true"])
+def test_final_acceptance_fails_closed_when_physical_gate_is_not_strict_true(
+    physical_gate_value,
+):
+    times, prediction, reference = _ey_only_failure()
+    _rows, summary = robust_component_errors(
+        times,
+        prediction,
+        reference,
+        COMPONENTS,
+        threshold=0.05,
+        acceptance_components=ACCEPTANCE_COMPONENTS,
+        diagnostic_only_components={"Ey": "transverse_symmetry"},
+    )
+    summary.update(
+        {
+            "acceptance_profile": "symmetric_sotem_ex_hz_dBzdt/v1",
+            "component_order": list(COMPONENTS),
+        }
+    )
+    if physical_gate_value is None:
+        summary.pop("physical_pass_all_components", None)
+    else:
+        summary["physical_pass_all_components"] = physical_gate_value
+
+    status = validation_acceptance_status(
+        times,
+        COMPONENTS,
+        summary,
+        case_type="noip",
+        reference_type="empymod",
+        threshold=0.05,
+        validation_scope="corrected_model_full",
+        diagnostics={
+            "primary_secondary_internal_time_grid": {
+                "contains_turnoff_start": True,
+                "contains_turnoff_end": True,
+                "contains_all_observation_outputs": True,
+                "last_output_internal_time_s": 1.0,
+            }
+        },
+    )
+
+    assert status["strict_error_gate_passed"] is True
+    assert status["physical_error_gate_passed"] is False
+    assert status["final_acceptance_passed"] is False
+    assert "physical_error_gate_failed" in status["blocking_reasons"]
+
+
 @pytest.mark.parametrize(
     ("summary_update", "expected_reason"),
     [
@@ -256,6 +305,54 @@ def test_text_report_names_ey_exclusion_and_quantifies_symmetry(tmp_path):
     assert "transverse symmetry diagnostic" in report
     assert "prediction_peak_abs=" in report
     assert "prediction_to_Ex_peak_ratio=" in report
+
+
+def test_canonical_report_keeps_ey_horizontal_vector_out_of_physical_gate(tmp_path):
+    sp = _load_pipeline_module()
+    times, prediction, reference = _ey_only_failure()
+
+    physical = sp.check_physical_error_window(
+        times,
+        prediction,
+        reference,
+        COMPONENTS,
+        error_min_time=times[0],
+        tolerance=0.05,
+    )
+
+    assert physical["passed"] is True
+    assert physical["acceptance_components"] == list(ACCEPTANCE_COMPONENTS)
+    assert set(physical["maxima"]) == set(ACCEPTANCE_COMPONENTS)
+    assert physical["diagnostic_only_metrics"] == ["Eh_vector"]
+    assert physical["diagnostic_maxima"]["Eh_vector"] > 0.05
+
+    fem_result = {
+        "times": times,
+        "data": prediction,
+        "components": list(COMPONENTS),
+        "solver_log": [],
+    }
+    ref_result = {
+        "times": times,
+        "data": reference,
+        "components": list(COMPONENTS),
+    }
+    config = sp.PipelineConfig(workdir=tmp_path, t_min=1.0e-5, t_max=1.0)
+    sp.write_report(
+        config,
+        env={},
+        fem_result=fem_result,
+        ref_result=ref_result,
+        errors=sp.compute_error(prediction, reference, COMPONENTS),
+        source_info={"mode": "manual_line"},
+    )
+
+    report = config.output_report().read_text(encoding="utf-8")
+    assert "strict physical-error passing window (Ex, Hz, dBzdt max <=" in report
+    assert "Eh_vector [diagnostic_only/excluded_by_design]" in report
+    assert "Ex, dBzdt, and Eh_vector" not in report
+    assert "The physical gate uses Ex, dBzdt, and Eh_vector" not in report
+    assert "configured run exceeds the physical gate" not in report
 
 
 def test_formal_artifacts_preserve_canonical_ey_column_and_publish_its_role(tmp_path):

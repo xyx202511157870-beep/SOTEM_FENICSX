@@ -8008,15 +8008,46 @@ def compute_windowed_error_metrics(times, fem_data, ref_data, components, error_
 
 
 def check_physical_error_window(times, fem_data, ref_data, components, error_min_time: float = 0.0, tolerance: float = 0.05):
-    """Check Ex, dBzdt, and Eh_vector max errors over a fixed time window."""
+    """Check formal physical errors over a fixed time window."""
+
+    from atem3d.sotem_acceptance import (
+        CANONICAL_SOTEM_COMPONENT_ORDER,
+        SOTEM_ACCEPTANCE_COMPONENTS,
+        SOTEM_ACCEPTANCE_PROFILE,
+        symmetric_sotem_component_contract,
+    )
 
     metrics = compute_windowed_error_metrics(times, fem_data, ref_data, components, error_min_time=error_min_time)
     errors = metrics["errors"]
-    maxima = {
-        "Ex": float(errors["Ex"]["max"]),
-        "dBzdt": float(errors["dBzdt"]["max"]),
-        "Eh_vector": float(metrics["horizontal_electric"]["max"]),
-    }
+    component_names = tuple(str(component) for component in components)
+    has_canonical_profile_columns = bool(
+        len(component_names) == len(CANONICAL_SOTEM_COMPONENT_ORDER)
+        and set(component_names) == set(CANONICAL_SOTEM_COMPONENT_ORDER)
+    )
+    if has_canonical_profile_columns:
+        symmetric_sotem_component_contract(component_names)
+    symmetric_profile = component_names == CANONICAL_SOTEM_COMPONENT_ORDER
+    if symmetric_profile:
+        maxima = {
+            component: float(errors[component]["max"])
+            for component in SOTEM_ACCEPTANCE_COMPONENTS
+        }
+        diagnostic_maxima = {
+            "Eh_vector": float(metrics["horizontal_electric"]["max"])
+        }
+        acceptance_components = list(SOTEM_ACCEPTANCE_COMPONENTS)
+        diagnostic_only_metrics = ["Eh_vector"]
+        acceptance_profile = SOTEM_ACCEPTANCE_PROFILE
+    else:
+        maxima = {
+            "Ex": float(errors["Ex"]["max"]),
+            "dBzdt": float(errors["dBzdt"]["max"]),
+            "Eh_vector": float(metrics["horizontal_electric"]["max"]),
+        }
+        diagnostic_maxima = {}
+        acceptance_components = list(maxima)
+        diagnostic_only_metrics = []
+        acceptance_profile = "legacy_ex_dBzdt_Eh_vector"
     return {
         "passed": bool(all(value <= float(tolerance) for value in maxima.values())),
         "tolerance": float(tolerance),
@@ -8024,6 +8055,10 @@ def check_physical_error_window(times, fem_data, ref_data, components, error_min
         "time_max": float(metrics["time_max"]),
         "time_count": int(metrics["time_count"]),
         "maxima": maxima,
+        "diagnostic_maxima": diagnostic_maxima,
+        "acceptance_profile": acceptance_profile,
+        "acceptance_components": acceptance_components,
+        "diagnostic_only_metrics": diagnostic_only_metrics,
     }
 
 
@@ -8091,7 +8126,7 @@ def check_weak_component_error_window(
 
 
 def find_physical_error_passing_window(times, fem_data, ref_data, components, tolerance: float = 0.05):
-    """Find the earliest time from which Ex, dBzdt, and Eh_vector max errors pass tolerance."""
+    """Find the earliest time from which formal physical errors pass tolerance."""
 
     import numpy as np
 
@@ -8113,6 +8148,10 @@ def find_physical_error_passing_window(times, fem_data, ref_data, components, to
                 "start_index": int(start),
                 "tolerance": float(tolerance),
                 "maxima": window["maxima"],
+                "diagnostic_maxima": window["diagnostic_maxima"],
+                "acceptance_profile": window["acceptance_profile"],
+                "acceptance_components": window["acceptance_components"],
+                "diagnostic_only_metrics": window["diagnostic_only_metrics"],
             }
     return None
 
@@ -8195,7 +8234,10 @@ def write_report(
         ey_symmetry_diagnostics,
     )
 
-    if tuple(fem_result.get("components", ())) == CANONICAL_SOTEM_COMPONENT_ORDER:
+    symmetric_sotem_profile = bool(
+        tuple(fem_result.get("components", ())) == CANONICAL_SOTEM_COMPONENT_ORDER
+    )
+    if symmetric_sotem_profile:
         symmetry = ey_symmetry_diagnostics(
             fem_result["data"], ref_result["data"], fem_result["components"]
         )["Ey"]
@@ -8418,7 +8460,8 @@ def write_report(
     lines.append("error metrics with floor denominator denom=max(abs(F_ref), 1e-6*max(abs(F_ref))):")
     max_error = 0.0
     for comp, values in errors.items():
-        max_error = max(max_error, float(values["max"]))
+        if not symmetric_sotem_profile or comp in {"Ex", "Hz", "dBzdt"}:
+            max_error = max(max_error, float(values["max"]))
         idx = int(values["max_index"])
         lines.append(
             f"  {comp}: mean={values['mean']:.6e}, median={values['median']:.6e}, "
@@ -8430,8 +8473,13 @@ def write_report(
 
     horizontal_e_error = compute_horizontal_electric_error(fem_result["data"], ref_result["data"])
     idx = int(horizontal_e_error["max_index"])
+    eh_vector_label = (
+        "Eh_vector [diagnostic_only/excluded_by_design]"
+        if symmetric_sotem_profile
+        else "Eh_vector"
+    )
     lines.append(
-        f"  Eh_vector: mean={horizontal_e_error['mean']:.6e}, median={horizontal_e_error['median']:.6e}, "
+        f"  {eh_vector_label}: mean={horizontal_e_error['mean']:.6e}, median={horizontal_e_error['median']:.6e}, "
         f"RMS={horizontal_e_error['rms']:.6e}, max={horizontal_e_error['max']:.6e} "
         f"at t={fem_result['times'][idx]:.6e} s, floor={horizontal_e_error['floor']:.6e}"
     )
@@ -8508,24 +8556,48 @@ def write_report(
     )
     lines.append("")
     if passing_window is None:
+        gate_components = (
+            "Ex, Hz, dBzdt" if symmetric_sotem_profile else "Ex, dBzdt, and Eh_vector"
+        )
         lines.append(
-            f"strict physical-error passing window: none found for Ex, dBzdt, and Eh_vector max <= {config.error_tolerance:.3g}"
+            "strict physical-error passing window: none found for "
+            f"{gate_components} max <= {config.error_tolerance:.3g}"
         )
     else:
         maxima = passing_window["maxima"]
+        gate_components = (
+            "Ex, Hz, dBzdt" if symmetric_sotem_profile else "Ex, dBzdt, Eh_vector"
+        )
         lines.append(
             "strict physical-error passing window "
-            f"(Ex, dBzdt, Eh_vector max <= {passing_window['tolerance']:.3g}): "
+            f"({gate_components} max <= {passing_window['tolerance']:.3g}): "
             f"t >= {passing_window['time_min']:.6e} s "
             f"(n={passing_window['time_count']}, range {passing_window['time_min']:.6e}-{passing_window['time_max']:.6e} s)"
         )
-        lines.append(
-            f"  maxima: Ex={maxima['Ex']:.6e}, dBzdt={maxima['dBzdt']:.6e}, Eh_vector={maxima['Eh_vector']:.6e}"
-        )
+        if symmetric_sotem_profile:
+            lines.append(
+                f"  maxima: Ex={maxima['Ex']:.6e}, Hz={maxima['Hz']:.6e}, "
+                f"dBzdt={maxima['dBzdt']:.6e}"
+            )
+            lines.append(
+                "  Eh_vector [diagnostic_only/excluded_by_design]: "
+                f"max={passing_window['diagnostic_maxima']['Eh_vector']:.6e}"
+            )
+        else:
+            lines.append(
+                f"  maxima: Ex={maxima['Ex']:.6e}, dBzdt={maxima['dBzdt']:.6e}, "
+                f"Eh_vector={maxima['Eh_vector']:.6e}"
+            )
 
     lines.append("")
+    weak_gate_label = (
+        "diagnostic-only weak horizontal-component check "
+        "[excluded_by_design from formal acceptance]"
+        if symmetric_sotem_profile
+        else "weak horizontal-component gate"
+    )
     lines.append(
-        "weak horizontal-component gate "
+        weak_gate_label + " "
         f"(reference max <= {config.weak_component_reference_fraction:.3g} * max(|Eh_ref|); "
         "absolute error scaled by max(|Eh_ref|)):"
     )
@@ -8652,24 +8724,47 @@ def write_report(
                 comp
                 for comp, values in errors.items()
                 if float(values["max"]) > float(config.error_tolerance)
-                and comp not in {"Ex", "dBzdt"}
+                and comp
+                not in (
+                    {"Ex", "Hz", "dBzdt"}
+                    if symmetric_sotem_profile
+                    else {"Ex", "dBzdt"}
+                )
             ]
             lines.append("[metric note] Physical response metrics pass in the configured window.")
-            lines.append(
-                "  - The physical gate uses Ex, dBzdt, and Eh_vector; Eh_vector avoids singular "
-                "relative percentages for near-zero transverse electric components."
-            )
-            if weak_components:
-                lines.append(f"  - Component relative error exceeds tolerance for weak components: {', '.join(weak_components)}.")
-            if configured_weak_window["passed"]:
+            if symmetric_sotem_profile:
                 lines.append(
-                    "  - The weak horizontal-component absolute gate also passes when scaled by max(|Eh_ref|)."
+                    "  - The formal physical gate uses Ex, Hz, and dBzdt; Ey and "
+                    "Eh_vector remain diagnostic_only/excluded_by_design."
                 )
             else:
                 lines.append(
-                    "  - The weak horizontal-component absolute gate does not pass; refine mesh/receiver "
-                    "evaluation before accepting this run."
+                    "  - The physical gate uses Ex, dBzdt, and Eh_vector; Eh_vector avoids singular "
+                    "relative percentages for near-zero transverse electric components."
                 )
+            if weak_components:
+                lines.append(f"  - Component relative error exceeds tolerance for weak components: {', '.join(weak_components)}.")
+            if configured_weak_window["passed"]:
+                if symmetric_sotem_profile:
+                    lines.append(
+                        "  - The diagnostic-only weak horizontal-component check passes; "
+                        "this does not alter formal acceptance."
+                    )
+                else:
+                    lines.append(
+                        "  - The weak horizontal-component absolute gate also passes when scaled by max(|Eh_ref|)."
+                    )
+            else:
+                if symmetric_sotem_profile:
+                    lines.append(
+                        "  - The diagnostic-only weak horizontal-component check does not pass; "
+                        "this does not block formal acceptance."
+                    )
+                else:
+                    lines.append(
+                        "  - The weak horizontal-component absolute gate does not pass; refine mesh/receiver "
+                        "evaluation before accepting this run."
+                    )
         elif passing_window is not None:
             lines.append("[optimization note] The configured window does not fully pass the physical gate.")
             lines.append(

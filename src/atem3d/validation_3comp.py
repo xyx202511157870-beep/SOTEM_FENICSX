@@ -274,7 +274,10 @@ def validation_acceptance_status(
     reference_type_supported = reference_type in SUPPORTED_REFERENCE_TYPES
     reference_type_ok = reference_type in FINAL_ACCEPTANCE_REFERENCE_TYPES
     threshold_ok = float(threshold) <= 0.05
-    physical_gate_passed = bool(summary.get("physical_pass_all_components", summary.get("pass_all_components", False)))
+    physical_gate_value = summary.get("physical_pass_all_components")
+    physical_gate_passed = bool(
+        type(physical_gate_value) is bool and physical_gate_value is True
+    )
     strict_gate_passed = bool(summary.get("pass_all_components", False))
     internal_time_grid_verified = _internal_time_grid_verified(
         diagnostics,
@@ -317,6 +320,7 @@ def validation_acceptance_status(
         and reference_type_ok
         and threshold_ok
         and strict_gate_passed
+        and physical_gate_passed
         and internal_time_grid_verified
     )
     return {
