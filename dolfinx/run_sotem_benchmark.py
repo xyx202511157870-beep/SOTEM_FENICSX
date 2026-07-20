@@ -27,6 +27,7 @@ _SOURCE_MESH_SIZE_M = {0: 40.0, 1: 20.0, 2: 10.0}
 _RECEIVER_MESH_SIZE_M = {0: 20.0, 1: 10.0, 2: 5.0}
 _OUTPUT_INTERVAL_SUBSTEPS = {0: 1, 1: 2, 2: 4}
 _BOUNDARY_EXTENT_M = {0: 25_000.0, 1: 50_000.0, 2: 100_000.0}
+_LEVELS = tuple(f"S{source}T{time}B{boundary}" for source in range(3) for time in range(3) for boundary in range(3))
 
 
 def _float_flag(name: str, value: float) -> str:
@@ -156,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=Path, required=True)
     parser.add_argument("--variant", choices=["noip", "ip"], required=True)
-    parser.add_argument("--level", required=True)
+    parser.add_argument("--level", choices=_LEVELS, required=True)
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--check-env-only", action="store_true")
     parser.add_argument("--no-install", action="store_true")

@@ -85,6 +85,31 @@ def test_main_propagates_song_ip_case_to_real_pipeline_contract(monkeypatch, tmp
     assert argv[-2:] == ["--check-env-only", "--no-install"]
 
 
+def test_main_rejects_invalid_level_without_traceback(capsys, tmp_path):
+    runner = _load_runner()
+
+    with pytest.raises(SystemExit) as exc_info:
+        runner.main(
+            [
+                "--case",
+                "benchmarks/sotem/song2025_layered_pair.yaml",
+                "--variant",
+                "ip",
+                "--level",
+                "S3T0B0",
+                "--workdir",
+                str(tmp_path),
+                "--check-env-only",
+                "--no-install",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "invalid choice" in stderr
+    assert "Traceback" not in stderr
+
+
 def test_song_ip_runner_reaches_real_pipeline_config_and_validation(monkeypatch, tmp_path):
     runner = _load_runner()
 

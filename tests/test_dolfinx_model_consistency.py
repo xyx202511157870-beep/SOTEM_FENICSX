@@ -872,6 +872,33 @@ def test_ideal_step_off_schedule_subdivides_every_output_interval():
     assert schedule["output_step_indices"] == [3, 7, 11]
 
 
+@pytest.mark.parametrize("invalid_substeps", [True, 1.9, "2"])
+def test_model_consistency_rejects_non_integer_output_interval_substeps(invalid_substeps):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(
+        ValueError,
+        match="output_interval_substeps must be a non-bool positive integer",
+    ):
+        sp.validate_model_consistency(
+            sp.PipelineConfig(output_interval_substeps=invalid_substeps)
+        )
+
+
+@pytest.mark.parametrize("invalid_substeps", [True, 1.9, "2", 0, -1])
+def test_forward_schedule_rejects_invalid_output_interval_substeps(invalid_substeps):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(
+        ValueError,
+        match="output_interval_substeps must be a non-bool positive integer",
+    ):
+        sp._forward_observation_schedule(
+            [1.0e-5, 1.0e-4],
+            sp.PipelineConfig(output_interval_substeps=invalid_substeps),
+        )
+
+
 def test_explicit_observation_times_round_trip_through_cli_and_resolved_yaml(monkeypatch, tmp_path):
     sp = _load_pipeline_module()
     captured = {}

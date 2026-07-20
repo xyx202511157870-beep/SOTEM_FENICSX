@@ -221,16 +221,22 @@ class _FakeFunction:
         self.x = _FakeVector(values)
 
 
+def _checkpoint_schedule(sp, config):
+    observation_times = np.asarray([1.0e-5, 2.0e-5, 4.0e-5], dtype=float)
+    return sp._forward_observation_schedule(observation_times, config)
+
+
 def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
     sp = _load_pipeline_module()
-    config = sp.PipelineConfig(workdir=tmp_path)
+    config = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
+    schedule = _checkpoint_schedule(sp, config)
     e_old = _FakeFunction([1.0, 2.0, 3.0])
     memories = [_FakeFunction([4.0, 5.0, 6.0])]
     rows = [[7.0, 8.0, 9.0]]
     solver_log = [
         {
-            "step": 4,
-            "time": 2.0e-5,
+            "step": 0,
+            "time": 1.0e-5,
             "observation_time": 1.0e-5,
             "dt": 1.0e-5,
             "its": 12,
@@ -254,8 +260,9 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
 
     sp._save_forward_checkpoint(
         config,
-        completed_step=4,
-        previous_time=2.0e-5,
+        schedule=schedule,
+        completed_step=0,
+        previous_time=1.0e-5,
         E_old=e_old,
         memories=memories,
         rows=rows,
@@ -265,29 +272,89 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
         receiver_diagnostic_rows=receiver_diagnostics,
     )
 
-    loaded = sp._load_forward_checkpoint(config)
+    loaded = sp._load_forward_checkpoint(config, schedule=schedule)
 
-    assert loaded["completed_step"] == 4
-    assert loaded["previous_time"] == 2.0e-5
+    assert loaded["completed_step"] == 0
+    assert loaded["previous_time"] == 1.0e-5
     np.testing.assert_allclose(loaded["e_old"], np.asarray([1.0, 2.0, 3.0]))
     np.testing.assert_allclose(loaded["memories"], np.asarray([[4.0, 5.0, 6.0]]))
     np.testing.assert_allclose(loaded["rows"], np.asarray(rows))
     assert loaded["components"] == ["Ex", "Ey", "dBzdt"]
-    assert loaded["solver_log"][0]["step"] == 4
+    assert loaded["solver_log"][0]["step"] == 0
     assert loaded["solver_log"][0]["is_output"] is True
     np.testing.assert_allclose(loaded["h_old_receiver"], np.asarray([10.0, 11.0, 12.0]))
     assert loaded["receiver_diagnostic_rows"][0]["receiver_type"] == "volume_average"
     assert loaded["receiver_diagnostic_rows"][0]["dBzdt"] == 3.0
+    with np.load(config.forward_checkpoint_npz(), allow_pickle=False) as payload:
+        assert str(payload["schedule_time_origin"].item()) == "after_ramp"
+        assert float(payload["schedule_ramp_off_time"].item()) == 0.0
+        assert int(payload["schedule_output_interval_substeps"].item()) == 1
+        np.testing.assert_array_equal(
+            payload["schedule_observation_times"], schedule["observation_times"]
+        )
+        np.testing.assert_array_equal(payload["schedule_return_times"], schedule["return_times"])
+        np.testing.assert_array_equal(payload["schedule_step_times"], schedule["step_times"])
+        np.testing.assert_array_equal(
+            payload["schedule_output_step_indices"], schedule["output_step_indices"]
+        )
+
+
+def test_forward_checkpoint_rejects_resume_with_different_time_level(tmp_path):
+    sp = _load_pipeline_module()
+    saved_config = sp.PipelineConfig(
+        workdir=tmp_path,
+        ramp_off_time=0.0,
+        output_interval_substeps=1,
+    )
+    saved_schedule = _checkpoint_schedule(sp, saved_config)
+    sp._save_forward_checkpoint(
+        saved_config,
+        schedule=saved_schedule,
+        completed_step=0,
+        previous_time=1.0e-5,
+        E_old=_FakeFunction([1.0, 2.0, 3.0]),
+        memories=[],
+        rows=[[7.0, 8.0, 9.0]],
+        components=["Ex", "Ey", "dBzdt"],
+        solver_log=[],
+    )
+    resumed_config = sp.PipelineConfig(
+        workdir=tmp_path,
+        ramp_off_time=0.0,
+        output_interval_substeps=4,
+    )
+    resumed_schedule = _checkpoint_schedule(sp, resumed_config)
+
+    with pytest.raises(ValueError, match="forward checkpoint schedule mismatch"):
+        sp._load_forward_checkpoint(resumed_config, schedule=resumed_schedule)
+
+
+def test_legacy_forward_checkpoint_without_schedule_identity_fails_closed(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
+    np.savez(
+        config.forward_checkpoint_npz(),
+        completed_step=np.asarray(0),
+        previous_time=np.asarray(1.0e-5),
+        e_old=np.asarray([1.0, 2.0, 3.0]),
+        memories=np.empty((0, 3)),
+        rows=np.asarray([[7.0, 8.0, 9.0]]),
+        components=np.asarray(["Ex", "Ey", "dBzdt"]),
+    )
+
+    with pytest.raises(ValueError, match="missing schedule identity"):
+        sp._load_forward_checkpoint(config, schedule=_checkpoint_schedule(sp, config))
 
 
 def test_forward_checkpoint_round_trips_divergence_cleaning_stats(tmp_path):
     sp = _load_pipeline_module()
-    config = sp.PipelineConfig(workdir=tmp_path)
+    config = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
+    schedule = _checkpoint_schedule(sp, config)
     e_old = _FakeFunction([1.0, 2.0, 3.0])
     solver_log = [
         {
-            "step": 4,
-            "time": 2.0e-5,
+            "step": 0,
+            "time": 1.0e-5,
             "observation_time": 1.0e-5,
             "dt": 1.0e-5,
             "its": 12,
@@ -305,8 +372,9 @@ def test_forward_checkpoint_round_trips_divergence_cleaning_stats(tmp_path):
 
     sp._save_forward_checkpoint(
         config,
-        completed_step=4,
-        previous_time=2.0e-5,
+        schedule=schedule,
+        completed_step=0,
+        previous_time=1.0e-5,
         E_old=e_old,
         memories=[],
         rows=[[7.0, 8.0, 9.0]],
@@ -314,7 +382,7 @@ def test_forward_checkpoint_round_trips_divergence_cleaning_stats(tmp_path):
         solver_log=solver_log,
     )
 
-    loaded = sp._load_forward_checkpoint(config)
+    loaded = sp._load_forward_checkpoint(config, schedule=schedule)
     item = loaded["solver_log"][0]
     assert item["divergence_clean_before"] == 8.0
     assert item["divergence_clean_after"] == 1.0e-9
@@ -325,12 +393,13 @@ def test_forward_checkpoint_round_trips_divergence_cleaning_stats(tmp_path):
 
 def test_forward_checkpoint_round_trips_divergence_control_stats(tmp_path):
     sp = _load_pipeline_module()
-    config = sp.PipelineConfig(workdir=tmp_path)
+    config = sp.PipelineConfig(workdir=tmp_path, ramp_off_time=0.0)
+    schedule = _checkpoint_schedule(sp, config)
     e_old = _FakeFunction([1.0, 2.0, 3.0])
     solver_log = [
         {
-            "step": 4,
-            "time": 2.0e-5,
+            "step": 0,
+            "time": 1.0e-5,
             "observation_time": 1.0e-5,
             "dt": 1.0e-5,
             "its": 12,
@@ -350,8 +419,9 @@ def test_forward_checkpoint_round_trips_divergence_control_stats(tmp_path):
 
     sp._save_forward_checkpoint(
         config,
-        completed_step=4,
-        previous_time=2.0e-5,
+        schedule=schedule,
+        completed_step=0,
+        previous_time=1.0e-5,
         E_old=e_old,
         memories=[],
         rows=[[7.0, 8.0, 9.0]],
@@ -359,7 +429,7 @@ def test_forward_checkpoint_round_trips_divergence_control_stats(tmp_path):
         solver_log=solver_log,
     )
 
-    loaded = sp._load_forward_checkpoint(config)
+    loaded = sp._load_forward_checkpoint(config, schedule=schedule)
     item = loaded["solver_log"][0]
     assert item["divergence_control_applied"] is True
     assert item["divergence_control_scale"] == "lhs"

@@ -13,9 +13,11 @@ import argparse
 import bisect
 import csv
 from dataclasses import dataclass, field, replace
+import hashlib
 import importlib
 import json
 import math
+from numbers import Integral
 import os
 from pathlib import Path
 import subprocess
@@ -297,6 +299,16 @@ def _validated_observation_times(config: PipelineConfig):
     ):
         raise ValueError("observation_times must be finite, positive, and strictly increasing")
     return values.copy()
+
+
+def _validated_output_interval_substeps(config: PipelineConfig) -> int:
+    value = config.output_interval_substeps
+    if isinstance(value, bool) or not isinstance(value, Integral) or value <= 0:
+        raise ValueError(
+            "output_interval_substeps must be a non-bool positive integer; "
+            f"got {value!r}"
+        )
+    return int(value)
 
 
 def _effective_t_max(config: PipelineConfig) -> float:
@@ -630,12 +642,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "min_steps_before_first_observation must be positive; "
             f"got {min_steps_before_first_observation}"
         )
-    output_interval_substeps = int(config.output_interval_substeps)
-    if output_interval_substeps <= 0:
-        raise ValueError(
-            "output_interval_substeps must be positive; "
-            f"got {output_interval_substeps}"
-        )
+    output_interval_substeps = _validated_output_interval_substeps(config)
     if not math.isfinite(float(config.error_min_time)) or float(config.error_min_time) < 0.0:
         raise ValueError(f"error_min_time must be finite and nonnegative; got {float(config.error_min_time):.12g}")
     weak_fraction = float(config.weak_component_reference_fraction)
@@ -978,7 +985,7 @@ def _forward_observation_schedule(times, config: PipelineConfig):
         raise ValueError("times must be strictly increasing")
 
     time_origin = str(config.time_origin).strip().lower()
-    output_interval_substeps = max(1, int(config.output_interval_substeps))
+    output_interval_substeps = _validated_output_interval_substeps(config)
     if time_origin == "ramp_start":
         output_internal_times = observation_times.copy()
         interval_steps = []
@@ -1017,6 +1024,7 @@ def _forward_observation_schedule(times, config: PipelineConfig):
             raise RuntimeError(f"internal output time {output_time:.12e} is missing from the solve schedule")
         output_step_indices.append(int(matches[0]))
     return {
+        "observation_times": observation_times.copy(),
         "step_times": step_times,
         "output_internal_times": output_internal_times,
         "return_times": observation_times,
@@ -4949,7 +4957,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
     previous_time = 0.0
     start_step = 0
     if bool(config.resume_forward):
-        checkpoint = _load_forward_checkpoint(config)
+        checkpoint = _load_forward_checkpoint(config, schedule=schedule)
         if checkpoint["e_old"].shape != E_old.x.array.shape:
             raise ValueError(
                 "forward checkpoint E state shape does not match current function space: "
@@ -5221,6 +5229,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         if is_output and (bool(config.checkpoint_forward) or stop_after_outputs > 0):
             _save_forward_checkpoint(
                 config,
+                schedule=schedule,
                 completed_step=step,
                 previous_time=previous_time,
                 E_old=E_old,
@@ -8048,9 +8057,123 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
     return out
 
 
+_FORWARD_SCHEDULE_IDENTITY_VERSION = 1
+_FORWARD_SCHEDULE_IDENTITY_KEYS = (
+    "schedule_identity_version",
+    "schedule_observation_times",
+    "schedule_return_times",
+    "schedule_output_internal_times",
+    "schedule_step_times",
+    "schedule_output_step_indices",
+    "schedule_time_origin",
+    "schedule_ramp_off_time",
+    "schedule_output_interval_substeps",
+    "schedule_min_steps_during_turnoff",
+    "schedule_min_steps_before_first_observation",
+    "schedule_ramp_solver_t_min",
+)
+
+
+def _forward_schedule_identity(schedule, config: PipelineConfig):
+    import numpy as np
+
+    return {
+        "schedule_identity_version": np.asarray(_FORWARD_SCHEDULE_IDENTITY_VERSION, dtype=np.int64),
+        "schedule_observation_times": np.asarray(schedule["observation_times"], dtype=np.float64),
+        "schedule_return_times": np.asarray(schedule["return_times"], dtype=np.float64),
+        "schedule_output_internal_times": np.asarray(schedule["output_internal_times"], dtype=np.float64),
+        "schedule_step_times": np.asarray(schedule["step_times"], dtype=np.float64),
+        "schedule_output_step_indices": np.asarray(schedule["output_step_indices"], dtype=np.int64),
+        "schedule_time_origin": np.asarray(str(config.time_origin).strip().lower()),
+        "schedule_ramp_off_time": np.asarray(float(config.ramp_off_time), dtype=np.float64),
+        "schedule_output_interval_substeps": np.asarray(
+            _validated_output_interval_substeps(config), dtype=np.int64
+        ),
+        "schedule_min_steps_during_turnoff": np.asarray(int(config.min_steps_during_turnoff), dtype=np.int64),
+        "schedule_min_steps_before_first_observation": np.asarray(
+            int(config.min_steps_before_first_observation), dtype=np.int64
+        ),
+        "schedule_ramp_solver_t_min": np.asarray(float(config.ramp_solver_t_min), dtype=np.float64),
+    }
+
+
+def _forward_schedule_fingerprint(identity) -> str:
+    import numpy as np
+
+    digest = hashlib.sha256()
+    for key in _FORWARD_SCHEDULE_IDENTITY_KEYS:
+        value = np.asarray(identity[key])
+        digest.update(key.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(repr(value.shape).encode("ascii"))
+        digest.update(b"\0")
+        if value.dtype.kind in {"U", "S"}:
+            items = (str(item) for item in value.reshape(-1).tolist())
+            digest.update("\0".join(items).encode("utf-8"))
+        elif value.dtype.kind == "f":
+            digest.update(np.ascontiguousarray(value, dtype="<f8").tobytes())
+        elif value.dtype.kind in {"i", "u"}:
+            digest.update(np.ascontiguousarray(value, dtype="<i8").tobytes())
+        else:
+            raise TypeError(f"unsupported schedule identity dtype for {key}: {value.dtype}")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _forward_schedule_checkpoint_payload(schedule, config: PipelineConfig):
+    import numpy as np
+
+    identity = _forward_schedule_identity(schedule, config)
+    return {
+        **identity,
+        "schedule_fingerprint": np.asarray(_forward_schedule_fingerprint(identity)),
+    }
+
+
+def _validate_forward_checkpoint_schedule(payload, config: PipelineConfig, schedule, path: Path) -> None:
+    import numpy as np
+
+    required = set(_FORWARD_SCHEDULE_IDENTITY_KEYS) | {"schedule_fingerprint"}
+    missing = sorted(required.difference(payload.files))
+    if missing:
+        raise ValueError(
+            f"forward checkpoint {path} is missing schedule identity keys: {', '.join(missing)}"
+        )
+    saved_identity = {key: np.asarray(payload[key]) for key in _FORWARD_SCHEDULE_IDENTITY_KEYS}
+    saved_fingerprint = str(np.asarray(payload["schedule_fingerprint"]).item())
+    actual_saved_fingerprint = _forward_schedule_fingerprint(saved_identity)
+    if saved_fingerprint != actual_saved_fingerprint:
+        raise ValueError(f"forward checkpoint {path} has a corrupt schedule identity fingerprint")
+    current_identity = _forward_schedule_identity(schedule, config)
+    current_fingerprint = _forward_schedule_fingerprint(current_identity)
+    if saved_fingerprint != current_fingerprint:
+        raise ValueError(
+            "forward checkpoint schedule mismatch: "
+            f"checkpoint={saved_fingerprint}, current={current_fingerprint}"
+        )
+
+
+def _validate_forward_checkpoint_position(payload, schedule, path: Path) -> None:
+    import numpy as np
+
+    completed_step = int(np.asarray(payload["completed_step"]).item())
+    previous_time = float(np.asarray(payload["previous_time"]).item())
+    step_times = np.asarray(schedule["step_times"], dtype=float)
+    output_steps = {int(value) for value in schedule["output_step_indices"]}
+    if completed_step < 0 or completed_step >= step_times.size or completed_step not in output_steps:
+        raise ValueError(
+            f"forward checkpoint {path} completed_step is not an output step in the saved schedule"
+        )
+    if previous_time != float(step_times[completed_step]):
+        raise ValueError(
+            f"forward checkpoint {path} previous_time does not match completed_step in the saved schedule"
+        )
+
+
 def _save_forward_checkpoint(
     config: PipelineConfig,
     *,
+    schedule,
     completed_step: int,
     previous_time: float,
     E_old,
@@ -8084,6 +8207,7 @@ def _save_forward_checkpoint(
         if h_old_receiver is not None
         else np.full(3, np.nan, dtype=float),
     }
+    payload.update(_forward_schedule_checkpoint_payload(schedule, config))
     if receiver_diagnostic_rows:
         payload.update(_receiver_diagnostic_payload(receiver_diagnostic_rows))
     payload.update(_solver_log_to_arrays(solver_log))
@@ -8093,17 +8217,19 @@ def _save_forward_checkpoint(
     tmp_path.replace(path)
 
 
-def _load_forward_checkpoint(config: PipelineConfig):
+def _load_forward_checkpoint(config: PipelineConfig, *, schedule):
     import numpy as np
 
     path = config.forward_checkpoint_npz()
     if not path.is_file():
         raise FileNotFoundError(f"forward checkpoint file not found: {path}")
     payload = np.load(path, allow_pickle=False)
+    _validate_forward_checkpoint_schedule(payload, config, schedule, path)
     required = {"completed_step", "previous_time", "e_old", "memories", "rows", "components"}
     missing = sorted(required.difference(payload.files))
     if missing:
         raise ValueError(f"forward checkpoint {path} is missing keys: {', '.join(missing)}")
+    _validate_forward_checkpoint_position(payload, schedule, path)
     return {
         "completed_step": int(np.asarray(payload["completed_step"]).item()),
         "previous_time": float(np.asarray(payload["previous_time"]).item()),
