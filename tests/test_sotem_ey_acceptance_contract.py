@@ -208,6 +208,58 @@ def test_final_acceptance_fails_closed_when_physical_gate_is_not_strict_true(
 
 
 @pytest.mark.parametrize(
+    "strict_gate_value", [False, None, 0, 1, "true", "false"]
+)
+def test_final_acceptance_fails_closed_when_strict_gate_is_not_strict_true(
+    strict_gate_value,
+):
+    times, prediction, reference = _ey_only_failure()
+    _rows, summary = robust_component_errors(
+        times,
+        prediction,
+        reference,
+        COMPONENTS,
+        threshold=0.05,
+        acceptance_components=ACCEPTANCE_COMPONENTS,
+        diagnostic_only_components={"Ey": "transverse_symmetry"},
+    )
+    summary.update(
+        {
+            "acceptance_profile": "symmetric_sotem_ex_hz_dBzdt/v1",
+            "component_order": list(COMPONENTS),
+        }
+    )
+    if strict_gate_value is None:
+        summary.pop("pass_all_components", None)
+    else:
+        summary["pass_all_components"] = strict_gate_value
+
+    status = validation_acceptance_status(
+        times,
+        COMPONENTS,
+        summary,
+        case_type="noip",
+        reference_type="empymod",
+        threshold=0.05,
+        validation_scope="corrected_model_full",
+        diagnostics={
+            "primary_secondary_internal_time_grid": {
+                "contains_turnoff_start": True,
+                "contains_turnoff_end": True,
+                "contains_all_observation_outputs": True,
+                "last_output_internal_time_s": 1.0,
+            }
+        },
+    )
+
+    assert status["physical_error_gate_passed"] is True
+    assert status["strict_error_gate_passed"] is False
+    assert status["final_acceptance_passed"] is False
+    assert status["blocking_reasons"]
+    assert "strict_error_gate_failed" in status["blocking_reasons"]
+
+
+@pytest.mark.parametrize(
     ("summary_update", "expected_reason"),
     [
         ({"component_roles": {}}, "acceptance_component_contract_invalid"),

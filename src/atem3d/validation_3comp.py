@@ -278,7 +278,10 @@ def validation_acceptance_status(
     physical_gate_passed = bool(
         type(physical_gate_value) is bool and physical_gate_value is True
     )
-    strict_gate_passed = bool(summary.get("pass_all_components", False))
+    strict_gate_value = summary.get("pass_all_components")
+    strict_gate_passed = bool(
+        type(strict_gate_value) is bool and strict_gate_value is True
+    )
     internal_time_grid_verified = _internal_time_grid_verified(
         diagnostics,
         required_time_max=float(required_time_max),
