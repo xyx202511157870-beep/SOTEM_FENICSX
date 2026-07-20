@@ -1099,8 +1099,9 @@ def test_bad_reference_does_not_restore_missing_root_export(
 
 
 @pytest.mark.parametrize("orphan_bundle", [True, False])
-def test_reference_recovery_rejects_bundle_swap_after_semantic_validation(
-    tmp_path, monkeypatch, orphan_bundle
+@pytest.mark.parametrize("swap_kind", ["metadata_and_journal", "journal_only"])
+def test_reference_recovery_rejects_post_validation_transaction_swap(
+    tmp_path, monkeypatch, orphan_bundle, swap_kind
 ):
     run_name = "swap-orphan" if orphan_bundle else "swap-record"
     run_dir = _prepare(tmp_path, run_name=run_name)
@@ -1141,19 +1142,22 @@ def test_reference_recovery_rejects_bundle_swap_after_semantic_validation(
             run_dir / "empymod_metadata.json",
             run_dir / "artifacts" / "reference" / "empymod_metadata.json",
         )
-        for metadata_path in metadata_paths:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            metadata["srcpts"] = 17
-            metadata_path.write_text(
-                json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-        attack["root_metadata_after"] = metadata_paths[0].read_bytes()
         transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
         transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
-        transaction["file_sha256"]["artifacts/reference/empymod_metadata.json"] = (
-            cli._sha256_file(metadata_paths[1])
-        )
+        if swap_kind == "metadata_and_journal":
+            for metadata_path in metadata_paths:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["srcpts"] = 17
+                metadata_path.write_text(
+                    json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            attack["root_metadata_after"] = metadata_paths[0].read_bytes()
+            transaction["file_sha256"][
+                "artifacts/reference/empymod_metadata.json"
+            ] = cli._sha256_file(metadata_paths[1])
+        else:
+            transaction["inputs"]["srcpts"] = 17
         transaction_path.write_text(
             json.dumps(transaction, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -1162,14 +1166,68 @@ def test_reference_recovery_rejects_bundle_swap_after_semantic_validation(
 
     monkeypatch.setattr(cli, "_validate_reference_metadata_identity", validate_then_swap)
 
-    with pytest.raises(ValueError, match="hash|metadata|bundle"):
+    with pytest.raises(ValueError, match="hash|metadata|bundle|journal|snapshot"):
         cli.main(command)
 
     assert attack["calls"] == 1
     assert not missing_output.exists()
-    assert (run_dir / "empymod_metadata.json").read_bytes() == attack[
-        "root_metadata_after"
-    ]
+    if swap_kind == "metadata_and_journal":
+        assert (run_dir / "empymod_metadata.json").read_bytes() == attack[
+            "root_metadata_after"
+        ]
+    assert manifest_path.read_bytes() == manifest_before
+
+
+def test_orphan_recovery_rechecks_journal_after_materialize_before_manifest(
+    tmp_path, monkeypatch
+):
+    run_dir = _prepare(tmp_path, run_name="post-materialize-journal-swap")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    command = _command("reference", run_dir, LEI_CASE)
+    original_record = cli._record_stage
+    monkeypatch.setattr(
+        cli,
+        "_record_stage",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+    )
+    with pytest.raises(RuntimeError, match="interrupted"):
+        cli.main(command)
+    monkeypatch.setattr(cli, "_record_stage", original_record)
+
+    manifest_path = run_dir / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+    original_materialize = cli._materialize_bundle_exports
+    materialized = False
+
+    def materialize_then_swap_journal(*args, **kwargs):
+        nonlocal materialized
+        files = original_materialize(*args, **kwargs)
+        materialized = True
+        transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+        transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+        transaction["inputs"]["srcpts"] = 17
+        transaction_path.write_text(
+            json.dumps(transaction, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return files
+
+    monkeypatch.setattr(
+        cli, "_materialize_bundle_exports", materialize_then_swap_journal
+    )
+
+    with pytest.raises(ValueError, match="journal|snapshot"):
+        cli.main(command)
+
+    assert materialized is True
     assert manifest_path.read_bytes() == manifest_before
 
 
@@ -1669,6 +1727,40 @@ def test_reference_metadata_hash_and_json_use_one_byte_snapshot(tmp_path, monkey
     monkeypatch.setattr(Path, "read_bytes", swapping_read_bytes)
     assert cli.main(command) == 0
     assert reads == 1
+
+
+def test_transaction_journal_hash_and_json_use_one_byte_snapshot(tmp_path, monkeypatch):
+    run_dir = _prepare(tmp_path, run_name="single-read-journal")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
+    journal_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+    original_bytes = journal_path.read_bytes()
+    original_read_bytes = Path.read_bytes
+    reads = 0
+
+    def counted_read_bytes(path):
+        nonlocal reads
+        if path == journal_path:
+            reads += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    journal, files, snapshot_sha256 = cli._verify_transaction_bundle(
+        run_dir, "reference", {"variant": "noip", "srcpts": 5}
+    )
+
+    assert reads == 1
+    assert journal["inputs"] == {"srcpts": 5, "variant": "noip"}
+    assert files
+    assert snapshot_sha256 == cli._sha256_bytes(original_bytes)
 
 
 def test_effect_rejects_mismatched_reference_srcpts_before_writing(

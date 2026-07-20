@@ -938,12 +938,19 @@ def _verify_transaction_bundle(
     run_dir: Path,
     stage_name: str,
     inputs: Mapping[str, Any],
-) -> tuple[dict[str, Any], list[Path]]:
+) -> tuple[dict[str, Any], list[Path], str]:
     bundle = _bundle_dir(run_dir, stage_name)
     journal_path = bundle / "_transaction.json"
     if not journal_path.is_file() or journal_path.is_symlink():
         raise ValueError(f"published {stage_name} bundle lacks a safe transaction journal")
-    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    try:
+        journal_bytes = journal_path.read_bytes()
+        journal = json.loads(journal_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"published {stage_name} bundle transaction journal is invalid"
+        ) from exc
+    journal_sha256 = _sha256_bytes(journal_bytes)
     if not isinstance(journal, dict) or journal.get("schema") != _TRANSACTION_SCHEMA:
         raise ValueError(f"published {stage_name} bundle transaction schema mismatch")
     if journal.get("stage") != stage_name or journal.get("inputs") != _json_value(inputs):
@@ -959,7 +966,27 @@ def _verify_transaction_bundle(
         if _sha256_file(path) != expected:
             raise ValueError(f"published {stage_name} bundle evidence hash mismatch")
         files.append(path)
-    return journal, files
+    return journal, files, journal_sha256
+
+
+def _assert_transaction_journal_snapshot(
+    run_dir: Path,
+    stage_name: str,
+    expected_sha256: str,
+) -> None:
+    journal_path = _bundle_dir(run_dir, stage_name) / "_transaction.json"
+    if not journal_path.is_file() or journal_path.is_symlink():
+        raise ValueError(f"published {stage_name} bundle lacks a safe transaction journal")
+    try:
+        current_bytes = journal_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(
+            f"published {stage_name} transaction journal cannot be read"
+        ) from exc
+    if _sha256_bytes(current_bytes) != expected_sha256:
+        raise ValueError(
+            f"published {stage_name} transaction journal snapshot changed"
+        )
 
 
 def _transaction_export_hashes(
@@ -1028,6 +1055,7 @@ def _materialize_bundle_exports(
     run_dir: Path,
     stage_name: str,
     journal: Mapping[str, Any],
+    journal_sha256: str,
 ) -> list[Path]:
     """Restore the specification-level run outputs from an immutable bundle."""
 
@@ -1048,6 +1076,7 @@ def _materialize_bundle_exports(
                 raise ValueError(f"published {stage_name} export hash mismatch")
         planned.append((source, target, expected))
 
+    _assert_transaction_journal_snapshot(run_dir, stage_name, journal_sha256)
     for source, target, expected in planned:
         _ensure_safe_directory(run_dir, target.parent)
         if target.exists() or _is_linklike(target):
@@ -1096,7 +1125,7 @@ def _recover_or_complete_stage(
         bundle = _bundle_dir(run_dir, stage_name)
         if not bundle.exists() or _is_linklike(bundle):
             raise ValueError(f"completed {stage_name} stage lacks its transaction bundle")
-        journal, _bundle_files = _verify_transaction_bundle(
+        journal, _bundle_files, journal_sha256 = _verify_transaction_bundle(
             run_dir, stage_name, inputs
         )
         if validate_bundle is not None:
@@ -1105,19 +1134,27 @@ def _recover_or_complete_stage(
             raise ValueError(f"published {stage_name} bundle status mismatch")
         if _transaction_export_hashes(stage_name, journal) != stage_hashes:
             raise ValueError(f"completed {stage_name} manifest and bundle hashes differ")
-        _materialize_bundle_exports(run_dir, stage_name, journal)
+        _materialize_bundle_exports(
+            run_dir, stage_name, journal, journal_sha256
+        )
+        _assert_transaction_journal_snapshot(run_dir, stage_name, journal_sha256)
         if not _completed_stage_is_intact(run_dir, manifest, stage_name, inputs):
             raise RuntimeError(f"completed {stage_name} stage could not be recovered")
         return True
     bundle = _bundle_dir(run_dir, stage_name)
     if not bundle.exists():
         return False
-    journal, _bundle_files = _verify_transaction_bundle(run_dir, stage_name, inputs)
+    journal, _bundle_files, journal_sha256 = _verify_transaction_bundle(
+        run_dir, stage_name, inputs
+    )
     if validate_bundle is not None:
         validate_bundle(journal)
     if journal.get("manifest_status") != status:
         raise ValueError(f"published {stage_name} bundle status mismatch")
-    files = _materialize_bundle_exports(run_dir, stage_name, journal)
+    files = _materialize_bundle_exports(
+        run_dir, stage_name, journal, journal_sha256
+    )
+    _assert_transaction_journal_snapshot(run_dir, stage_name, journal_sha256)
     _record_stage(
         run_dir,
         manifest,
@@ -1139,7 +1176,7 @@ def _publish_stage_bundle(
     started_at: str,
     started_monotonic: float,
     build,
-) -> tuple[list[Path], dict[str, Any]]:
+) -> tuple[list[Path], dict[str, Any], str]:
     artifacts = run_dir / "artifacts"
     _ensure_safe_directory(run_dir, artifacts)
     final_bundle = _bundle_dir(run_dir, stage_name)
@@ -1166,9 +1203,14 @@ def _publish_stage_bundle(
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-    journal, _bundle_files = _verify_transaction_bundle(run_dir, stage_name, inputs)
-    files = _materialize_bundle_exports(run_dir, stage_name, journal)
-    return files, timing
+    journal, _bundle_files, journal_sha256 = _verify_transaction_bundle(
+        run_dir, stage_name, inputs
+    )
+    files = _materialize_bundle_exports(
+        run_dir, stage_name, journal, journal_sha256
+    )
+    _assert_transaction_journal_snapshot(run_dir, stage_name, journal_sha256)
+    return files, timing, journal_sha256
 
 
 def _atomic_write_canonical(path: Path, response: CanonicalResponse) -> None:
@@ -1372,7 +1414,7 @@ def _reference(args: argparse.Namespace) -> int:
         )
         _atomic_write_json(staging / "empymod_metadata.json", metadata)
 
-    output_files, timing = _publish_stage_bundle(
+    output_files, timing, journal_sha256 = _publish_stage_bundle(
         run_dir,
         stage_name="reference",
         status="reference_complete",
@@ -1381,6 +1423,7 @@ def _reference(args: argparse.Namespace) -> int:
         started_monotonic=started_monotonic,
         build=build,
     )
+    _assert_transaction_journal_snapshot(run_dir, "reference", journal_sha256)
     _record_stage(
         run_dir,
         manifest,
@@ -1475,7 +1518,7 @@ def _simpeg(args: argparse.Namespace) -> int:
         )
         _atomic_write_json(staging / "simpeg_metadata.json", normalized_metadata)
 
-    output_files, timing = _publish_stage_bundle(
+    output_files, timing, journal_sha256 = _publish_stage_bundle(
         run_dir,
         stage_name="simpeg",
         status="simpeg_complete",
@@ -1484,6 +1527,7 @@ def _simpeg(args: argparse.Namespace) -> int:
         started_monotonic=started_monotonic,
         build=build,
     )
+    _assert_transaction_journal_snapshot(run_dir, "simpeg", journal_sha256)
     _record_stage(
         run_dir,
         manifest,
@@ -1567,7 +1611,7 @@ def _source_run_evidence(
     bundle = _bundle_dir(run_dir, stage_name)
     if not bundle.exists() or _is_linklike(bundle):
         raise ValueError(f"{role} lacks a safe {stage_name} transaction bundle")
-    journal, _bundle_files = _verify_transaction_bundle(
+    journal, _bundle_files, journal_sha256 = _verify_transaction_bundle(
         run_dir, stage_name, expected_inputs
     )
     if journal.get("manifest_status") != expected_status:
@@ -1590,6 +1634,7 @@ def _source_run_evidence(
     actual_hash = _sha256_file(evidence_path)
     if actual_hash != expected_hash:
         raise ValueError(f"{role} {evidence_name} evidence hash mismatch")
+    _assert_transaction_journal_snapshot(run_dir, stage_name, journal_sha256)
     identity = {
         "run_dir": str(run_dir),
         "run_id": manifest["run_id"],
@@ -1748,7 +1793,7 @@ def _effect(args: argparse.Namespace) -> int:
             if not staged_output.is_dir() or not any(staged_output.iterdir()):
                 raise RuntimeError("polarization effect API produced no evidence files")
 
-        output_files, timing = _publish_stage_bundle(
+        output_files, timing, journal_sha256 = _publish_stage_bundle(
             run_dir,
             stage_name="effect",
             status="effect_complete",
@@ -1757,6 +1802,7 @@ def _effect(args: argparse.Namespace) -> int:
             started_monotonic=started_monotonic,
             build=build,
         )
+    _assert_transaction_journal_snapshot(run_dir, "effect", journal_sha256)
     _record_stage(
         run_dir,
         manifest,
@@ -1879,7 +1925,7 @@ def _finalize(args: argparse.Namespace) -> int:
             _atomic_write_bytes(staging / "inputs" / "gates.json", gates_payload)
         _atomic_write_json(staging / "final_gate_summary.json", summary)
 
-    output_files, timing = _publish_stage_bundle(
+    output_files, timing, journal_sha256 = _publish_stage_bundle(
         run_dir,
         stage_name="finalize",
         status=status,
@@ -1888,6 +1934,7 @@ def _finalize(args: argparse.Namespace) -> int:
         started_monotonic=started_monotonic,
         build=build,
     )
+    _assert_transaction_journal_snapshot(run_dir, "finalize", journal_sha256)
     _record_stage(
         run_dir,
         manifest,
