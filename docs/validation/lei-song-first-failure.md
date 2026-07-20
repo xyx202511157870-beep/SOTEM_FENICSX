@@ -13,16 +13,18 @@ The comparison used every observation time without scaling, sign fitting, time
 translation, point removal, smoothing, or threshold changes. For each component,
 the reported value is
 `max(abs(srcpts_low - srcpts_high) / max(abs(srcpts_high), floor))`, using the
-repository's component floors (`max(absolute_floor, 1e-6 * peak(abs(high)))`). The
-fixed threshold was `0.005`.
+repository's `src/atem3d/sotem_metrics.py::compare_signed_response` floor of
+`0.01 * peak(abs(srcpts_high))` for each component. The fixed threshold was
+`0.005`. Ey is excluded from this gate because it is a near-zero symmetry diagnostic,
+not one of Task 10's required Ex/Hz/dBzdt convergence components.
 
-| Case | Pair | Ex | Ey | Hz | dBzdt | Required Ex/Hz/dBzdt |
-|---|---:|---:|---:|---:|---:|---|
-| Lei noIP | 9 -> 17 | 0.15806579470979232 | 1.9115216731891848e-7 | 5.05111505285459e-6 | 0.02358102281597996 | **FAIL** |
-| Song noIP | 9 -> 17 | 0.0033395295228093678 | 7.847934646691789e-7 | 2.877462353005613e-7 | 0.00046426123098783616 | PASS |
-| Song exact Cole-Cole IP | 9 -> 17 | 0.00029705135651102773 | 0.016191305913457715 | 2.253693208299827e-6 | 3.638568056519078e-6 | PASS |
-| Lei noIP higher-order diagnostic | 33 -> 65 | 0.025758874457864886 | 3.2148210173471997e-7 | 2.867551660265967e-7 | 0.0031690488297546043 | **FAIL** |
-| Lei noIP higher-order diagnostic | 65 -> 129 | 0.010871727484161172 | 2.819178301958106e-7 | 9.94654270321229e-8 | 0.0015432620703936433 | **FAIL** |
+| Case | Pair | Ex | Hz | dBzdt | Required Ex/Hz/dBzdt |
+|---|---:|---:|---:|---:|---|
+| Lei noIP | 9 -> 17 | 0.15806579470979232 | 5.05111505285459e-6 | 0.02358102281597996 | **FAIL** |
+| Song noIP | 9 -> 17 | 0.0033395295228093678 | 2.877462353005613e-7 | 0.00046426123098783616 | PASS |
+| Song exact Cole-Cole IP | 9 -> 17 | 0.00029705135651102773 | 3.015718759764101e-7 | 3.638568056519078e-6 | PASS |
+| Lei noIP higher-order diagnostic | 33 -> 65 | 0.025758874457864886 | 2.867551660265967e-7 | 0.0031690488297546043 | **FAIL** |
+| Lei noIP higher-order diagnostic | 65 -> 129 | 0.010871727484161172 | 9.94654270321229e-8 | 0.0015432620703936433 | **FAIL** |
 
 The first fixed-gate Lei failures are both at `time_obs_s=1.0000000000000001e-05`:
 Ex is `2.6684091025941119e-05` at 9 points versus
@@ -115,7 +117,7 @@ created.
 - Windows reference environment: CPython `3.12.10`, empymod `2.6.0`, NumPy `2.4.3`, SciPy `1.17.1`, discretize `0.12.0`, SimPEG `0.25.2`, pymatsolver `0.4.0`, PyYAML `6.0.3`.
 - WSL executable preflight only: `/home/paidaxin/miniconda3/envs/fenicsx/bin/python --version` returned Python `3.10.20`; it was not used after the reference gate failed.
 - Supplied full Windows baseline evidence: `1206 passed, 10 skipped, 164 warnings in 63.76s`.
-- Fresh task-related verification: `python -m pytest tests/test_sotem_validation_cli.py tests/test_run_sotem_benchmark.py tests/test_error_metric_floor.py` returned `106 passed, 2 skipped in 28.54s`.
+- Fresh task-related verification: `python -m pytest tests/test_sotem_validation_cli.py tests/test_run_sotem_benchmark.py tests/test_error_metric_floor.py tests/test_sotem_metrics.py` returned `162 passed, 2 skipped in 28.17s`.
 - A fresh hash audit re-read all 12 successful manifests and verified every recorded stage-output SHA-256 against the files on disk.
 
 Generated CSV/JSON/mesh/NPZ artifacts remain ignored. Only this summary and the
