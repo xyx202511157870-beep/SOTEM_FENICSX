@@ -496,3 +496,49 @@ def test_tdem_run_records_each_external_residual_and_releases_petsc_solver():
         item["external_true_relative_residual"] <= 1.0e-8
         for item in simulation.linear_solver_diagnostics
     )
+
+
+def test_zero_source_full_petsc_run_records_exact_modes_and_zero_response():
+    pytest.importorskip("petsc4py")
+    pytest.importorskip("discretize")
+
+    from discretize import TensorMesh
+
+    from atem3d.ip import DebyeIPModel
+    from atem3d.receivers import PointReceiver
+    from atem3d.simulation import TDEMIPSimulation
+
+    mesh = TensorMesh([[(1.0, 3)], [(1.0, 3)], [(1.0, 3)]], x0="CCC")
+    receivers = [
+        PointReceiver(location=(0.0, 0.0, 0.0), component=component)
+        for component in ("Ex", "Hz", "dBzdt")
+    ]
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[1.0e-3, 2.0e-3],
+        receivers=receivers,
+        linear_solver="petsc_ams",
+        cg_preconditioner="hypre_ams",
+        initialization_solver="petsc_hypre",
+        initialization_internal_tolerance=1.0e-11,
+    )
+
+    result = simulation.run_data_only()
+
+    np.testing.assert_array_equal(result.data, np.zeros((3, 3)))
+    assert len(simulation.initialization_solver_diagnostics) == 2
+    assert all(
+        item["solve_mode"] == "exact_zero_rhs"
+        for item in simulation.initialization_solver_diagnostics
+    )
+    assert len(simulation.linear_solver_diagnostics) == 2
+    assert all(
+        item["solve_mode"] == "exact_zero_rhs"
+        and item["backend_reason"] == 0
+        and item["backend_reported_converged"] is False
+        and item["backend_iterations"] == 0
+        and item["external_true_relative_residual"] == 0.0
+        and item["residual_replacement_steps"] == 0
+        for item in simulation.linear_solver_diagnostics
+    )

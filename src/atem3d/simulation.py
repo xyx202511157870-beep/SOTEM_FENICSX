@@ -560,6 +560,7 @@ class TDEMIPSimulation:
             or isinstance(residual, bool)
             or not isinstance(residual, Real)
             or not np.isfinite(float(residual))
+            or float(residual) < 0.0
             or float(residual) > self.initialization_tolerance
             or isinstance(replacements, bool)
             or not isinstance(replacements, Integral)
@@ -641,6 +642,7 @@ class TDEMIPSimulation:
     ) -> None:
         if (
             not np.isfinite(balance_relative_residual)
+            or balance_relative_residual < 0.0
             or balance_relative_residual > self.initialization_tolerance
         ):
             raise RuntimeError(

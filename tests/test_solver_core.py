@@ -1584,6 +1584,48 @@ def test_petsc_initialization_accepts_exact_zero_dc_rhs_without_backend_claim(
     assert simulation.initialization_solver_diagnostics[0]["backend_reason"] == 0
 
 
+def test_initialization_backend_diagnostic_rejects_negative_residual():
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        initialization_solver="petsc_hypre",
+    )
+    diagnostic = {
+        "solve_mode": "petsc_ksp",
+        "backend_reason": 2,
+        "backend_reported_converged": True,
+        "backend_iterations": 1,
+        "external_true_relative_residual": -1.0e-12,
+        "residual_replacement_steps": 0,
+    }
+
+    with pytest.raises(RuntimeError, match="external residual gate"):
+        simulation._validated_initialization_backend_diagnostic(
+            diagnostic,
+            phase="dc_electric",
+        )
+
+
+def test_initialization_balance_diagnostic_rejects_negative_residual():
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        initialization_solver="petsc_hypre",
+    )
+
+    with pytest.raises(RuntimeError, match="balance gate"):
+        simulation._record_initialization_diagnostic(
+            {},
+            phase="dc_electric",
+            balance_relative_residual=-1.0e-12,
+            balance_name="discrete_current_divergence",
+        )
+
+
 def test_petsc_zero_source_records_both_exact_initialization_phases(monkeypatch):
     monkeypatch.setattr(
         simulation_module,

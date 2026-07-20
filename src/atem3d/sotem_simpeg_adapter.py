@@ -764,8 +764,10 @@ def _validated_initialization_solver_diagnostics(
             or int(replacements) < 0
             or int(replacements) > maximum_replacements
             or not finite_number(residual)
+            or float(residual) < 0.0
             or float(residual) > tolerance
             or not finite_number(balance)
+            or float(balance) < 0.0
             or float(balance) > tolerance
             or not finite_number(external_tolerance)
             or float(external_tolerance) != tolerance
@@ -803,21 +805,74 @@ def _validated_linear_solver_diagnostics(
 ) -> list[dict[str, Any]]:
     if not isinstance(diagnostics, list) or len(diagnostics) != len(config["time_steps"]):
         raise RuntimeError("linear solver diagnostics must contain one record per time step")
-    tolerance = float(config["solver"]["tolerance"])
+    solver_config = config["solver"]
+    tolerance = float(solver_config["tolerance"])
+    configured_internal = solver_config.get("internal_tolerance")
+    internal_tolerance = (
+        min(1.0e-11, tolerance * 1.0e-3)
+        if configured_internal is None
+        else float(configured_internal)
+    )
+    maximum_replacements = int(solver_config["residual_replacement_steps"])
+
+    def finite_number(value: Any) -> bool:
+        return (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float, np.integer, np.floating))
+            and np.isfinite(float(value))
+        )
+
     validated: list[dict[str, Any]] = []
     for index, (record, dt) in enumerate(zip(diagnostics, config["time_steps"])):
         if not isinstance(record, dict):
             raise RuntimeError("linear solver diagnostics records must be mappings")
+        solve_mode = record.get("solve_mode")
+        reason = record.get("backend_reason")
+        iterations = record.get("backend_iterations")
+        replacements = record.get("residual_replacement_steps")
         residual = record.get("external_true_relative_residual")
-        if (
+        external_tolerance = record.get("external_tolerance")
+        reported_internal = record.get("internal_tolerance")
+        reported_dt = record.get("dt_s")
+        invalid = (
             record.get("step_index") != index
-            or not bool(record.get("backend_reported_converged", False))
-            or isinstance(residual, bool)
-            or not isinstance(residual, (int, float, np.integer, np.floating))
-            or not np.isfinite(float(residual))
+            or record.get("solver") != "petsc_ksp_hypre_ams"
+            or record.get("ksp_type") != solver_config["ksp_type"]
+            or record.get("pc_type") != solver_config["preconditioner"]
+            or solve_mode not in {"exact_zero_rhs", "petsc_ksp"}
+            or isinstance(reason, bool)
+            or not isinstance(reason, (int, np.integer))
+            or isinstance(iterations, bool)
+            or not isinstance(iterations, (int, np.integer))
+            or int(iterations) < 0
+            or isinstance(replacements, bool)
+            or not isinstance(replacements, (int, np.integer))
+            or int(replacements) < 0
+            or int(replacements) > maximum_replacements
+            or not finite_number(residual)
+            or float(residual) < 0.0
             or float(residual) > tolerance
-            or not np.isclose(float(record.get("dt_s", np.nan)), float(dt), rtol=0.0, atol=0.0)
-        ):
+            or not finite_number(external_tolerance)
+            or float(external_tolerance) != tolerance
+            or not finite_number(reported_internal)
+            or float(reported_internal) != internal_tolerance
+            or not finite_number(reported_dt)
+            or float(reported_dt) != float(dt)
+        )
+        if not invalid and solve_mode == "exact_zero_rhs":
+            invalid = (
+                int(reason) != 0
+                or record.get("backend_reported_converged") is not False
+                or int(iterations) != 0
+                or float(residual) != 0.0
+                or int(replacements) != 0
+            )
+        elif not invalid:
+            invalid = (
+                int(reason) <= 0
+                or record.get("backend_reported_converged") is not True
+            )
+        if invalid:
             raise RuntimeError("linear solver diagnostics failed the external residual gate")
         validated.append(copy.deepcopy(record))
     return validated

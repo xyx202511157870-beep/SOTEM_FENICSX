@@ -143,6 +143,100 @@ def _valid_initialization_diagnostics():
     ]
 
 
+def _valid_linear_diagnostics(config):
+    return [
+        {
+            "step_index": index,
+            "dt_s": float(dt),
+            "solver": "petsc_ksp_hypre_ams",
+            "solve_mode": "petsc_ksp",
+            "ksp_type": "gmres",
+            "pc_type": "hypre_ams",
+            "backend_reason": 2,
+            "backend_reported_converged": True,
+            "backend_iterations": 3,
+            "external_true_relative_residual": 1.0e-12,
+            "external_tolerance": 1.0e-8,
+            "internal_tolerance": 1.0e-11,
+            "residual_replacement_steps": 0,
+        }
+        for index, dt in enumerate(config["time_steps"])
+    ]
+
+
+def _lei_noip_config():
+    case = cli.load_benchmark_case(LEI_CASE)
+    return cli.build_benchmark_config(
+        case,
+        variant="noip",
+        spatial_level="S0",
+        boundary_level="B0",
+        substeps=1,
+    )
+
+
+def test_publication_validator_rejects_negative_linear_residual():
+    config = _lei_noip_config()
+    diagnostics = _valid_linear_diagnostics(config)
+    diagnostics[0]["external_true_relative_residual"] = -1.0e-12
+
+    with pytest.raises(ValueError, match="linear solver diagnostics"):
+        cli._validated_linear_diagnostics_for_publication(diagnostics, config)
+
+
+def test_publication_validator_accepts_exact_zero_linear_diagnostics():
+    config = _lei_noip_config()
+    diagnostics = _valid_linear_diagnostics(config)
+    for record in diagnostics:
+        record.update(
+            solve_mode="exact_zero_rhs",
+            backend_reason=0,
+            backend_reported_converged=False,
+            backend_iterations=0,
+            external_true_relative_residual=0.0,
+            residual_replacement_steps=0,
+        )
+
+    validated = cli._validated_linear_diagnostics_for_publication(
+        diagnostics,
+        config,
+    )
+
+    assert len(validated) == len(config["time_steps"])
+    assert all(item["solve_mode"] == "exact_zero_rhs" for item in validated)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backend_reason", 1),
+        ("backend_reported_converged", True),
+        ("backend_iterations", 1),
+        ("external_true_relative_residual", 1.0e-12),
+        ("residual_replacement_steps", 1),
+    ],
+)
+def test_publication_validator_rejects_incoherent_exact_zero_linear_diagnostics(
+    field,
+    value,
+):
+    config = _lei_noip_config()
+    diagnostics = _valid_linear_diagnostics(config)
+    for record in diagnostics:
+        record.update(
+            solve_mode="exact_zero_rhs",
+            backend_reason=0,
+            backend_reported_converged=False,
+            backend_iterations=0,
+            external_true_relative_residual=0.0,
+            residual_replacement_steps=0,
+        )
+    diagnostics[0][field] = value
+
+    with pytest.raises(ValueError, match="linear solver diagnostics"):
+        cli._validated_linear_diagnostics_for_publication(diagnostics, config)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -197,6 +291,7 @@ def _build_effect_source_runs(
 
     def fake_simpeg(case_value, **kwargs):
         scale = 1.1 if kwargs["variant"] == "noip" else 1.6
+        config = cli.build_benchmark_config(case_value, **kwargs)
         return {
             **_fake_response(case_value, scale=scale),
             "solver_id": SIMPEG_SOLVER,
@@ -206,7 +301,7 @@ def _build_effect_source_runs(
                 _valid_ip_material_fit() if kwargs["variant"] == "ip" else None
             ),
             "initialization_solver_diagnostics": _valid_initialization_diagnostics(),
-            "linear_solver_diagnostics": [],
+            "linear_solver_diagnostics": _valid_linear_diagnostics(config),
         }
 
     monkeypatch.setattr(cli, "get_empymod_reference", fake_reference)
@@ -476,6 +571,7 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
 
     def fake_run(case, **kwargs):
         captured.update(case=case, kwargs=kwargs)
+        config = cli.build_benchmark_config(case, **kwargs)
         return {
             **_fake_response(case, scale=2.0),
             "solver_id": SIMPEG_SOLVER,
@@ -483,7 +579,7 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
             "variant": kwargs["variant"],
             "material_fit": _valid_ip_material_fit(),
             "initialization_solver_diagnostics": _valid_initialization_diagnostics(),
-            "linear_solver_diagnostics": [],
+            "linear_solver_diagnostics": _valid_linear_diagnostics(config),
         }
 
     monkeypatch.setattr(cli, "run_simpeg_benchmark", fake_run)
@@ -521,7 +617,9 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
         ("pc_type", "wrong"),
         ("balance_name", "wrong"),
         ("backend_reason", 0),
+        ("external_true_relative_residual", -1.0e-12),
         ("external_true_relative_residual", 1.01e-8),
+        ("balance_relative_residual", -1.0e-12),
         ("internal_tolerance", 2.0e-11),
         ("residual_replacement_steps", 3),
     ],
@@ -542,6 +640,7 @@ def test_simpeg_publication_revalidates_initialization_diagnostics(
     def fake_run(case, **kwargs):
         diagnostics = _valid_initialization_diagnostics()
         diagnostics[0][field] = value
+        config = cli.build_benchmark_config(case, **kwargs)
         return {
             **_fake_response(case, scale=2.0),
             "solver_id": SIMPEG_SOLVER,
@@ -549,12 +648,57 @@ def test_simpeg_publication_revalidates_initialization_diagnostics(
             "variant": kwargs["variant"],
             "material_fit": _valid_ip_material_fit(),
             "initialization_solver_diagnostics": diagnostics,
-            "linear_solver_diagnostics": [],
+            "linear_solver_diagnostics": _valid_linear_diagnostics(config),
         }
 
     monkeypatch.setattr(cli, "run_simpeg_benchmark", fake_run)
 
     with pytest.raises(ValueError, match="initialization diagnostics"):
+        cli.main(_command("simpeg", run_dir, SONG_CASE, extra=("--variant", "ip")))
+
+    assert not (run_dir / "simpeg.csv").exists()
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "prepared"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("external_true_relative_residual", -1.0e-12),
+        ("backend_reason", 0),
+        ("backend_reported_converged", False),
+    ],
+)
+def test_simpeg_publication_revalidates_linear_solver_diagnostics(
+    tmp_path,
+    monkeypatch,
+    field,
+    value,
+):
+    run_dir = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver=SIMPEG_SOLVER,
+        level="S1T2B0",
+    )
+
+    def fake_run(case, **kwargs):
+        config = cli.build_benchmark_config(case, **kwargs)
+        diagnostics = _valid_linear_diagnostics(config)
+        diagnostics[0][field] = value
+        return {
+            **_fake_response(case, scale=2.0),
+            "solver_id": SIMPEG_SOLVER,
+            **_valid_simpeg_provenance(case, kwargs["variant"], "S1T2B0"),
+            "variant": kwargs["variant"],
+            "material_fit": _valid_ip_material_fit(),
+            "initialization_solver_diagnostics": _valid_initialization_diagnostics(),
+            "linear_solver_diagnostics": diagnostics,
+        }
+
+    monkeypatch.setattr(cli, "run_simpeg_benchmark", fake_run)
+
+    with pytest.raises(ValueError, match="linear solver diagnostics"):
         cli.main(_command("simpeg", run_dir, SONG_CASE, extra=("--variant", "ip")))
 
     assert not (run_dir / "simpeg.csv").exists()

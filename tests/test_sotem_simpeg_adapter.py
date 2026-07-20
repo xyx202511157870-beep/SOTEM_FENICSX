@@ -444,9 +444,17 @@ def _fake_solver_for_config(config, *, nonfinite=False):
         {
             "step_index": index,
             "dt_s": float(dt),
+            "solver": "petsc_ksp_hypre_ams",
+            "solve_mode": "petsc_ksp",
+            "ksp_type": "gmres",
+            "pc_type": "hypre_ams",
+            "backend_reason": 2,
             "backend_reported_converged": True,
+            "backend_iterations": 3,
             "external_true_relative_residual": 0.0,
             "external_tolerance": 1.0e-8,
+            "internal_tolerance": 1.0e-11,
+            "residual_replacement_steps": 0,
         }
         for index, dt in enumerate(config["time_steps"])
     ]
@@ -544,6 +552,92 @@ def test_run_rejects_missing_per_step_external_solver_diagnostics(monkeypatch, l
         )
 
 
+def test_run_accepts_exact_zero_transient_diagnostics(monkeypatch, lei_case):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        for record in simulation.linear_solver_diagnostics:
+            record.update(
+                solve_mode="exact_zero_rhs",
+                backend_reason=0,
+                backend_reported_converged=False,
+                backend_iterations=0,
+                external_true_relative_residual=0.0,
+                residual_replacement_steps=0,
+            )
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    result = run_simpeg_benchmark(lei_case, variant="noip")
+
+    assert result["linear_solver_diagnostics"]
+    assert all(
+        record["solve_mode"] == "exact_zero_rhs"
+        for record in result["linear_solver_diagnostics"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("external_true_relative_residual", -1.0e-12),
+        ("backend_reason", 0),
+        ("backend_reported_converged", False),
+    ],
+)
+def test_run_rejects_invalid_petsc_transient_diagnostics(
+    monkeypatch,
+    lei_case,
+    field,
+    value,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        simulation.linear_solver_diagnostics[0][field] = value
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="linear solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backend_reason", 1),
+        ("backend_reported_converged", True),
+        ("backend_iterations", 1),
+        ("external_true_relative_residual", 1.0e-12),
+        ("residual_replacement_steps", 1),
+    ],
+)
+def test_run_rejects_incoherent_exact_zero_transient_diagnostics(
+    monkeypatch,
+    lei_case,
+    field,
+    value,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        for record in simulation.linear_solver_diagnostics:
+            record.update(
+                solve_mode="exact_zero_rhs",
+                backend_reason=0,
+                backend_reported_converged=False,
+                backend_iterations=0,
+                external_true_relative_residual=0.0,
+                residual_replacement_steps=0,
+            )
+        simulation.linear_solver_diagnostics[0][field] = value
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="linear solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -557,8 +651,10 @@ def test_run_rejects_missing_per_step_external_solver_diagnostics(monkeypatch, l
         ("internal_tolerance", 2.0e-11),
         ("residual_replacement_steps", 3),
         ("external_true_relative_residual", np.nan),
+        ("external_true_relative_residual", -1.0e-12),
         ("external_true_relative_residual", 1.01e-8),
         ("balance_relative_residual", np.inf),
+        ("balance_relative_residual", -1.0e-12),
         ("balance_relative_residual", 1.01e-8),
     ],
 )
