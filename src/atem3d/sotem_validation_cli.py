@@ -59,7 +59,6 @@ _CRITICAL_LIBRARIES = (
 _PIPELINE_MODULE: ModuleType | None = None
 _TRANSACTION_SCHEMA = "atem3d.sotem.stage-transaction"
 _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
-_V1_IMPLICIT_EMPYMOD_SRCPTS = 5
 
 
 def _utc_now() -> datetime:
@@ -86,40 +85,6 @@ def _positive_cli_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
-
-
-def _reference_inputs_for_resume(
-    run_dir: Path, manifest: Mapping[str, Any], *, variant: str, srcpts: int
-) -> dict[str, Any]:
-    """Preserve v1 runs where the historical default srcpts was implicit."""
-
-    requested = {"variant": variant, "srcpts": srcpts}
-    record = manifest.get("stages", {}).get("reference")
-    if not isinstance(record, Mapping):
-        return requested
-    recorded = record.get("inputs")
-    legacy = {"variant": variant}
-    if recorded == legacy:
-        implicit = _verified_v1_implicit_reference_srcpts(run_dir, record)
-        if srcpts == implicit:
-            return legacy
-    return requested
-
-
-def _verified_v1_implicit_reference_srcpts(
-    run_dir: Path, stage_record: Mapping[str, Any]
-) -> int:
-    hashes = stage_record.get("file_sha256", {})
-    expected_hash = hashes.get("empymod_metadata.json") if isinstance(hashes, Mapping) else None
-    metadata_path = _bundle_dir(run_dir, "reference") / "empymod_metadata.json"
-    if type(expected_hash) is not str or not metadata_path.is_file() or _is_linklike(metadata_path):
-        raise ValueError("v1 reference metadata provenance is missing or unsafe")
-    if _sha256_file(metadata_path) != expected_hash:
-        raise ValueError("v1 reference metadata hash mismatch")
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    if not isinstance(metadata, Mapping) or "srcpts" in metadata:
-        raise ValueError("reference inputs omit srcpts but hashed metadata is new-format")
-    return _V1_IMPLICIT_EMPYMOD_SRCPTS
 
 
 @contextmanager
@@ -1198,10 +1163,12 @@ def _load_pipeline_module() -> ModuleType:
     return module
 
 
-def get_empymod_reference(times, config, *, mode: str):
+def get_empymod_reference(times, config, *, mode: str, srcpts: int):
     """Monkeypatchable adapter to the existing independent reference API."""
 
-    return _load_pipeline_module().get_empymod_reference(times, config, mode=mode)
+    return _load_pipeline_module().get_empymod_reference(
+        times, config, mode=mode, srcpts=srcpts
+    )
 
 
 def _parallel_offset(case: BenchmarkCase) -> float:
@@ -1281,9 +1248,7 @@ def _reference(args: argparse.Namespace) -> int:
     started_at = _utc_text()
     started_monotonic = time.perf_counter()
     run_dir, case, manifest = _open_run(args, expected_solver="empymod")
-    inputs = _reference_inputs_for_resume(
-        run_dir, manifest, variant=args.variant, srcpts=args.srcpts
-    )
+    inputs = {"variant": args.variant, "srcpts": args.srcpts}
     outputs = [
         run_dir / "empymod.csv",
         run_dir / "reference_empymod_or_1d.csv",
@@ -1306,6 +1271,7 @@ def _reference(args: argparse.Namespace) -> int:
         np.asarray(case.observation_times, dtype=float),
         config,
         mode=args.variant,
+        srcpts=args.srcpts,
     )
     if not isinstance(result, Mapping):
         raise ValueError("empymod reference API must return a mapping")
@@ -1513,13 +1479,9 @@ def _source_run_evidence(
         if recorded_inputs.get("variant") != variant:
             raise ValueError(f"{role} reference variant mismatch")
         srcpts = recorded_inputs.get("srcpts")
-        if srcpts is None and dict(recorded_inputs) == {"variant": variant}:
-            srcpts = _verified_v1_implicit_reference_srcpts(run_dir, stage_record)
-            expected_inputs = {"variant": variant}
-        else:
-            if type(srcpts) is not int or srcpts <= 0:
-                raise ValueError(f"{role} reference srcpts provenance is invalid")
-            expected_inputs = {"variant": variant, "srcpts": srcpts}
+        if type(srcpts) is not int or srcpts <= 0:
+            raise ValueError(f"{role} reference srcpts provenance is invalid")
+        expected_inputs = {"variant": variant, "srcpts": srcpts}
     else:
         expected_inputs = {"variant": variant}
     if stage_name == "simpeg":

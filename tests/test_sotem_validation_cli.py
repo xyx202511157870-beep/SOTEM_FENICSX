@@ -109,7 +109,7 @@ def _build_effect_source_runs(
 ):
     case = cli.load_benchmark_case(case_path)
 
-    def fake_reference(times, config, *, mode):
+    def fake_reference(times, config, *, mode, srcpts):
         scale = 1.0 if mode == "noip" else 1.5
         return {**_fake_response(case, scale=scale), "reference_mode": mode}
 
@@ -334,7 +334,7 @@ def test_reference_routes_exact_variant_and_writes_canonical_and_provenance(
     run_dir = _prepare(tmp_path, case=SONG_CASE, solver="empymod")
     captured = {}
 
-    def fake_reference(times, config, *, mode):
+    def fake_reference(times, config, *, mode, srcpts):
         captured.update(times=np.asarray(times), config=config, mode=mode)
         case = cli.load_benchmark_case(SONG_CASE)
         return {**_fake_response(case), "reference_mode": mode}
@@ -691,7 +691,7 @@ def test_resume_rejects_modified_completed_stage_without_overwrite(tmp_path, mon
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
     args = _command("reference", run_dir, LEI_CASE, extra=("--variant", "noip"))
     assert cli.main(args) == 0
@@ -974,7 +974,7 @@ def test_stage_bundle_recovers_manifest_commit_after_interruption(tmp_path, monk
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
     original_record = cli._record_stage
     monkeypatch.setattr(
@@ -1006,7 +1006,7 @@ def test_completed_stage_restores_a_missing_export_from_its_bundle(tmp_path, mon
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
     args = _command("reference", run_dir, LEI_CASE, extra=("--variant", "noip"))
     assert cli.main(args) == 0
@@ -1029,7 +1029,7 @@ def test_completed_stage_rejects_corrupted_transaction_bundle(tmp_path, monkeypa
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
     args = _command("reference", run_dir, LEI_CASE, extra=("--variant", "noip"))
     assert cli.main(args) == 0
@@ -1115,7 +1115,7 @@ def test_manifest_and_stage_record_environment_and_resource_fields(tmp_path, mon
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
     assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -1148,7 +1148,7 @@ def test_stage_records_its_own_execution_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
 
     assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
@@ -1172,7 +1172,7 @@ def test_stage_publication_flushes_parent_directories(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
 
     assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
@@ -1256,7 +1256,7 @@ def test_prepare_preserves_model_and_resumes_after_case_source_is_removed(
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
 
     assert cli.main(_command("reference", run_dir, case_path)) == 0
@@ -1315,8 +1315,9 @@ def test_reference_srcpts_controls_real_adapter_and_resume_identity(tmp_path, mo
     case = cli.load_benchmark_case(LEI_CASE)
     captured = {}
 
-    def fake_reference(times, config, *, mode):
-        captured["srcpts"] = config.empymod_srcpts
+    def fake_reference(times, config, *, mode, srcpts):
+        captured["srcpts"] = srcpts
+        captured["config_srcpts"] = config.empymod_srcpts
         return {**_fake_response(case), "reference_mode": mode}
 
     monkeypatch.setattr(cli, "get_empymod_reference", fake_reference)
@@ -1329,6 +1330,7 @@ def test_reference_srcpts_controls_real_adapter_and_resume_identity(tmp_path, mo
 
     assert cli.main(command) == 0
     assert captured["srcpts"] == 9
+    assert captured["config_srcpts"] == 9
     metadata = json.loads((run_dir / "empymod_metadata.json").read_text(encoding="utf-8"))
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert metadata["srcpts"] == 9
@@ -1398,7 +1400,7 @@ def _convert_to_v1_implicit_reference_srcpts(run_dir):
     )
 
 
-def test_reference_resumes_v1_implicit_default_srcpts_but_rejects_other_value(
+def test_reference_rejects_v1_stage_with_implicit_default_srcpts(
     tmp_path, monkeypatch
 ):
     run_dir = _prepare(tmp_path, run_name="legacy-v1-reference")
@@ -1406,29 +1408,15 @@ def test_reference_resumes_v1_implicit_default_srcpts_but_rejects_other_value(
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
     assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
     _convert_to_v1_implicit_reference_srcpts(run_dir)
-    monkeypatch.setattr(
-        cli,
-        "get_empymod_reference",
-        lambda *args, **kwargs: pytest.fail("legacy default resume must reuse evidence"),
-    )
-
-    assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
     with pytest.raises(ValueError, match="inputs|srcpts"):
-        cli.main(
-            _command(
-                "reference",
-                run_dir,
-                LEI_CASE,
-                extra=("--srcpts", "17"),
-            )
-        )
+        cli.main(_command("reference", run_dir, LEI_CASE))
 
 
-def test_effect_accepts_v1_reference_runs_with_implicit_default_srcpts(
+def test_effect_rejects_v1_reference_runs_with_implicit_default_srcpts(
     tmp_path, monkeypatch
 ):
     runs = _build_effect_source_runs(tmp_path, monkeypatch)
@@ -1441,11 +1429,8 @@ def test_effect_accepts_v1_reference_runs_with_implicit_default_srcpts(
         run_name="legacy-v1-effect",
     )
 
-    assert cli.main(_effect_args(effect_run, runs)) == 0
-    manifest = json.loads((effect_run / "manifest.json").read_text(encoding="utf-8"))
-    source_runs = manifest["stages"]["effect"]["inputs"]["source_runs"]
-    assert source_runs["noip_reference"]["srcpts"] == 5
-    assert source_runs["ip_reference"]["srcpts"] == 5
+    with pytest.raises(ValueError, match="srcpts|inputs"):
+        cli.main(_effect_args(effect_run, runs))
 
 
 def test_reference_rejects_missing_srcpts_input_when_hashed_metadata_is_new_format(
@@ -1456,7 +1441,7 @@ def test_reference_rejects_missing_srcpts_input_when_hashed_metadata_is_new_form
     monkeypatch.setattr(
         cli,
         "get_empymod_reference",
-        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+        lambda times, config, *, mode, srcpts: {**_fake_response(case), "reference_mode": mode},
     )
     assert cli.main(
         _command("reference", run_dir, LEI_CASE, extra=("--srcpts", "17"))
