@@ -367,6 +367,7 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
             "reason": 2,
             "is_output": True,
             "time_theta": 1.0,
+            "transient_operator_reused": True,
         }
     ]
     receiver_diagnostics = [
@@ -405,6 +406,7 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
     assert loaded["components"] == ["Ex", "Ey", "dBzdt"]
     assert loaded["solver_log"][0]["step"] == 0
     assert loaded["solver_log"][0]["is_output"] is True
+    assert loaded["solver_log"][0]["transient_operator_reused"] is True
     np.testing.assert_allclose(loaded["h_old_receiver"], np.asarray([10.0, 11.0, 12.0]))
     assert loaded["receiver_diagnostic_rows"][0]["receiver_type"] == "volume_average"
     assert loaded["receiver_diagnostic_rows"][0]["dBzdt"] == 3.0
@@ -423,6 +425,7 @@ def test_forward_checkpoint_round_trips_state_without_pickle(tmp_path):
         assert int(payload["producer_schema_version"].item()) == sp._FORWARD_ARTIFACT_SCHEMA_VERSION
         assert int(payload["producer_nedelec_order"].item()) == 1
         assert int(payload["producer_curl_degree"].item()) == 0
+        assert payload["solver_transient_operator_reused"].tolist() == [True]
         assert str(payload["producer_dbdt_observation_schema"].item()) == sp._dbdt_observation_schema(config)
 
 

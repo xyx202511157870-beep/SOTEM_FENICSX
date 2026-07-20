@@ -3451,10 +3451,14 @@ def _copy_and_combine_matrix(K, M, scale: float, *, k_scale: float = 1.0):
     from petsc4py import PETSc
 
     A = K.copy()
-    if float(k_scale) != 1.0:
-        A.scale(float(k_scale))
-    A.axpy(scale, M, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
-    A.assemble()
+    try:
+        if float(k_scale) != 1.0:
+            A.scale(float(k_scale))
+        A.axpy(scale, M, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
+        A.assemble()
+    except BaseException:
+        A.destroy()
+        raise
     return A
 
 
@@ -4332,15 +4336,17 @@ def configure_ams_solver(A, spaces: dict[str, Any], config: PipelineConfig):
 
     V = spaces["V"]
     S = spaces["S"]
-    ksp = PETSc.KSP().create(A.comm)
-    ksp.setOperators(A)
-    ksp.setType(config.ksp_type)
-    ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=config.max_it)
-    pc = ksp.getPC()
-    pc.setType("hypre")
-    pc.setHYPREType("ams")
-
+    ksp = None
+    G = None
     try:
+        ksp = PETSc.KSP().create(A.comm)
+        ksp.setOperators(A)
+        ksp.setType(config.ksp_type)
+        ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=config.max_it)
+        pc = ksp.getPC()
+        pc.setType("hypre")
+        pc.setHYPREType("ams")
+
         G = fem_petsc.discrete_gradient(S, V)
         G.assemble()
         pc.setHYPREDiscreteGradient(G)
@@ -4357,10 +4363,144 @@ def configure_ams_solver(A, spaces: dict[str, Any], config: PipelineConfig):
         pc.setHYPRESetEdgeConstantVectors(ex.x.petsc_vec, ey.x.petsc_vec, ez.x.petsc_vec)
         pc.setUp()
     except Exception as exc:
+        if ksp is not None:
+            ksp.destroy()
+        if G is not None:
+            G.destroy()
         raise SystemExit(f"Failed to configure HYPRE AMS with discrete gradient and edge constants: {exc}") from exc
 
     log("[solver] Configured KSP " + config.ksp_type + " with PC hypre/ams.", comm=A.comm)
     return {"ksp": ksp, "G": G, "edge_constants": (ex, ey, ez)}
+
+
+def _operator_signature_value(value):
+    """Return a hashable value while removing only floating-point schedule noise."""
+
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("transient operator signature values must be finite")
+        return ("float15", format(float(value), ".15g"))
+    if isinstance(value, dict):
+        return tuple(
+            (str(key), _operator_signature_value(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(_operator_signature_value(item) for item in value)
+    return _operator_signature_value(float(value))
+
+
+def _transient_operator_signature(
+    *,
+    dt: float,
+    time_method: str,
+    theta: float,
+    bdf2_coefficients,
+    outer_boundary_mode: str,
+    robin_admittance,
+    divergence_control_applied: bool,
+    divergence_control_weight,
+    debye_metadata,
+):
+    """Identify the complete LHS operator for one implicit transient step.
+
+    Fifteen significant digits collapse the one-ULP subtraction noise produced
+    by ``linspace`` interval endpoints, while keeping physically distinct time
+    steps separate.
+    """
+
+    return _operator_signature_value(
+        {
+            "dt": float(dt),
+            "time_method": str(time_method).strip().lower(),
+            "theta": float(theta),
+            "bdf2_coefficients": bdf2_coefficients,
+            "outer_boundary_mode": str(outer_boundary_mode).strip().lower(),
+            "robin_admittance": robin_admittance,
+            "divergence_control_applied": bool(divergence_control_applied),
+            "divergence_control_weight": divergence_control_weight,
+            "debye_metadata": debye_metadata,
+        }
+    )
+
+
+def _destroy_ams_solver_context(solver_context) -> None:
+    if solver_context is None:
+        return
+    ksp = solver_context.get("ksp")
+    G = solver_context.get("G")
+    edge_constants = solver_context.get("edge_constants")
+    if ksp is not None:
+        ksp.destroy()
+    if G is not None:
+        G.destroy()
+    solver_context.clear()
+    del edge_constants
+
+
+class _TransientOperatorCache:
+    """Own exactly one consecutive transient matrix and AMS hierarchy."""
+
+    def __init__(self):
+        self.signature = None
+        self.A = None
+        self.M_eff = None
+        self.owns_M_eff = False
+        self.solver_context = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self.close()
+        return False
+
+    def acquire(self, signature, *, build_matrix, build_solver):
+        if self.signature == signature and self.A is not None and self.solver_context is not None:
+            return self.A, self.M_eff, self.solver_context, True
+
+        self.close()
+        A = None
+        M_eff = None
+        owns_M_eff = False
+        solver_context = None
+        try:
+            A, M_eff, owns_M_eff = build_matrix()
+            solver_context = build_solver(A)
+        except BaseException:
+            _destroy_ams_solver_context(solver_context)
+            if A is not None:
+                A.destroy()
+            if owns_M_eff and M_eff is not None:
+                M_eff.destroy()
+            raise
+
+        self.signature = signature
+        self.A = A
+        self.M_eff = M_eff
+        self.owns_M_eff = bool(owns_M_eff)
+        self.solver_context = solver_context
+        return A, M_eff, solver_context, False
+
+    def close(self) -> None:
+        solver_context = self.solver_context
+        A = self.A
+        M_eff = self.M_eff
+        owns_M_eff = self.owns_M_eff
+        self.signature = None
+        self.A = None
+        self.M_eff = None
+        self.owns_M_eff = False
+        self.solver_context = None
+        _destroy_ams_solver_context(solver_context)
+        if A is not None:
+            A.destroy()
+        if owns_M_eff and M_eff is not None:
+            M_eff.destroy()
 
 
 def configure_lu_solver(A, *, comm=None):
@@ -5360,10 +5500,14 @@ def _matrix_for_effective_conductivity(operators, debye, dt: float):
     if debye is None or not debye["terms"]:
         return operators["M"]
     M_eff = operators["M_inf"].copy()
-    for term, M_delta in zip(debye["terms"], operators["M_debye"]):
-        _alpha, beta = _debye_backward_euler_coefficients(term, dt)
-        M_eff.axpy(-beta, M_delta, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
-    M_eff.assemble()
+    try:
+        for term, M_delta in zip(debye["terms"], operators["M_debye"]):
+            _alpha, beta = _debye_backward_euler_coefficients(term, dt)
+            M_eff.axpy(-beta, M_delta, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
+        M_eff.assemble()
+    except BaseException:
+        M_eff.destroy()
+        raise
     return M_eff
 
 
@@ -6342,7 +6486,19 @@ def _update_debye_memories(debye, memories, E_new, dt: float) -> None:
         chi.x.scatter_forward()
 
 
-def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, config: PipelineConfig, debye=None, times=None):
+def _run_fetd_forward_impl(
+    msh,
+    cell_tags,
+    facet_tags,
+    spaces,
+    materials,
+    source,
+    config: PipelineConfig,
+    *,
+    operator_cache: _TransientOperatorCache,
+    debye=None,
+    times=None,
+):
     """Run backward-Euler FETD forward modelling."""
 
     import numpy as np
@@ -6488,7 +6644,6 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         )
     initial_rows_count = len(rows)
     stop_after_outputs = int(config.stop_after_outputs)
-    solver_context = None
     time_theta = float(config.time_theta)
     time_method = str(config.time_method).strip().lower()
     E_older = None
@@ -6506,38 +6661,24 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             and previous_step_dt is not None
         )
         owns_M_eff = debye is not None and bool(debye["terms"])
-        M_eff = operators["M"] if use_bdf2 else _matrix_for_effective_conductivity(operators, debye, dt)
         if use_bdf2:
             bdf2_coeffs = _bdf2_step_coefficients(dt, previous_step_dt)
             lhs_mass = bdf2_coeffs["lhs"]
             lhs_stiffness = 1.0
         else:
+            bdf2_coeffs = None
             coeffs = _theta_step_coefficients(dt, 1.0 if owns_M_eff else time_theta)
             lhs_mass = coeffs["mass_lhs"]
             lhs_stiffness = coeffs["stiffness_lhs"]
-        A = _copy_and_combine_matrix(
-            operators["K"],
-            M_eff,
-            lhs_mass,
-            k_scale=lhs_stiffness,
+        outer_boundary_mode = str(config.outer_boundary_mode).strip().lower()
+        robin_admittance = (
+            _outer_boundary_robin_admittance(config, dt)
+            if outer_boundary_mode == "robin"
+            else None
         )
-        if str(config.outer_boundary_mode).strip().lower() == "robin":
-            B_robin = operators.get("B_robin")
-            if B_robin is None:
-                raise RuntimeError("Robin outer boundary mode requires B_robin operator")
-            from petsc4py import PETSc
-
-            A.axpy(
-                _outer_boundary_robin_admittance(config, dt),
-                B_robin,
-                structure=PETSc.Mat.Structure.SUBSET_NONZERO_PATTERN,
-            )
-            A.assemble()
         divergence_control_applied = divergence_control is not None and _should_apply_divergence_control(float(t), config)
         divergence_control_stats = None
         if divergence_control_applied:
-            from petsc4py import PETSc
-
             divergence_control_stats = _divergence_control_step_stats(
                 config,
                 dt=dt,
@@ -6547,17 +6688,64 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
                 stiffness_norm=float(divergence_control_norms["stiffness"]),
                 control_norm=float(divergence_control_norms["control"]),
             )
-            A.axpy(
-                float(divergence_control_stats["divergence_control_applied_weight"]),
-                divergence_control,
-                structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN,
-            )
-            A.assemble()
-        _zero_rows_columns(A, operators["bc_global"], diag=1.0)
-        if solver_context is None:
-            solver_context = configure_ams_solver(A, spaces, config)
-        else:
-            solver_context["ksp"].setOperators(A)
+        divergence_control_weight = (
+            float(divergence_control_stats["divergence_control_applied_weight"])
+            if divergence_control_stats is not None
+            else None
+        )
+        operator_signature = _transient_operator_signature(
+            dt=dt,
+            time_method="bdf2" if use_bdf2 else "theta",
+            theta=lhs_stiffness,
+            bdf2_coefficients=bdf2_coeffs,
+            outer_boundary_mode=outer_boundary_mode,
+            robin_admittance=robin_admittance,
+            divergence_control_applied=divergence_control_applied,
+            divergence_control_weight=divergence_control_weight,
+            debye_metadata=_debye_total_field_step_metadata(debye, dt),
+        )
+
+        def build_step_matrix():
+            M_eff = operators["M"] if use_bdf2 else _matrix_for_effective_conductivity(operators, debye, dt)
+            A = None
+            try:
+                A = _copy_and_combine_matrix(
+                    operators["K"],
+                    M_eff,
+                    lhs_mass,
+                    k_scale=lhs_stiffness,
+                )
+                if outer_boundary_mode == "robin":
+                    B_robin = operators.get("B_robin")
+                    if B_robin is None:
+                        raise RuntimeError("Robin outer boundary mode requires B_robin operator")
+                    A.axpy(
+                        robin_admittance,
+                        B_robin,
+                        structure=PETSc.Mat.Structure.SUBSET_NONZERO_PATTERN,
+                    )
+                    A.assemble()
+                if divergence_control_applied:
+                    A.axpy(
+                        divergence_control_weight,
+                        divergence_control,
+                        structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN,
+                    )
+                    A.assemble()
+                _zero_rows_columns(A, operators["bc_global"], diag=1.0)
+            except BaseException:
+                if A is not None:
+                    A.destroy()
+                if owns_M_eff:
+                    M_eff.destroy()
+                raise
+            return A, M_eff, owns_M_eff
+
+        A, M_eff, solver_context, operator_reused = operator_cache.acquire(
+            operator_signature,
+            build_matrix=build_step_matrix,
+            build_solver=lambda matrix: configure_ams_solver(matrix, spaces, config),
+        )
 
         if use_bdf2:
             b = E_old.x.petsc_vec.duplicate()
@@ -6662,6 +6850,7 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             "time_method": "bdf2" if use_bdf2 else "theta",
             "avg_didt": float(avg_didt),
             "divergence_control_applied": bool(divergence_control_applied),
+            "transient_operator_reused": bool(operator_reused),
             "ip_total_field_equation": _debye_total_field_step_metadata(debye, dt),
         }
         if divergence_control_stats is not None:
@@ -6733,9 +6922,6 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
             )
         should_stop = is_output and stop_after_outputs > 0 and (len(rows) - initial_rows_count) >= stop_after_outputs
         b.destroy()
-        A.destroy()
-        if owns_M_eff:
-            M_eff.destroy()
         if should_stop:
             log(
                 f"[checkpoint] stop_after_outputs={stop_after_outputs} reached at completed_step={step}; "
@@ -6752,6 +6938,27 @@ def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, conf
         "solver_log": solver_log,
         "receiver_diagnostic_rows": receiver_diagnostic_rows,
     }
+
+
+def run_fetd_forward(msh, cell_tags, facet_tags, spaces, materials, source, config: PipelineConfig, debye=None, times=None):
+    """Run FETD forward modelling with deterministic transient-operator cleanup."""
+
+    operator_cache = _TransientOperatorCache()
+    try:
+        return _run_fetd_forward_impl(
+            msh,
+            cell_tags,
+            facet_tags,
+            spaces,
+            materials,
+            source,
+            config,
+            operator_cache=operator_cache,
+            debye=debye,
+            times=times,
+        )
+    finally:
+        operator_cache.close()
 
 
 def assemble_h_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], facet_tags):
@@ -10433,6 +10640,10 @@ def _solver_log_to_arrays(solver_log):
         "solver_reasons": np.asarray([int(item.get("reason", 0)) for item in solver_log], dtype=int),
         "solver_is_output": np.asarray([bool(item.get("is_output", False)) for item in solver_log], dtype=bool),
         "solver_time_theta": np.asarray([float(item.get("time_theta", np.nan)) for item in solver_log], dtype=float),
+        "solver_transient_operator_reused": np.asarray(
+            [bool(item.get("transient_operator_reused", False)) for item in solver_log],
+            dtype=bool,
+        ),
         "solver_divergence_clean_before": np.asarray(
             [float(item.get("divergence_clean_before", np.nan)) for item in solver_log],
             dtype=float,
@@ -10517,6 +10728,11 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
         if "solver_time_theta" in payload.files
         else np.full(steps.size, np.nan)
     )
+    transient_operator_reused = (
+        np.asarray(payload["solver_transient_operator_reused"], dtype=bool)
+        if "solver_transient_operator_reused" in payload.files
+        else np.zeros(steps.size, dtype=bool)
+    )
     div_before = (
         np.asarray(payload["solver_divergence_clean_before"], dtype=float)
         if "solver_divergence_clean_before" in payload.files
@@ -10588,6 +10804,11 @@ def _solver_log_from_arrays(payload) -> list[dict[str, Any]]:
             "reason": int(reasons[i]) if i < reasons.size else 0,
             "is_output": bool(is_output[i]) if i < is_output.size else False,
             "time_theta": float(time_theta[i]) if i < time_theta.size else float("nan"),
+            "transient_operator_reused": (
+                bool(transient_operator_reused[i])
+                if i < transient_operator_reused.size
+                else False
+            ),
         }
         if i < observation_times.size and np.isfinite(observation_times[i]):
             item["observation_time"] = float(observation_times[i])
