@@ -105,6 +105,87 @@ def _valid_simpeg_provenance(case, variant, level="S0T0B0"):
     }
 
 
+def _valid_initialization_diagnostics():
+    return [
+        {
+            "phase": phase,
+            "solver": solver,
+            "solve_mode": "petsc_ksp",
+            "ksp_type": ksp_type,
+            "pc_type": pc_type,
+            "backend_reason": 2,
+            "backend_reported_converged": True,
+            "backend_iterations": 3,
+            "external_true_relative_residual": 1.0e-12,
+            "external_tolerance": 1.0e-8,
+            "internal_tolerance": 1.0e-11,
+            "residual_replacement_steps": 0,
+            "balance_name": balance_name,
+            "balance_relative_residual": 1.0e-12,
+            "balance_tolerance": 1.0e-8,
+        }
+        for phase, solver, ksp_type, pc_type, balance_name in (
+            (
+                "dc_electric",
+                "petsc_ksp_hypre_boomeramg",
+                "cg",
+                "hypre_boomeramg",
+                "discrete_current_divergence",
+            ),
+            (
+                "ampere_magnetic",
+                "petsc_ksp_hypre_ams",
+                "gmres",
+                "hypre_ams",
+                "static_ampere",
+            ),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backend_reason", 1),
+        ("backend_reported_converged", True),
+        ("backend_iterations", 1),
+        ("external_true_relative_residual", 1.0e-12),
+        ("residual_replacement_steps", 1),
+        ("balance_relative_residual", 1.0e-12),
+    ],
+)
+def test_publication_validator_rejects_incoherent_exact_zero_diagnostics(
+    field,
+    value,
+):
+    case = cli.load_benchmark_case(LEI_CASE)
+    config = cli.build_benchmark_config(
+        case,
+        variant="noip",
+        spatial_level="S0",
+        boundary_level="B0",
+        substeps=1,
+    )
+    diagnostics = _valid_initialization_diagnostics()
+    for record in diagnostics:
+        record.update(
+            solve_mode="exact_zero_rhs",
+            backend_reason=0,
+            backend_reported_converged=False,
+            backend_iterations=0,
+            external_true_relative_residual=0.0,
+            residual_replacement_steps=0,
+            balance_relative_residual=0.0,
+        )
+    diagnostics[0][field] = value
+
+    with pytest.raises(ValueError, match="initialization diagnostics"):
+        cli._validated_initialization_diagnostics_for_publication(
+            diagnostics,
+            config,
+        )
+
+
 def _build_effect_source_runs(
     tmp_path, monkeypatch, *, level="S0T0B0", case_path=SONG_CASE
 ):
@@ -124,6 +205,8 @@ def _build_effect_source_runs(
             "material_fit": (
                 _valid_ip_material_fit() if kwargs["variant"] == "ip" else None
             ),
+            "initialization_solver_diagnostics": _valid_initialization_diagnostics(),
+            "linear_solver_diagnostics": [],
         }
 
     monkeypatch.setattr(cli, "get_empymod_reference", fake_reference)
@@ -399,10 +482,7 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
             **_valid_simpeg_provenance(case, kwargs["variant"], "S1T2B0"),
             "variant": kwargs["variant"],
             "material_fit": _valid_ip_material_fit(),
-            "initialization_solver_diagnostics": [
-                {"phase": "dc_electric", "solver": "petsc_ksp_hypre_boomeramg"},
-                {"phase": "ampere_magnetic", "solver": "petsc_ksp_hypre_ams"},
-            ],
+            "initialization_solver_diagnostics": _valid_initialization_diagnostics(),
             "linear_solver_diagnostics": [],
         }
 
@@ -431,6 +511,55 @@ def test_simpeg_routes_stb_level_and_writes_honest_solver_metadata(tmp_path, mon
     ] == ["dc_electric", "ampere_magnetic"]
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "simpeg_complete"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("solve_mode", "unknown"),
+        ("ksp_type", "wrong"),
+        ("pc_type", "wrong"),
+        ("balance_name", "wrong"),
+        ("backend_reason", 0),
+        ("external_true_relative_residual", 1.01e-8),
+        ("internal_tolerance", 2.0e-11),
+        ("residual_replacement_steps", 3),
+    ],
+)
+def test_simpeg_publication_revalidates_initialization_diagnostics(
+    tmp_path,
+    monkeypatch,
+    field,
+    value,
+):
+    run_dir = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver=SIMPEG_SOLVER,
+        level="S1T2B0",
+    )
+
+    def fake_run(case, **kwargs):
+        diagnostics = _valid_initialization_diagnostics()
+        diagnostics[0][field] = value
+        return {
+            **_fake_response(case, scale=2.0),
+            "solver_id": SIMPEG_SOLVER,
+            **_valid_simpeg_provenance(case, kwargs["variant"], "S1T2B0"),
+            "variant": kwargs["variant"],
+            "material_fit": _valid_ip_material_fit(),
+            "initialization_solver_diagnostics": diagnostics,
+            "linear_solver_diagnostics": [],
+        }
+
+    monkeypatch.setattr(cli, "run_simpeg_benchmark", fake_run)
+
+    with pytest.raises(ValueError, match="initialization diagnostics"):
+        cli.main(_command("simpeg", run_dir, SONG_CASE, extra=("--variant", "ip")))
+
+    assert not (run_dir / "simpeg.csv").exists()
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "prepared"
 
 
 def test_effect_composes_four_completed_cli_runs_end_to_end(tmp_path, monkeypatch):

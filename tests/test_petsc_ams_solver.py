@@ -3,6 +3,27 @@ import pytest
 import scipy.sparse as sp
 
 
+def test_ams_zero_rhs_is_an_exact_mode_without_backend_claim():
+    from atem3d.solvers.petsc_ams import PetscHypreAmsSolver
+
+    solver = object.__new__(PetscHypreAmsSolver)
+    solver.destroyed = False
+    solver.matrix = sp.eye(3, format="csr")
+    solver.ksp_type = "gmres"
+    solver.tolerance = 1.0e-8
+    solver.internal_tolerance = 1.0e-11
+    solver.last_diagnostics = None
+
+    solution = solver.solve(np.zeros(3))
+
+    np.testing.assert_array_equal(solution, np.zeros(3))
+    assert solver.last_diagnostics["solve_mode"] == "exact_zero_rhs"
+    assert solver.last_diagnostics["backend_reason"] == 0
+    assert solver.last_diagnostics["backend_reported_converged"] is False
+    assert solver.last_diagnostics["backend_iterations"] == 0
+    assert solver.last_diagnostics["external_true_relative_residual"] == 0.0
+
+
 def test_petsc_aij_destroys_matrix_when_assembly_fails():
     from atem3d.solvers.petsc_ams import _petsc_aij_from_csr
 
@@ -112,6 +133,7 @@ def test_petsc_hypre_ams_solves_small_tensor_curl_curl_mass_system():
 
     relative_residual = np.linalg.norm(rhs - matrix @ computed) / np.linalg.norm(rhs)
     assert relative_residual <= 1.0e-8
+    assert solver.last_diagnostics["solve_mode"] == "petsc_ksp"
     assert solver.last_diagnostics["backend_reported_converged"] is True
     assert solver.last_diagnostics["external_true_relative_residual"] <= 1.0e-8
     assert solver.last_diagnostics["pc_type"] == "hypre_ams"
@@ -152,6 +174,7 @@ def test_petsc_hypre_ams_solves_medium_tensor_curl_curl_mass_system():
 
     relative_residual = np.linalg.norm(rhs - matrix @ computed) / np.linalg.norm(rhs)
     assert relative_residual <= 1.0e-8
+    assert solver.last_diagnostics["solve_mode"] == "petsc_ksp"
     assert solver.last_diagnostics["backend_reported_converged"] is True
     assert solver.last_diagnostics["external_true_relative_residual"] <= 1.0e-8
 
@@ -190,6 +213,7 @@ def test_petsc_hypre_ams_solves_gauge_stabilized_ampere_initialization_system():
     relative_residual = np.linalg.norm(rhs - matrix @ computed) / np.linalg.norm(rhs)
     assert np.all(np.isfinite(computed))
     assert relative_residual <= 1.0e-8
+    assert solver.last_diagnostics["solve_mode"] == "petsc_ksp"
     assert solver.last_diagnostics["backend_reason"] > 0
     assert solver.last_diagnostics["backend_reported_converged"] is True
 

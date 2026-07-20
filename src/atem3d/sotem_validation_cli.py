@@ -370,6 +370,114 @@ def _validate_simpeg_provenance(
         raise ValueError("IP SimPEG material provenance does not match the requested case")
 
 
+def _validated_initialization_diagnostics_for_publication(
+    diagnostics: Any,
+    expected_config: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Revalidate initialization evidence at the CLI publication boundary."""
+
+    initialization = expected_config["initialization_solver"]
+    expected = (
+        (
+            "dc_electric",
+            "petsc_ksp_hypre_boomeramg",
+            initialization["dc_ksp_type"],
+            "hypre_boomeramg",
+            "discrete_current_divergence",
+        ),
+        (
+            "ampere_magnetic",
+            "petsc_ksp_hypre_ams",
+            initialization["magnetic_ksp_type"],
+            "hypre_ams",
+            "static_ampere",
+        ),
+    )
+    if not isinstance(diagnostics, list) or len(diagnostics) != len(expected):
+        raise ValueError("initialization diagnostics must contain DC and Ampere records")
+
+    tolerance = float(initialization["tolerance"])
+    configured_internal = initialization.get("internal_tolerance")
+    internal_tolerance = (
+        min(1.0e-11, tolerance * 1.0e-3)
+        if configured_internal is None
+        else float(configured_internal)
+    )
+    maximum_replacements = int(initialization["residual_replacement_steps"])
+
+    def finite_number(value: Any) -> bool:
+        return (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float, np.integer, np.floating))
+            and math.isfinite(float(value))
+        )
+
+    validated: list[dict[str, Any]] = []
+    for record, (phase, solver, ksp_type, pc_type, balance_name) in zip(
+        diagnostics,
+        expected,
+    ):
+        if not isinstance(record, Mapping):
+            raise ValueError("initialization diagnostics records must be mappings")
+        reason = record.get("backend_reason")
+        iterations = record.get("backend_iterations")
+        replacements = record.get("residual_replacement_steps")
+        residual = record.get("external_true_relative_residual")
+        balance = record.get("balance_relative_residual")
+        external_tolerance = record.get("external_tolerance")
+        balance_tolerance = record.get("balance_tolerance")
+        reported_internal = record.get("internal_tolerance")
+        solve_mode = record.get("solve_mode")
+        invalid = (
+            record.get("phase") != phase
+            or record.get("solver") != solver
+            or record.get("ksp_type") != ksp_type
+            or record.get("pc_type") != pc_type
+            or record.get("balance_name") != balance_name
+            or solve_mode not in {"exact_zero_rhs", "petsc_ksp"}
+            or isinstance(reason, bool)
+            or not isinstance(reason, (int, np.integer))
+            or isinstance(iterations, bool)
+            or not isinstance(iterations, (int, np.integer))
+            or int(iterations) < 0
+            or isinstance(replacements, bool)
+            or not isinstance(replacements, (int, np.integer))
+            or int(replacements) < 0
+            or int(replacements) > maximum_replacements
+            or not finite_number(residual)
+            or float(residual) > tolerance
+            or not finite_number(balance)
+            or float(balance) > tolerance
+            or not finite_number(external_tolerance)
+            or float(external_tolerance) != tolerance
+            or not finite_number(balance_tolerance)
+            or float(balance_tolerance) != tolerance
+            or not finite_number(reported_internal)
+            or float(reported_internal) != internal_tolerance
+        )
+        if not invalid and solve_mode == "exact_zero_rhs":
+            invalid = (
+                int(reason) != 0
+                or record.get("backend_reported_converged") is not False
+                or int(iterations) != 0
+                or float(residual) != 0.0
+                or int(replacements) != 0
+                or float(balance) != 0.0
+            )
+        elif not invalid:
+            invalid = (
+                int(reason) <= 0
+                or record.get("backend_reported_converged") is not True
+            )
+        if invalid:
+            raise ValueError(
+                "initialization diagnostics failed the configured solver, residual, "
+                "or physical-balance contract"
+            )
+        validated.append(dict(record))
+    return validated
+
+
 def _fsync_directory(path: Path) -> None:
     directory = Path(path).resolve(strict=True)
     if not directory.is_dir():
@@ -1498,6 +1606,12 @@ def _simpeg(args: argparse.Namespace) -> int:
     if not np.array_equal(response.times, case.observation_times):
         raise ValueError("SimPEG result times must match the benchmark exactly")
     _validate_simpeg_provenance(result, args.variant, expected_config)
+    initialization_solver_diagnostics = (
+        _validated_initialization_diagnostics_for_publication(
+            result.get("initialization_solver_diagnostics"),
+            expected_config,
+        )
+    )
     expected_metadata = expected_config["adapter_metadata"]
     metadata = {
         "solver_id": SIMPEG_SOLVER_ID,
@@ -1516,9 +1630,7 @@ def _simpeg(args: argparse.Namespace) -> int:
             "initialization": expected_config["initialization_solver"],
             "transient": expected_config["solver"],
         },
-        "initialization_solver_diagnostics": result.get(
-            "initialization_solver_diagnostics"
-        ),
+        "initialization_solver_diagnostics": initialization_solver_diagnostics,
         "linear_solver_diagnostics": result.get("linear_solver_diagnostics"),
         "time_schedule": {
             "time_steps_s": expected_config["time_steps"],

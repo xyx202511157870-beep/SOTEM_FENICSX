@@ -338,9 +338,11 @@ class PetscHypreAmsSolver:
             solution = np.zeros_like(rhs_array)
             self.last_diagnostics = {
                 "solver": "petsc_ksp_hypre_ams",
+                "solve_mode": "exact_zero_rhs",
+                "ksp_type": self.ksp_type,
                 "pc_type": "hypre_ams",
                 "backend_reason": 0,
-                "backend_reported_converged": True,
+                "backend_reported_converged": False,
                 "backend_iterations": 0,
                 "external_true_relative_residual": 0.0,
                 "external_tolerance": self.tolerance,
@@ -367,6 +369,7 @@ class PetscHypreAmsSolver:
 
         self.last_diagnostics = {
             "solver": "petsc_ksp_hypre_ams",
+            "solve_mode": "petsc_ksp",
             "ksp_type": self.ksp_type,
             "pc_type": "hypre_ams",
             "backend_reason": int(backend_reason),

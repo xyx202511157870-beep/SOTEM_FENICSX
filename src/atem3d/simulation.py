@@ -392,6 +392,10 @@ class TDEMIPSimulation:
         for source in self.sources:
             source_vec += source.initial_edge_vector(self.mesh)
         if np.linalg.norm(source_vec) == 0.0:
+            if self.initialization_solver == "petsc_hypre":
+                self._record_exact_zero_initialization_diagnostic(
+                    phase="dc_electric",
+                )
             return np.zeros(self.mesh.n_edges, dtype=float)
 
         gradient = self.mesh.nodal_gradient.tocsr()
@@ -418,14 +422,22 @@ class TDEMIPSimulation:
             refinement_steps=self.initialization_refinement_steps,
             ksp_type=self.initialization_dc_ksp_type,
         )
+        primary_error = None
         try:
             phi[keep] = solver.solve(reduced_rhs)
             diagnostic = self._validated_initialization_backend_diagnostic(
                 solver.last_diagnostics,
                 phase="dc_electric",
             )
+        except BaseException as err:
+            primary_error = err
+            raise
         finally:
-            solver.destroy()
+            try:
+                solver.destroy()
+            except BaseException:
+                if primary_error is None:
+                    raise
         e_initial = -gradient @ phi
         current = me_sigma0 @ e_initial + source_vec
         divergence = np.asarray(gradient.T @ current, dtype=float)
@@ -450,7 +462,13 @@ class TDEMIPSimulation:
         source_vec = np.zeros(self.mesh.n_edges, dtype=float)
         for source in self.sources:
             source_vec += source.initial_edge_vector(self.mesh)
-        if np.linalg.norm(source_vec) == 0.0 or self.initial_magnetic_mode == "zero":
+        if np.linalg.norm(source_vec) == 0.0:
+            if self.initialization_solver == "petsc_hypre":
+                self._record_exact_zero_initialization_diagnostic(
+                    phase="ampere_magnetic",
+                )
+            return np.zeros(self.mesh.n_faces, dtype=float)
+        if self.initial_magnetic_mode == "zero":
             return np.zeros(self.mesh.n_faces, dtype=float)
         if self.initial_magnetic_mode == "biot_savart_wire":
             return self._biot_savart_wire_initial_magnetic_flux_density()
@@ -485,14 +503,22 @@ class TDEMIPSimulation:
             refinement_steps=self.initialization_refinement_steps,
             ksp_type=self.initialization_magnetic_ksp_type,
         )
+        primary_error = None
         try:
             vector_potential = solver.solve(current)
             diagnostic = self._validated_initialization_backend_diagnostic(
                 solver.last_diagnostics,
                 phase="ampere_magnetic",
             )
+        except BaseException as err:
+            primary_error = err
+            raise
         finally:
-            solver.destroy()
+            try:
+                solver.destroy()
+            except BaseException:
+                if primary_error is None:
+                    raise
         magnetic_flux = np.asarray(curl @ vector_potential, dtype=float)
         ampere_current = np.asarray(
             curl.T @ self.face_mu_inverse_matrix @ magnetic_flux,
@@ -518,22 +544,81 @@ class TDEMIPSimulation:
     ) -> dict[str, object]:
         if not isinstance(diagnostic, dict):
             raise RuntimeError(f"{phase} initialization solver omitted diagnostics")
+        solve_mode = diagnostic.get("solve_mode")
         reason = diagnostic.get("backend_reason")
+        reported_converged = diagnostic.get("backend_reported_converged")
+        iterations = diagnostic.get("backend_iterations")
         residual = diagnostic.get("external_true_relative_residual")
-        if (
-            isinstance(reason, bool)
+        replacements = diagnostic.get("residual_replacement_steps")
+        invalid = (
+            solve_mode not in {"exact_zero_rhs", "petsc_ksp"}
+            or isinstance(reason, bool)
             or not isinstance(reason, Integral)
-            or int(reason) <= 0
-            or not bool(diagnostic.get("backend_reported_converged", False))
+            or isinstance(iterations, bool)
+            or not isinstance(iterations, Integral)
+            or int(iterations) < 0
             or isinstance(residual, bool)
             or not isinstance(residual, Real)
             or not np.isfinite(float(residual))
             or float(residual) > self.initialization_tolerance
-        ):
+            or isinstance(replacements, bool)
+            or not isinstance(replacements, Integral)
+            or int(replacements) < 0
+            or int(replacements) > self.initialization_refinement_steps
+        )
+        if not invalid and solve_mode == "exact_zero_rhs":
+            invalid = (
+                int(reason) != 0
+                or reported_converged is not False
+                or int(iterations) != 0
+                or float(residual) != 0.0
+                or int(replacements) != 0
+            )
+        elif not invalid:
+            invalid = int(reason) <= 0 or reported_converged is not True
+        if invalid:
             raise RuntimeError(
                 f"{phase} initialization solver failed the external residual gate"
             )
         return dict(diagnostic)
+
+    def _record_exact_zero_initialization_diagnostic(self, *, phase: str) -> None:
+        if phase == "dc_electric":
+            solver = "petsc_ksp_hypre_boomeramg"
+            ksp_type = self.initialization_dc_ksp_type
+            pc_type = "hypre_boomeramg"
+            balance_name = "discrete_current_divergence"
+        elif phase == "ampere_magnetic":
+            solver = "petsc_ksp_hypre_ams"
+            ksp_type = self.initialization_magnetic_ksp_type
+            pc_type = "hypre_ams"
+            balance_name = "static_ampere"
+        else:  # pragma: no cover - internal contract
+            raise ValueError(f"unsupported initialization phase: {phase}")
+        internal_tolerance = self.initialization_internal_tolerance
+        if internal_tolerance is None:
+            internal_tolerance = min(
+                1.0e-11,
+                self.initialization_tolerance * 1.0e-3,
+            )
+        self._record_initialization_diagnostic(
+            {
+                "solver": solver,
+                "solve_mode": "exact_zero_rhs",
+                "ksp_type": ksp_type,
+                "pc_type": pc_type,
+                "backend_reason": 0,
+                "backend_reported_converged": False,
+                "backend_iterations": 0,
+                "external_true_relative_residual": 0.0,
+                "external_tolerance": float(self.initialization_tolerance),
+                "internal_tolerance": float(internal_tolerance),
+                "residual_replacement_steps": 0,
+            },
+            phase=phase,
+            balance_relative_residual=0.0,
+            balance_name=balance_name,
+        )
 
     @staticmethod
     def _initialization_relative_residual(

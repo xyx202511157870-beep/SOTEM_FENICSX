@@ -3,6 +3,27 @@ import pytest
 import scipy.sparse as sp
 
 
+def test_boomeramg_zero_rhs_is_an_exact_mode_without_backend_claim():
+    from atem3d.solvers.petsc_boomeramg import PetscHypreBoomerAmgSolver
+
+    solver = object.__new__(PetscHypreBoomerAmgSolver)
+    solver.destroyed = False
+    solver.matrix = sp.eye(3, format="csr")
+    solver.ksp_type = "cg"
+    solver.tolerance = 1.0e-8
+    solver.internal_tolerance = 1.0e-11
+    solver.last_diagnostics = None
+
+    solution = solver.solve(np.zeros(3))
+
+    np.testing.assert_array_equal(solution, np.zeros(3))
+    assert solver.last_diagnostics["solve_mode"] == "exact_zero_rhs"
+    assert solver.last_diagnostics["backend_reason"] == 0
+    assert solver.last_diagnostics["backend_reported_converged"] is False
+    assert solver.last_diagnostics["backend_iterations"] == 0
+    assert solver.last_diagnostics["external_true_relative_residual"] == 0.0
+
+
 def test_boomeramg_external_gate_failure_names_actual_solver():
     from atem3d.solvers.petsc_ams import require_true_residual
 
@@ -55,6 +76,7 @@ def test_petsc_hypre_boomeramg_solves_small_spd_system_with_external_residual():
 
     assert np.all(np.isfinite(computed))
     assert diagnostic["solver"] == "petsc_ksp_hypre_boomeramg"
+    assert diagnostic["solve_mode"] == "petsc_ksp"
     assert diagnostic["backend_reason"] > 0
     assert diagnostic["backend_reported_converged"] is True
     assert diagnostic["external_true_relative_residual"] <= 1.0e-8

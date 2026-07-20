@@ -454,17 +454,35 @@ def _fake_solver_for_config(config, *, nonfinite=False):
         {
             "phase": phase,
             "solver": solver,
+            "solve_mode": "petsc_ksp",
+            "ksp_type": ksp_type,
+            "pc_type": pc_type,
             "backend_reason": 2,
             "backend_reported_converged": True,
             "backend_iterations": 3,
             "external_true_relative_residual": 1.0e-12,
             "external_tolerance": 1.0e-8,
+            "internal_tolerance": 1.0e-11,
+            "residual_replacement_steps": 0,
+            "balance_name": balance_name,
             "balance_relative_residual": 1.0e-12,
             "balance_tolerance": 1.0e-8,
         }
-        for phase, solver in (
-            ("dc_electric", "petsc_ksp_hypre_boomeramg"),
-            ("ampere_magnetic", "petsc_ksp_hypre_ams"),
+        for phase, solver, ksp_type, pc_type, balance_name in (
+            (
+                "dc_electric",
+                "petsc_ksp_hypre_boomeramg",
+                "cg",
+                "hypre_boomeramg",
+                "discrete_current_divergence",
+            ),
+            (
+                "ampere_magnetic",
+                "petsc_ksp_hypre_ams",
+                "gmres",
+                "hypre_ams",
+                "static_ampere",
+            ),
         )
     ]
     return SimpleNamespace(
@@ -532,6 +550,12 @@ def test_run_rejects_missing_per_step_external_solver_diagnostics(monkeypatch, l
         ("backend_reported_converged", False),
         ("backend_reason", -3),
         ("backend_iterations", -1),
+        ("solve_mode", "unknown"),
+        ("ksp_type", "wrong"),
+        ("pc_type", "wrong"),
+        ("balance_name", "wrong"),
+        ("internal_tolerance", 2.0e-11),
+        ("residual_replacement_steps", 3),
         ("external_true_relative_residual", np.nan),
         ("external_true_relative_residual", 1.01e-8),
         ("balance_relative_residual", np.inf),
@@ -546,6 +570,72 @@ def test_run_rejects_failed_initialization_diagnostic(
 ):
     def fake_build(config):
         simulation, _data = _fake_solver_for_config(config)
+        simulation.initialization_solver_diagnostics[0][field] = value
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="initialization solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
+
+
+def test_run_accepts_truthful_exact_zero_initialization_diagnostics(
+    monkeypatch,
+    lei_case,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        for record in simulation.initialization_solver_diagnostics:
+            record.update(
+                solve_mode="exact_zero_rhs",
+                backend_reason=0,
+                backend_reported_converged=False,
+                backend_iterations=0,
+                external_true_relative_residual=0.0,
+                residual_replacement_steps=0,
+                balance_relative_residual=0.0,
+            )
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    result = run_simpeg_benchmark(lei_case, variant="noip")
+
+    assert all(
+        item["solve_mode"] == "exact_zero_rhs"
+        for item in result["initialization_solver_diagnostics"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backend_reason", 1),
+        ("backend_reported_converged", True),
+        ("backend_iterations", 1),
+        ("external_true_relative_residual", 1.0e-12),
+        ("residual_replacement_steps", 1),
+        ("balance_relative_residual", 1.0e-12),
+    ],
+)
+def test_run_rejects_incoherent_exact_zero_initialization_diagnostics(
+    monkeypatch,
+    lei_case,
+    field,
+    value,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        for record in simulation.initialization_solver_diagnostics:
+            record.update(
+                solve_mode="exact_zero_rhs",
+                backend_reason=0,
+                backend_reported_converged=False,
+                backend_iterations=0,
+                external_true_relative_residual=0.0,
+                residual_replacement_steps=0,
+                balance_relative_residual=0.0,
+            )
         simulation.initialization_solver_diagnostics[0][field] = value
         return simulation
 

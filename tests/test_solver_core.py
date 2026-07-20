@@ -1441,11 +1441,13 @@ def test_petsc_initialization_records_two_gated_balances_and_destroys_local_solv
                     if "nodal_gradient" in self.kwargs
                     else "petsc_ksp_hypre_boomeramg"
                 ),
+                "solve_mode": "petsc_ksp",
                 "backend_reason": 2,
                 "backend_reported_converged": True,
                 "backend_iterations": 4,
                 "external_true_relative_residual": residual,
                 "external_tolerance": 1.0e-8,
+                "residual_replacement_steps": 0,
             }
             return solution
 
@@ -1518,6 +1520,349 @@ def test_petsc_initialization_records_two_gated_balances_and_destroys_local_solv
         rtol=1.0e-8,
         atol=1.0e-10,
     )
+
+
+def test_petsc_initialization_accepts_exact_zero_dc_rhs_without_backend_claim(
+    monkeypatch,
+):
+    class ExactZeroProbe:
+        def __init__(self, matrix, **_kwargs):
+            self.matrix = matrix
+            self.last_diagnostics = None
+            self.destroyed = False
+
+        def solve(self, rhs):
+            assert np.linalg.norm(rhs) == 0.0
+            self.last_diagnostics = {
+                "solver": "petsc_ksp_hypre_boomeramg",
+                "solve_mode": "exact_zero_rhs",
+                "ksp_type": "cg",
+                "pc_type": "hypre_boomeramg",
+                "backend_reason": 0,
+                "backend_reported_converged": False,
+                "backend_iterations": 0,
+                "external_true_relative_residual": 0.0,
+                "external_tolerance": 1.0e-8,
+                "internal_tolerance": 1.0e-11,
+                "residual_replacement_steps": 0,
+            }
+            return np.zeros_like(rhs)
+
+        def destroy(self):
+            self.destroyed = True
+
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreBoomerAmgSolver",
+        ExactZeroProbe,
+    )
+    mesh = _mesh()
+    divergence_free = np.asarray(
+        mesh.edge_curl.T @ np.ones(mesh.n_faces),
+        dtype=float,
+    )
+
+    class ClosedSourceStub:
+        def initial_edge_vector(self, _mesh_arg):
+            return divergence_free.copy()
+
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[ClosedSourceStub()],
+        initialization_solver="petsc_hypre",
+        initialization_internal_tolerance=1.0e-11,
+    )
+
+    electric = simulation.initial_electric_field()
+
+    np.testing.assert_array_equal(electric, np.zeros(mesh.n_edges))
+    assert simulation.initialization_solver_diagnostics[0]["solve_mode"] == (
+        "exact_zero_rhs"
+    )
+    assert simulation.initialization_solver_diagnostics[0]["backend_reason"] == 0
+
+
+def test_petsc_zero_source_records_both_exact_initialization_phases(monkeypatch):
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreBoomerAmgSolver",
+        lambda *_args, **_kwargs: pytest.fail("zero source must not allocate DC KSP"),
+    )
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreAmsSolver",
+        lambda *_args, **_kwargs: pytest.fail("zero source must not allocate AMS KSP"),
+    )
+    mesh = _mesh()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        initialization_solver="petsc_hypre",
+        initialization_internal_tolerance=1.0e-11,
+    )
+
+    electric = simulation.initial_electric_field()
+    magnetic = simulation.initial_magnetic_flux_density(electric)
+
+    np.testing.assert_array_equal(electric, np.zeros(mesh.n_edges))
+    np.testing.assert_array_equal(magnetic, np.zeros(mesh.n_faces))
+    assert [
+        item["phase"] for item in simulation.initialization_solver_diagnostics
+    ] == ["dc_electric", "ampere_magnetic"]
+    assert all(
+        item["solve_mode"] == "exact_zero_rhs"
+        and item["backend_reason"] == 0
+        and item["backend_reported_converged"] is False
+        and item["backend_iterations"] == 0
+        and item["external_true_relative_residual"] == 0.0
+        and item["balance_relative_residual"] == 0.0
+        for item in simulation.initialization_solver_diagnostics
+    )
+
+
+def test_real_petsc_closed_four_segment_wire_uses_exact_zero_dc_rhs():
+    pytest.importorskip("petsc4py")
+    mesh = _mesh()
+    points = (
+        (-1.0, -1.0, 0.0),
+        (1.0, -1.0, 0.0),
+        (1.0, 1.0, 0.0),
+        (-1.0, 1.0, 0.0),
+    )
+    waveform = StepOffWaveform(off_time=0.0, on_value=1.0)
+    sources = [
+        GroundedWireSource(
+            start=points[index],
+            end=points[(index + 1) % len(points)],
+            current=1.0,
+            waveform=waveform,
+        )
+        for index in range(len(points))
+    ]
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=sources,
+        initialization_solver="petsc_hypre",
+        initialization_internal_tolerance=1.0e-11,
+    )
+
+    electric = simulation.initial_electric_field()
+
+    np.testing.assert_array_equal(electric, np.zeros(mesh.n_edges))
+    assert simulation.initialization_solver_diagnostics == [
+        {
+            "solver": "petsc_ksp_hypre_boomeramg",
+            "solve_mode": "exact_zero_rhs",
+            "ksp_type": "cg",
+            "pc_type": "hypre_boomeramg",
+            "backend_reason": 0,
+            "backend_reported_converged": False,
+            "backend_iterations": 0,
+            "external_true_relative_residual": 0.0,
+            "external_tolerance": 1.0e-8,
+            "internal_tolerance": 1.0e-11,
+            "residual_replacement_steps": 0,
+            "phase": "dc_electric",
+            "balance_name": "discrete_current_divergence",
+            "balance_relative_residual": 0.0,
+            "balance_tolerance": 1.0e-8,
+        }
+    ]
+
+
+def test_dc_initialization_preserves_solve_error_when_destroy_also_fails(monkeypatch):
+    class FailingSolver:
+        last_diagnostics = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def solve(self, _rhs):
+            raise RuntimeError("dc primary solve failure")
+
+        def destroy(self):
+            raise RuntimeError("dc cleanup failure")
+
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreBoomerAmgSolver",
+        FailingSolver,
+    )
+    mesh = _mesh()
+    source = GroundedWireSource(
+        start=(-1.5, 0.0, 0.0),
+        end=(1.5, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(),
+    )
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+        initialization_solver="petsc_hypre",
+    )
+
+    with pytest.raises(RuntimeError, match="dc primary solve failure"):
+        simulation.initial_electric_field()
+
+
+def test_ampere_initialization_preserves_validation_error_when_destroy_also_fails(
+    monkeypatch,
+):
+    class InvalidDiagnosticSolver:
+        last_diagnostics = None
+
+        def __init__(self, matrix, **_kwargs):
+            self.matrix = matrix
+
+        def solve(self, rhs):
+            return spla.spsolve(self.matrix.tocsc(), rhs)
+
+        def destroy(self):
+            raise RuntimeError("ampere cleanup failure")
+
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreAmsSolver",
+        InvalidDiagnosticSolver,
+    )
+    mesh = _mesh()
+    source = GroundedWireSource(
+        start=(-1.5, 0.0, 0.0),
+        end=(1.5, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(),
+    )
+    direct = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+    )
+    electric = direct.initial_electric_field()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+        initialization_solver="petsc_hypre",
+    )
+
+    with pytest.raises(RuntimeError, match="omitted diagnostics"):
+        simulation.initial_magnetic_flux_density(electric)
+
+
+def test_dc_initialization_propagates_destroy_error_without_primary_failure(
+    monkeypatch,
+):
+    class CleanupFailingSolver:
+        def __init__(self, matrix, **_kwargs):
+            self.matrix = matrix
+            self.last_diagnostics = None
+
+        def solve(self, rhs):
+            solution = spla.spsolve(self.matrix.tocsc(), rhs)
+            residual = np.linalg.norm(rhs - self.matrix @ solution) / np.linalg.norm(rhs)
+            self.last_diagnostics = {
+                "solver": "petsc_ksp_hypre_boomeramg",
+                "solve_mode": "petsc_ksp",
+                "backend_reason": 2,
+                "backend_reported_converged": True,
+                "backend_iterations": 1,
+                "external_true_relative_residual": residual,
+                "external_tolerance": 1.0e-8,
+                "residual_replacement_steps": 0,
+            }
+            return solution
+
+        def destroy(self):
+            raise RuntimeError("dc cleanup failure")
+
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreBoomerAmgSolver",
+        CleanupFailingSolver,
+    )
+    mesh = _mesh()
+    source = GroundedWireSource(
+        start=(-1.5, 0.0, 0.0),
+        end=(1.5, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(),
+    )
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+        initialization_solver="petsc_hypre",
+    )
+
+    with pytest.raises(RuntimeError, match="dc cleanup failure"):
+        simulation.initial_electric_field()
+
+
+def test_ampere_initialization_propagates_destroy_error_without_primary_failure(
+    monkeypatch,
+):
+    class CleanupFailingSolver:
+        def __init__(self, matrix, **_kwargs):
+            self.matrix = matrix
+            self.last_diagnostics = None
+
+        def solve(self, rhs):
+            solution = spla.spsolve(self.matrix.tocsc(), rhs)
+            residual = np.linalg.norm(rhs - self.matrix @ solution) / np.linalg.norm(rhs)
+            self.last_diagnostics = {
+                "solver": "petsc_ksp_hypre_ams",
+                "solve_mode": "petsc_ksp",
+                "backend_reason": 2,
+                "backend_reported_converged": True,
+                "backend_iterations": 1,
+                "external_true_relative_residual": residual,
+                "external_tolerance": 1.0e-8,
+                "residual_replacement_steps": 0,
+            }
+            return solution
+
+        def destroy(self):
+            raise RuntimeError("ampere cleanup failure")
+
+    monkeypatch.setattr(
+        simulation_module,
+        "PetscHypreAmsSolver",
+        CleanupFailingSolver,
+    )
+    mesh = _mesh()
+    source = GroundedWireSource(
+        start=(-1.5, 0.0, 0.0),
+        end=(1.5, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(),
+    )
+    direct = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+    )
+    electric = direct.initial_electric_field()
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=[0.01],
+        sources=[source],
+        initialization_solver="petsc_hypre",
+    )
+
+    with pytest.raises(RuntimeError, match="ampere cleanup failure"):
+        simulation.initial_magnetic_flux_density(electric)
 
 
 def test_biot_savart_wire_initial_magnetic_flux_matches_finite_wire_scale():
