@@ -29,6 +29,25 @@ def _flag_values(argv):
     return result
 
 
+def _run_through_real_pipeline(monkeypatch, runner, argv):
+    pipeline = runner.PIPELINE_MODULE
+    captured = {}
+    validate_model_consistency = pipeline.validate_model_consistency
+
+    def capture_config(config, reference_mode=None):
+        model = validate_model_consistency(config, reference_mode=reference_mode)
+        captured["config"] = config
+        captured["model"] = model
+        return model
+
+    monkeypatch.setattr(pipeline, "validate_model_consistency", capture_config)
+    monkeypatch.setattr(pipeline, "check_environment", lambda **_kwargs: {})
+
+    assert runner.PIPELINE_MAIN is pipeline.main
+    assert runner.main(argv) == 0
+    return captured
+
+
 def test_main_propagates_song_ip_case_to_real_pipeline_contract(monkeypatch, tmp_path):
     runner = _load_runner()
     captured = {}
@@ -66,12 +85,83 @@ def test_main_propagates_song_ip_case_to_real_pipeline_contract(monkeypatch, tmp
     assert argv[-2:] == ["--check-env-only", "--no-install"]
 
 
+def test_song_ip_runner_reaches_real_pipeline_config_and_validation(monkeypatch, tmp_path):
+    runner = _load_runner()
+
+    captured = _run_through_real_pipeline(
+        monkeypatch,
+        runner,
+        [
+            "--case",
+            "benchmarks/sotem/song2025_layered_pair.yaml",
+            "--variant",
+            "ip",
+            "--level",
+            "S2T0B1",
+            "--workdir",
+            str(tmp_path),
+            "--check-env-only",
+            "--no-install",
+        ],
+    )
+
+    config = captured["config"]
+    assert config.source_start == pytest.approx((-500.0, 0.0, -0.1))
+    assert config.source_end == pytest.approx((500.0, 0.0, -0.1))
+    assert config.receiver == pytest.approx((0.0, -500.0, -0.1))
+    assert config.source_current == pytest.approx(10.0)
+    assert config.ramp_off_time == pytest.approx(0.0)
+    assert config.rho_air == pytest.approx(1.0e6)
+    assert config.layer_depths == pytest.approx((300.0,))
+    assert config.layer_resistivities == pytest.approx((100.0, 100.0))
+    assert config.expected_source_length == pytest.approx(1000.0)
+    assert config.expected_parallel_offset == pytest.approx(500.0)
+    assert config.output_interval_substeps == 1
+    assert config.polarization == "cole-cole"
+    assert captured["model"]["reference_mode"] == "cole-cole-exact"
+
+
+def test_lei_noip_runner_reaches_real_pipeline_config_and_validation(monkeypatch, tmp_path):
+    runner = _load_runner()
+
+    captured = _run_through_real_pipeline(
+        monkeypatch,
+        runner,
+        [
+            "--case",
+            "benchmarks/sotem/lei2023_noip.yaml",
+            "--variant",
+            "noip",
+            "--level",
+            "S0T2B0",
+            "--workdir",
+            str(tmp_path),
+            "--check-env-only",
+            "--no-install",
+        ],
+    )
+
+    config = captured["config"]
+    assert config.receiver == pytest.approx((0.0, 800.0, -0.1))
+    assert config.source_current == pytest.approx(1.0)
+    assert config.rho_air == pytest.approx(1.0e8)
+    assert config.rho_earth == pytest.approx(100.0)
+    assert config.expected_source_length == pytest.approx(1000.0)
+    assert config.expected_parallel_offset == pytest.approx(800.0)
+    assert config.output_interval_substeps == 4
+    assert config.polarization == "none"
+    assert captured["model"]["reference_mode"] == "noip"
+
+
 @pytest.mark.parametrize(
     ("level", "source_size", "receiver_size", "substeps", "boundary_extent"),
     [
         ("S0T0B0", "40.0", "20.0", "1", "25000.0"),
         ("S1T1B1", "20.0", "10.0", "2", "50000.0"),
         ("S2T2B2", "10.0", "5.0", "4", "100000.0"),
+        ("S2T0B1", "10.0", "5.0", "1", "50000.0"),
+        ("S0T2B0", "40.0", "20.0", "4", "25000.0"),
+        ("S1T1B2", "20.0", "10.0", "2", "100000.0"),
     ],
 )
 def test_build_pipeline_argv_maps_approved_stb_levels(

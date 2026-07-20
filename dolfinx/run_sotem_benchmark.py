@@ -17,7 +17,10 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from atem3d.sotem_benchmark import BenchmarkCase, load_benchmark_case
-from sotem_pipeline import main as PIPELINE_MAIN
+import sotem_pipeline as PIPELINE_MODULE
+
+
+PIPELINE_MAIN = PIPELINE_MODULE.main
 
 
 _SOURCE_MESH_SIZE_M = {0: 40.0, 1: 20.0, 2: 10.0}
