@@ -366,7 +366,8 @@ def test_translation_emits_all_approved_geometry_and_fixed_solver_flags(tmp_path
         "--magnetic-receiver-mode": "faraday_integrated",
         "--magnetic-dbdt-mode": "curl",
         "--error-min-time": "0.0",
-        "--reference-audit-srcpts": "9",
+        "--empymod-srcpts": "9",
+        "--reference-audit-srcpts": "17",
     }
     assert expected.items() <= flags.items()
 

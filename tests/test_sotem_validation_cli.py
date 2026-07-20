@@ -448,13 +448,13 @@ def test_effect_composes_four_completed_cli_runs_end_to_end(tmp_path, monkeypatc
     )
     assert summary["definition"] == "ip_minus_noip"
     assert summary["threshold"] == 0.10
-    assert summary["reference_srcpts"] == 5
+    assert summary["reference_srcpts"] == 17
     assert (output / "polarization_effect_predictions.csv").is_file()
     assert (output / "polarization_effect_reference.csv").is_file()
     manifest = json.loads((effect_run / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "effect_complete"
     stage_inputs = manifest["stages"]["effect"]["inputs"]
-    assert stage_inputs["reference_srcpts"] == 5
+    assert stage_inputs["reference_srcpts"] == 17
     assert set(stage_inputs["source_runs"]) == {
         "noip_simpeg",
         "noip_reference",
@@ -1043,7 +1043,7 @@ def test_orphan_reference_bundle_is_semantically_validated_before_recovery(
         output.unlink()
     bundle_metadata = run_dir / "artifacts" / "reference" / "empymod_metadata.json"
     metadata = json.loads(bundle_metadata.read_text(encoding="utf-8"))
-    metadata["srcpts"] = 17
+    metadata["srcpts"] = 9
     bundle_metadata.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -1088,7 +1088,7 @@ def test_bad_reference_does_not_restore_missing_root_export(
     assert cli.main(command) == 0
     missing_output = run_dir / "empymod.csv"
     missing_output.unlink()
-    _rewrite_reference_metadata_srcpts(run_dir, 17)
+    _rewrite_reference_metadata_srcpts(run_dir, 9)
     manifest_path = run_dir / "manifest.json"
     manifest_before = manifest_path.read_bytes()
 
@@ -1148,7 +1148,7 @@ def test_reference_recovery_rejects_post_validation_transaction_swap(
         if swap_kind == "metadata_and_journal":
             for metadata_path in metadata_paths:
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                metadata["srcpts"] = 17
+                metadata["srcpts"] = 9
                 metadata_path.write_text(
                     json.dumps(metadata, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
@@ -1158,7 +1158,7 @@ def test_reference_recovery_rejects_post_validation_transaction_swap(
                 "artifacts/reference/empymod_metadata.json"
             ] = cli._sha256_file(metadata_paths[1])
         else:
-            transaction["inputs"]["srcpts"] = 17
+            transaction["inputs"]["srcpts"] = 9
         transaction_path.write_text(
             json.dumps(transaction, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -1214,7 +1214,7 @@ def test_orphan_recovery_rechecks_journal_after_materialize_before_manifest(
         materialized = True
         transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
         transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
-        transaction["inputs"]["srcpts"] = 17
+        transaction["inputs"]["srcpts"] = 9
         transaction_path.write_text(
             json.dumps(transaction, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -1590,6 +1590,27 @@ def test_reference_srcpts_controls_real_adapter_and_resume_identity(tmp_path, mo
         )
 
 
+def test_reference_defaults_to_high_order_published_quadrature(tmp_path, monkeypatch):
+    run_dir = _prepare(tmp_path, run_name="reference-default-srcpts")
+    case = cli.load_benchmark_case(LEI_CASE)
+    captured = {}
+
+    def fake_reference(times, config, *, mode, srcpts):
+        captured["srcpts"] = srcpts
+        captured["config_srcpts"] = config.empymod_srcpts
+        return {**_fake_response(case), "reference_mode": mode}
+
+    monkeypatch.setattr(cli, "get_empymod_reference", fake_reference)
+
+    assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
+
+    metadata = json.loads((run_dir / "empymod_metadata.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert captured == {"srcpts": 17, "config_srcpts": 17}
+    assert metadata["srcpts"] == 17
+    assert manifest["stages"]["reference"]["inputs"]["srcpts"] == 17
+
+
 @pytest.mark.parametrize("srcpts", ["0", "-1"])
 def test_reference_rejects_nonpositive_srcpts_without_running(tmp_path, srcpts):
     run_dir = _prepare(tmp_path, run_name=f"bad-srcpts-{srcpts}")
@@ -1931,7 +1952,7 @@ def test_effect_compares_complete_identities_after_each_source_validation(
     assert calls == ["noip_simpeg", "noip_reference", "ip_simpeg", "ip_reference"]
 
 
-@pytest.mark.parametrize("replacement", ["missing", 17])
+@pytest.mark.parametrize("replacement", ["missing", 9])
 def test_reference_resume_rejects_rehashed_metadata_srcpts_tamper(
     tmp_path, monkeypatch, replacement
 ):
@@ -1951,7 +1972,7 @@ def test_reference_resume_rejects_rehashed_metadata_srcpts_tamper(
         cli.main(command)
 
 
-@pytest.mark.parametrize("replacement", ["missing", 17])
+@pytest.mark.parametrize("replacement", ["missing", 9])
 def test_effect_rejects_rehashed_reference_metadata_srcpts_tamper(
     tmp_path, monkeypatch, replacement
 ):
@@ -1984,7 +2005,7 @@ def test_reference_metadata_hash_and_json_use_one_byte_snapshot(tmp_path, monkey
     metadata_path = run_dir / "artifacts" / "reference" / "empymod_metadata.json"
     original_bytes = metadata_path.read_bytes()
     changed = json.loads(original_bytes)
-    changed["srcpts"] = 17
+    changed["srcpts"] = 9
     changed_bytes = json.dumps(changed).encode("utf-8")
     original_read_bytes = Path.read_bytes
     reads = 0
@@ -2031,14 +2052,14 @@ def test_transaction_journal_hash_and_json_use_one_byte_snapshot(tmp_path, monke
         "reference",
         {
             "variant": "noip",
-            "srcpts": 5,
+            "srcpts": 17,
             "reference_identity": reference_identity,
         },
     )
 
     assert reads == 1
     assert journal["inputs"] == {
-        "srcpts": 5,
+        "srcpts": 17,
         "variant": "noip",
         "reference_identity": reference_identity,
     }

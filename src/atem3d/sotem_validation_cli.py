@@ -2041,7 +2041,7 @@ def _parser() -> argparse.ArgumentParser:
     reference.add_argument(
         "--variant", choices=("noip", "cole-cole-exact"), default="noip"
     )
-    reference.add_argument("--srcpts", type=_positive_cli_int, default=5)
+    reference.add_argument("--srcpts", type=_positive_cli_int, default=17)
     reference.set_defaults(handler=_reference)
 
     simpeg = subparsers.add_parser("simpeg", help="run the ATEM3D SimPEG-Debye adapter")

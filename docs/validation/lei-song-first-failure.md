@@ -184,3 +184,37 @@ effect source selection require exact agreement and reject legacy evidence with 
 missing identity. This follow-up establishes an independent-reference prerequisite
 only. It does **not** claim that a FEniCSx or SimPEG forward response has been run or
 validated.
+
+## Clean-provenance source-quadrature rerun
+
+The original failure evidence above is retained unchanged. A later rerun from the
+clean detached WSL clone `/home/paidaxin/codex-sotem-clean-20260720-i30Hx9` at
+commit `55b6389c2234cf86f86cabbd57c8fae97bdcb980` verified the approved quasistatic
+identity and the fixed `srcpts=9 -> 17` source-quadrature gate. The audit found an
+empty Git porcelain status and independently checked every run's commit, working
+directory, Python executable, case/model hashes, reference identity, metadata,
+manifest state, transaction inputs, and recorded stage-output hashes.
+
+The local audit evidence is
+`generated/t10q_clean/reference_audit.json`, SHA-256
+`62566930591df1b2a26eacb4d565ac13fb3a49cb2f60dd7129a717b088932e1f`.
+It was produced with WSL Python `3.10.20`, empymod `2.5.4`, NumPy `2.2.6`, and
+SciPy `1.15.2`. The fixed threshold remained `0.005`, with the denominator floor
+`0.01 * peak(abs(srcpts-17 reference))` per component.
+
+| Clean run pair | Ex max | Hz max | dBzdt max | Result |
+|---|---:|---:|---:|---|
+| Lei noIP, 9 -> 17 | 1.4850153399660493e-7 | 1.47790257094914e-7 | 2.531256148552455e-7 | PASS |
+| Song noIP, 9 -> 17 | 3.2668459368876505e-7 | 2.858960581161179e-7 | 3.638300895863172e-6 | PASS |
+| Song exact Cole-Cole IP, 9 -> 17 | 2.9704396822899094e-4 | 3.015777705142679e-7 | 3.6385732025732505e-6 | PASS |
+
+All three fixed 9 -> 17 comparisons pass. The old low-order default is not safe:
+the earlier quasistatic audit's Song exact Cole-Cole IP 5 -> 9 comparison gave
+`Ex=0.15991651860664247`, far above the same `0.005` threshold. Therefore the
+pipeline now uses primary `srcpts=9` with a mandatory higher-order `srcpts=17`
+acceptance audit, while the standalone validation CLI publishes the high-order
+`srcpts=17` reference directly.
+
+This clean rerun computed empymod references only. It did **not** run a FEniCSx or
+SimPEG forward solve, and it does not claim either solver has passed response
+validation.

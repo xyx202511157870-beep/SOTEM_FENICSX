@@ -98,15 +98,18 @@ def test_postprocess_saved_forward_uses_forward_partial_without_rerunning_fem(tm
         solver_reasons=np.asarray([2, 2]),
     )
 
+    reference_srcpts = []
+
     def fake_reference(t_array, _config, mode="noip", *, srcpts=None):
         assert mode == "noip"
-        assert srcpts is None
+        reference_srcpts.append(srcpts)
         return {"times": np.asarray(t_array), "data": data.copy(), "components": ["Ex", "Ey", "dBzdt"]}
 
     monkeypatch.setattr(sp, "get_empymod_reference", fake_reference)
 
     result = sp.postprocess_saved_forward(config, env={})
 
+    assert reference_srcpts == [None, 17]
     assert result["fem_result"]["data"].shape == (2, 3)
     assert config.output_npz().is_file()
     assert config.output_png().is_file()

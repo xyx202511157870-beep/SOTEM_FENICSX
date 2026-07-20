@@ -609,6 +609,26 @@ def test_model_consistency_reports_resolved_quasistatic_reference_identity():
     }
 
 
+def test_pipeline_defaults_to_verified_source_quadrature_pair():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig()
+
+    assert config.empymod_srcpts == 9
+    assert config.reference_audit_srcpts == 17
+
+
+@pytest.mark.parametrize("audit_srcpts", [0, 9])
+def test_acceptance_configuration_cannot_skip_higher_order_reference_audit(
+    audit_srcpts
+):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="reference_audit_srcpts.*(positive|greater)"):
+        sp.validate_model_consistency(
+            sp.PipelineConfig(empymod_srcpts=9, reference_audit_srcpts=audit_srcpts)
+        )
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -666,6 +686,8 @@ def test_resolved_config_yaml_records_empymod_reference_identity_fields():
     resolved = sp._resolved_config_yaml(sp.PipelineConfig())
 
     for line in (
+        "empymod_srcpts: 9\n",
+        "reference_audit_srcpts: 17\n",
         "empymod_equation: quasistatic\n",
         "empymod_eperm_h: 0\n",
         "empymod_eperm_v: 0\n",
@@ -768,6 +790,8 @@ def test_pipeline_cli_resolves_independent_qwe_sampling_density(tmp_path, monkey
         captured["ft"] = config.empymod_ft
         captured["qwe_pts_per_dec"] = config.empymod_ft_qwe_pts_per_dec
         captured["dlf_pts_per_dec"] = config.empymod_ft_pts_per_dec
+        captured["empymod_srcpts"] = config.empymod_srcpts
+        captured["reference_audit_srcpts"] = config.reference_audit_srcpts
         return {
             "source_length": 1000.0,
             "inline_distance_from_source_start": 1500.0,
@@ -803,6 +827,8 @@ def test_pipeline_cli_resolves_independent_qwe_sampling_density(tmp_path, monkey
         "ft": "qwe",
         "qwe_pts_per_dec": 47,
         "dlf_pts_per_dec": 0,
+        "empymod_srcpts": 9,
+        "reference_audit_srcpts": 17,
     }
 
 
@@ -1503,6 +1529,53 @@ def test_postprocess_records_actual_empymod_reference_mode(monkeypatch, tmp_path
 
     assert captured["artifact_reference_mode"] == ref_mode
     assert captured["report_reference_mode"] == ref_mode
+
+
+def test_postprocess_reference_quadrature_failure_blocks_acceptance_writes(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    times = np.asarray([1.0e-4, 1.0e-3])
+    components = ("Ex", "Ey", "dBzdt")
+    primary = np.asarray([[1.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
+    audit = np.asarray([[1.02, 0.0, 1.0], [1.0, 0.0, 1.0]])
+    calls = []
+    monkeypatch.setattr(
+        sp,
+        "_load_forward_partial",
+        lambda _config: {
+            "times": times,
+            "data": primary.copy(),
+            "components": components,
+            "solver_log": [],
+        },
+    )
+
+    def fake_reference(requested_times, config, *, mode, srcpts=None):
+        calls.append(srcpts)
+        data = audit if srcpts == 17 else primary
+        return {
+            "times": requested_times,
+            "data": data.copy(),
+            "components": components,
+            "reference_mode": mode,
+        }
+
+    monkeypatch.setattr(sp, "get_empymod_reference", fake_reference)
+    monkeypatch.setattr(sp, "compute_error", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        sp,
+        "_save_npz",
+        lambda *_args, **_kwargs: pytest.fail(
+            "failed 9-to-17 reference audit must block acceptance writes"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="source-quadrature audit failed.*Ex"):
+        sp.postprocess_saved_forward(sp.PipelineConfig(workdir=tmp_path), {})
+
+    assert calls == [None, 17]
+    assert not any(tmp_path.iterdir())
 
 
 def test_report_uses_reference_mode_from_reference_result(tmp_path):

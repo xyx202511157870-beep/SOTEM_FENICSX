@@ -41,6 +41,7 @@ POSTPROCESS_MODULES = {
     "scipy": "scipy",
     "matplotlib": "matplotlib",
 }
+REFERENCE_SOURCE_QUADRATURE_TOLERANCE = 0.005
 
 PHYS_AIR = 100
 PHYS_EARTH = 101
@@ -139,7 +140,7 @@ class PipelineConfig:
     cole_f_max: float = 1.0e5
     cole_n_freq: int = 96
     cole_fit_tolerance: float = 0.01
-    empymod_srcpts: int = 5
+    empymod_srcpts: int = 9
     empymod_equation: str = "quasistatic"
     empymod_eperm_h: float = 0.0
     empymod_eperm_v: float = 0.0
@@ -181,7 +182,7 @@ class PipelineConfig:
     empymod_ft_fft_nfreq: int = 2048
     empymod_ft_fft_ntot: int = 2048
     empymod_ft_fft_pts_per_dec: int | None = None
-    reference_audit_srcpts: int = 0
+    reference_audit_srcpts: int = 17
 
     ksp_type: str = "gmres"
     rtol: float = 1.0e-8
@@ -690,9 +691,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "weak_component_reference_fraction must be finite and in (0, 1); "
             f"got {weak_fraction:.12g}"
         )
-    empymod_srcpts = int(config.empymod_srcpts)
-    if empymod_srcpts <= 0:
-        raise ValueError(f"empymod_srcpts must be positive; got {empymod_srcpts}")
+    empymod_srcpts = _identity_positive_int("empymod_srcpts", config.empymod_srcpts)
     empymod_ht = str(config.empymod_ht).strip().lower()
     if empymod_ht not in {"dlf", "qwe", "quad"}:
         raise ValueError("empymod_ht must be 'dlf', 'qwe', or 'quad'")
@@ -715,9 +714,14 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         "empymod_ft_qwe_pts_per_dec", config.empymod_ft_qwe_pts_per_dec
     )
     empymod_reference_identity = _require_approved_empymod_reference_identity(config)
-    reference_audit_srcpts = int(config.reference_audit_srcpts)
-    if reference_audit_srcpts < 0:
-        raise ValueError(f"reference_audit_srcpts must be nonnegative; got {reference_audit_srcpts}")
+    reference_audit_srcpts = _identity_positive_int(
+        "reference_audit_srcpts", config.reference_audit_srcpts
+    )
+    if reference_audit_srcpts <= empymod_srcpts:
+        raise ValueError(
+            "reference_audit_srcpts must be greater than empymod_srcpts so the "
+            "acceptance source-quadrature audit cannot be skipped"
+        )
 
     tol = float(config.geometry_tolerance)
     source_depth_start = float(-start[2])
@@ -6113,6 +6117,102 @@ def _validation_floor(component: str, ref_values) -> float:
     return max(1.0e-300, 1.0e-6 * max_abs_ref)
 
 
+def _reference_source_quadrature_audit(
+    primary_data,
+    audit_data,
+    components,
+    *,
+    tolerance: float = REFERENCE_SOURCE_QUADRATURE_TOLERANCE,
+) -> dict[str, Any]:
+    """Apply the fixed 1%-of-peak floor gate to primary versus higher-order references."""
+
+    import numpy as np
+
+    primary = np.asarray(primary_data, dtype=float)
+    audit = np.asarray(audit_data, dtype=float)
+    names = tuple(str(component) for component in components)
+    if primary.shape != audit.shape:
+        raise ValueError("primary and audit reference arrays must have matching shapes")
+    if primary.ndim != 2 or primary.shape[1] != len(names):
+        raise ValueError("reference audit arrays must match the component sequence")
+    if not np.all(np.isfinite(primary)) or not np.all(np.isfinite(audit)):
+        raise ValueError("reference audit arrays must contain only finite values")
+
+    required = tuple(name for name in ("Ex", "Hz", "dBzdt") if name in names)
+    missing = [name for name in ("Ex", "dBzdt") if name not in names]
+    if missing:
+        raise ValueError(
+            "reference source-quadrature audit lacks required components: "
+            + ", ".join(missing)
+        )
+
+    threshold = float(tolerance)
+    if not math.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("reference source-quadrature tolerance must be finite and positive")
+    summaries: dict[str, Any] = {}
+    failed: list[str] = []
+    for name in required:
+        index = names.index(name)
+        high = audit[:, index]
+        low = primary[:, index]
+        floor = max(1.0e-300, 0.01 * float(np.max(np.abs(high))))
+        relative = np.abs(low - high) / np.maximum(np.abs(high), floor)
+        max_index = int(np.argmax(relative))
+        maximum = float(relative[max_index])
+        passed = bool(maximum <= threshold)
+        if not passed:
+            failed.append(name)
+        summaries[name] = {
+            "floor": floor,
+            "max_acceptance_error": maximum,
+            "max_index": max_index,
+            "passed": passed,
+        }
+    return {
+        "passed": not failed,
+        "failed_components": failed,
+        "threshold": threshold,
+        "floor_rule": "0.01 * peak(abs(higher-order reference)) per component",
+        "components": summaries,
+    }
+
+
+def _require_reference_source_quadrature_audit(
+    config: PipelineConfig,
+    primary_result,
+    audit_result,
+) -> dict[str, Any]:
+    primary_srcpts = _identity_positive_int("empymod_srcpts", config.empymod_srcpts)
+    audit_srcpts = _identity_positive_int(
+        "reference_audit_srcpts", config.reference_audit_srcpts
+    )
+    if audit_srcpts <= primary_srcpts:
+        raise ValueError(
+            "reference_audit_srcpts must be greater than empymod_srcpts so the "
+            "acceptance source-quadrature audit cannot be skipped"
+        )
+    if tuple(primary_result.get("components", ())) != tuple(
+        audit_result.get("components", ())
+    ):
+        raise ValueError("primary and audit reference components do not match")
+    summary = _reference_source_quadrature_audit(
+        primary_result["data"],
+        audit_result["data"],
+        primary_result["components"],
+    )
+    if not summary["passed"]:
+        details = ", ".join(
+            f"{name}={summary['components'][name]['max_acceptance_error']:.6g}"
+            for name in summary["failed_components"]
+        )
+        raise RuntimeError(
+            "empymod source-quadrature audit failed before acceptance writes "
+            f"(srcpts {primary_srcpts}->{audit_srcpts}, threshold "
+            f"{summary['threshold']:.6g}): {details}"
+        )
+    return summary
+
+
 def _write_component_csv(path: Path, times, data, components) -> None:
     import numpy as np
 
@@ -6912,6 +7012,8 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "divergence_control_scale": str(config.divergence_control_scale),
         "polarization": str(config.polarization),
         "cole_fit_tolerance": float(config.cole_fit_tolerance),
+        "empymod_srcpts": int(config.empymod_srcpts),
+        "reference_audit_srcpts": int(config.reference_audit_srcpts),
         "empymod_equation": str(config.empymod_equation),
         "empymod_eperm_h": float(config.empymod_eperm_h),
         "empymod_eperm_v": float(config.empymod_eperm_v),
@@ -8672,15 +8774,18 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
     t_ref = time.perf_counter()
     ref_result = get_empymod_reference(fem_result["times"], config, mode=ref_mode)
     errors = compute_error(fem_result["data"], ref_result["data"], fem_result["components"])
-    reference_audit_errors = None
-    if int(config.reference_audit_srcpts) > 0 and int(config.reference_audit_srcpts) != int(config.empymod_srcpts):
-        audit_ref_result = get_empymod_reference(
-            fem_result["times"],
-            config,
-            mode=ref_mode,
-            srcpts=int(config.reference_audit_srcpts),
-        )
-        reference_audit_errors = compute_error(ref_result["data"], audit_ref_result["data"], ref_result["components"])
+    audit_ref_result = get_empymod_reference(
+        fem_result["times"],
+        config,
+        mode=ref_mode,
+        srcpts=int(config.reference_audit_srcpts),
+    )
+    reference_audit_summary = _require_reference_source_quadrature_audit(
+        config, ref_result, audit_ref_result
+    )
+    reference_audit_errors = compute_error(
+        ref_result["data"], audit_ref_result["data"], ref_result["components"]
+    )
     runtime["reference_seconds"] = time.perf_counter() - t_ref
     t_post = time.perf_counter()
     _save_npz(config, fem_result, ref_result, errors)
@@ -8715,6 +8820,7 @@ def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, re
         "ref_result": ref_result,
         "errors": errors,
         "reference_audit_errors": reference_audit_errors,
+        "reference_audit_summary": reference_audit_summary,
         "runtime": runtime,
     }
 
@@ -8880,11 +8986,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--time-method", choices=["theta", "bdf2"], default="theta")
     parser.add_argument("--time-theta", type=float, default=1.0, help="Theta-method weight for non-polarizable E-form time stepping; 1.0=BE, 0.5=Crank-Nicolson.")
     parser.add_argument("--time-origin", choices=["after_ramp", "ramp_start"], default="after_ramp")
-    parser.add_argument("--empymod-srcpts", type=int, default=5)
+    parser.add_argument("--empymod-srcpts", type=int, default=9)
     parser.add_argument("--empymod-ht", choices=["dlf", "qwe", "quad"], default="dlf")
     parser.add_argument("--empymod-ft", choices=["dlf", "qwe", "fftlog", "fft"], default="dlf")
     parser.add_argument("--empymod-ft-qwe-pts-per-dec", type=int, default=30)
-    parser.add_argument("--reference-audit-srcpts", type=int, default=0)
+    parser.add_argument("--reference-audit-srcpts", type=int, default=17)
     parser.add_argument("--max-it", type=int, default=1000)
     parser.add_argument("--rtol", type=float, default=1.0e-8)
     parser.add_argument("--atol", type=float, default=1.0e-12)
@@ -9091,14 +9197,18 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.perf_counter()
     ref_result = get_empymod_reference(completed_times, config, mode=ref_mode)
     errors = compute_error(fem_result["data"], ref_result["data"], fem_result["components"])
-    reference_audit_errors = None
-    if int(config.reference_audit_srcpts) > 0 and int(config.reference_audit_srcpts) != int(config.empymod_srcpts):
-        audit_ref_result = get_empymod_reference(completed_times, config, mode=ref_mode, srcpts=int(config.reference_audit_srcpts))
-        reference_audit_errors = compute_error(
-            ref_result["data"],
-            audit_ref_result["data"],
-            ref_result["components"],
-        )
+    audit_ref_result = get_empymod_reference(
+        completed_times,
+        config,
+        mode=ref_mode,
+        srcpts=int(config.reference_audit_srcpts),
+    )
+    _require_reference_source_quadrature_audit(config, ref_result, audit_ref_result)
+    reference_audit_errors = compute_error(
+        ref_result["data"],
+        audit_ref_result["data"],
+        ref_result["components"],
+    )
     runtime["reference_seconds"] = time.perf_counter() - t0
     if msh.comm.rank == 0:
         t0 = time.perf_counter()

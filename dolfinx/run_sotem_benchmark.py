@@ -138,7 +138,8 @@ def build_pipeline_argv(
         _float_flag("air-height", boundary_extent),
         _float_flag("earth-depth", boundary_extent),
         "--error-min-time=0.0",
-        "--reference-audit-srcpts=9",
+        "--empymod-srcpts=9",
+        "--reference-audit-srcpts=17",
     ]
     if source_only:
         argv.append("--source-only")

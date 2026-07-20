@@ -221,7 +221,7 @@ def test_empymod_call_kwargs_make_approved_quasistatic_dlf_identity_explicit():
     kwargs = sp._empymod_call_kwargs(sp.PipelineConfig(), n_layers=3)
 
     assert kwargs == {
-        "srcpts": 5,
+        "srcpts": 9,
         "epermH": [0.0, 0.0, 0.0],
         "epermV": [0.0, 0.0, 0.0],
         "mpermH": [1.0, 1.0, 1.0],
