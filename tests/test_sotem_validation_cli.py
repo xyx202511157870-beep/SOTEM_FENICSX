@@ -1359,6 +1359,114 @@ def test_reference_rejects_nonpositive_srcpts_without_running(tmp_path, srcpts):
         )
 
 
+def _remove_v1_reference_input_srcpts(run_dir):
+    for path in (
+        run_dir / "manifest.json",
+        run_dir / "artifacts" / "reference" / "_transaction.json",
+    ):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if path.name == "manifest.json":
+            payload["stages"]["reference"]["inputs"].pop("srcpts")
+        else:
+            payload["inputs"].pop("srcpts")
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _convert_to_v1_implicit_reference_srcpts(run_dir):
+    _remove_v1_reference_input_srcpts(run_dir)
+    metadata_paths = (
+        run_dir / "empymod_metadata.json",
+        run_dir / "artifacts" / "reference" / "empymod_metadata.json",
+    )
+    for path in metadata_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("srcpts")
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    digest = cli._sha256_file(metadata_paths[0])
+    assert cli._sha256_file(metadata_paths[1]) == digest
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stages"]["reference"]["file_sha256"]["empymod_metadata.json"] = digest
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    transaction["file_sha256"]["artifacts/reference/empymod_metadata.json"] = digest
+    transaction_path.write_text(
+        json.dumps(transaction, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def test_reference_resumes_v1_implicit_default_srcpts_but_rejects_other_value(
+    tmp_path, monkeypatch
+):
+    run_dir = _prepare(tmp_path, run_name="legacy-v1-reference")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+    )
+    assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
+    _convert_to_v1_implicit_reference_srcpts(run_dir)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda *args, **kwargs: pytest.fail("legacy default resume must reuse evidence"),
+    )
+
+    assert cli.main(_command("reference", run_dir, LEI_CASE)) == 0
+    with pytest.raises(ValueError, match="inputs|srcpts"):
+        cli.main(
+            _command(
+                "reference",
+                run_dir,
+                LEI_CASE,
+                extra=("--srcpts", "17"),
+            )
+        )
+
+
+def test_effect_accepts_v1_reference_runs_with_implicit_default_srcpts(
+    tmp_path, monkeypatch
+):
+    runs = _build_effect_source_runs(tmp_path, monkeypatch)
+    _convert_to_v1_implicit_reference_srcpts(runs["noip_reference"])
+    _convert_to_v1_implicit_reference_srcpts(runs["ip_reference"])
+    effect_run = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver="polarization_effect",
+        run_name="legacy-v1-effect",
+    )
+
+    assert cli.main(_effect_args(effect_run, runs)) == 0
+    manifest = json.loads((effect_run / "manifest.json").read_text(encoding="utf-8"))
+    source_runs = manifest["stages"]["effect"]["inputs"]["source_runs"]
+    assert source_runs["noip_reference"]["srcpts"] == 5
+    assert source_runs["ip_reference"]["srcpts"] == 5
+
+
+def test_reference_rejects_missing_srcpts_input_when_hashed_metadata_is_new_format(
+    tmp_path, monkeypatch
+):
+    run_dir = _prepare(tmp_path, run_name="tampered-new-reference")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode: {**_fake_response(case), "reference_mode": mode},
+    )
+    assert cli.main(
+        _command("reference", run_dir, LEI_CASE, extra=("--srcpts", "17"))
+    ) == 0
+    _remove_v1_reference_input_srcpts(run_dir)
+
+    with pytest.raises(ValueError, match="srcpts|metadata|inputs"):
+        cli.main(_command("reference", run_dir, LEI_CASE))
+
+
 def test_pyproject_registers_sotem_validation_entrypoint():
     payload = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'atem3d-sotem-validate = "atem3d.sotem_validation_cli:main"' in payload
