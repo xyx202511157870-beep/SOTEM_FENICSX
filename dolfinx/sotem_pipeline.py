@@ -56,6 +56,9 @@ PHYS_OUTER = 201
 PHYS_SURFACE = 202
 PHYS_SOURCE_LINE = 301
 SPONGE_ALL_SIDES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+MESH_GENERATOR_CONTRACT_VERSION = "sotem-air-earth-unembedded-probes/v2"
+LOCAL_MESH_MIN_QUALITY = 0.01
+LOCAL_MESH_MAX_ASPECT = 100.0
 _CHECKOUT_SHARED_MODULES: dict[str, Any] = {}
 
 
@@ -209,6 +212,10 @@ class PipelineConfig:
 
     def mesh_path(self) -> Path:
         return self.workdir / self.msh_name
+
+    def dolfinx_mesh_path(self) -> Path:
+        path = self.mesh_path()
+        return path.with_name(path.stem + ".dolfinx" + path.suffix)
 
     def output_png(self) -> Path:
         return self.workdir / "verification_result.png"
@@ -1291,7 +1298,7 @@ def _mesh_memory_preflight_for_path(config: PipelineConfig, msh_path: Path) -> d
 
 
 def _receiver_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
-    """Return extra embedded points that keep receiver cells locally small."""
+    """Return the legacy receiver volume-point layout (not embedded in production)."""
 
     x, y, z = (float(v) for v in config.receiver)
     h = _receiver_anchor_mesh_size(config)
@@ -1363,7 +1370,7 @@ def _receiver_anchor_mesh_size(config: PipelineConfig) -> float:
 
 
 def _source_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float, float, float]]:
-    """Return extra embedded points that keep source-line cells locally small."""
+    """Return the legacy source volume-point layout (not embedded in production)."""
 
     import numpy as np
 
@@ -1425,14 +1432,165 @@ def _source_refinement_cloud_points(config: PipelineConfig) -> list[tuple[float,
     return points
 
 
+def _mesh_contract_path(config: PipelineConfig) -> Path:
+    return config.mesh_path().with_name(config.mesh_path().name + ".contract.json")
+
+
+def _dolfinx_companion_mesh_data(points, cell_blocks, cell_data, field_data) -> dict[str, Any]:
+    """Drop orphan 1D source entities and compact node ids for DOLFINx 0.8."""
+
+    import numpy as np
+
+    kept_indices = []
+    kept_cells = []
+    for index, block in enumerate(cell_blocks):
+        block_type = str(block.type) if hasattr(block, "type") else str(block[0])
+        block_data = block.data if hasattr(block, "data") else block[1]
+        if block_type not in {"triangle", "tetra"}:
+            continue
+        kept_indices.append(index)
+        kept_cells.append((block_type, np.asarray(block_data, dtype=np.int64)))
+    if not kept_cells or not any(block_type == "tetra" for block_type, _data in kept_cells):
+        raise ValueError("DOLFINx companion mesh requires tetrahedral volume cells")
+    used = np.unique(np.concatenate([data.reshape(-1) for _kind, data in kept_cells]))
+    mapping = np.full(np.asarray(points).shape[0], -1, dtype=np.int64)
+    mapping[used] = np.arange(used.size, dtype=np.int64)
+    compact_cells = [(kind, mapping[data]) for kind, data in kept_cells]
+    compact_cell_data = {
+        str(name): [np.asarray(blocks[index]).copy() for index in kept_indices]
+        for name, blocks in dict(cell_data).items()
+    }
+    compact_field_data = {
+        str(name): np.asarray(value).copy()
+        for name, value in dict(field_data).items()
+        if int(np.asarray(value).reshape(-1)[1]) in {2, 3}
+    }
+    return {
+        "points": np.asarray(points, dtype=float)[used].copy(),
+        "cells": compact_cells,
+        "cell_data": compact_cell_data,
+        "field_data": compact_field_data,
+    }
+
+
+def _write_dolfinx_companion_mesh(config: PipelineConfig) -> Path:
+    import meshio
+
+    source_mesh = meshio.read(config.mesh_path())
+    compact = _dolfinx_companion_mesh_data(
+        source_mesh.points,
+        source_mesh.cells,
+        source_mesh.cell_data,
+        source_mesh.field_data,
+    )
+    companion_path = config.dolfinx_mesh_path()
+    meshio.write(
+        companion_path,
+        meshio.Mesh(**compact),
+        file_format="gmsh22",
+        binary=True,
+    )
+    return companion_path
+
+
+def _mesh_contract_identity(config: PipelineConfig) -> dict[str, Any]:
+    """Return the geometry/refinement identity required to reuse a mesh."""
+
+    diffusion_box = _diffusion_refinement_box(config)
+    return {
+        "schema": "sotem_mesh_contract/v1",
+        "generator_version": MESH_GENERATOR_CONTRACT_VERSION,
+        "geometry": {
+            "x_extent": float(config.x_extent),
+            "y_extent": float(config.y_extent),
+            "air_height": float(config.air_height),
+            "earth_depth": float(config.earth_depth),
+            "layer_depths": [float(value) for value in config.layer_depths],
+            "source_start": [float(value) for value in config.source_start],
+            "source_end": [float(value) for value in config.source_end],
+            "receiver": [float(value) for value in config.receiver],
+        },
+        "refinement": {
+            "source_mesh_size": float(config.source_mesh_size),
+            "source_refinement_radius": float(config.source_refinement_radius),
+            "receiver_mesh_size": float(config.receiver_mesh_size),
+            "receiver_anchor_mesh_size": float(config.receiver_anchor_mesh_size),
+            "receiver_refinement_radius": float(config.receiver_refinement_radius),
+            "diffusion_box": {str(key): float(value) for key, value in diffusion_box.items()},
+        },
+        "embedding_policy": {
+            "source_line_in_volume": False,
+            "source_points_in_volume": False,
+            "receiver_points_in_volume": False,
+            "interface_refinement_points_on_surface": True,
+        },
+    }
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_mesh_contract(config: PipelineConfig) -> Path:
+    mesh_path = config.mesh_path()
+    dolfinx_mesh_path = config.dolfinx_mesh_path()
+    if not mesh_path.is_file() or not dolfinx_mesh_path.is_file():
+        raise FileNotFoundError(
+            "cannot write mesh contract without both source-bearing and DOLFINx meshes: "
+            f"{mesh_path}, {dolfinx_mesh_path}"
+        )
+    contract_path = _mesh_contract_path(config)
+    payload = {
+        **_mesh_contract_identity(config),
+        "mesh_sha256": _sha256_path(mesh_path),
+        "dolfinx_mesh_sha256": _sha256_path(dolfinx_mesh_path),
+    }
+    temporary = contract_path.with_name(contract_path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(contract_path)
+    return contract_path
+
+
+def _mesh_contract_matches(config: PipelineConfig) -> bool:
+    mesh_path = config.mesh_path()
+    dolfinx_mesh_path = config.dolfinx_mesh_path()
+    contract_path = _mesh_contract_path(config)
+    if not mesh_path.is_file() or not dolfinx_mesh_path.is_file() or not contract_path.is_file():
+        return False
+    try:
+        payload = json.loads(contract_path.read_text(encoding="utf-8"))
+        expected = _mesh_contract_identity(config)
+        actual_identity = {key: payload.get(key) for key in expected}
+        return bool(
+            actual_identity == expected
+            and payload.get("mesh_sha256") == _sha256_path(mesh_path)
+            and payload.get("dolfinx_mesh_sha256") == _sha256_path(dolfinx_mesh_path)
+        )
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def generate_verification_mesh(config: PipelineConfig) -> Path:
     """Generate the two-volume air-earth Gmsh model."""
 
     msh_path = config.mesh_path()
-    if msh_path.exists() and not config.force_mesh:
+    if msh_path.exists() and not config.force_mesh and _mesh_contract_matches(config):
         print(f"[mesh] Reusing existing mesh: {msh_path}", flush=True)
         _mesh_memory_preflight_for_path(config, msh_path)
         return msh_path
+    if msh_path.exists() and not config.force_mesh:
+        print(
+            "[mesh] Existing mesh contract is missing or stale; regenerating with "
+            f"{MESH_GENERATOR_CONTRACT_VERSION}",
+            flush=True,
+        )
 
     import gmsh
 
@@ -1466,12 +1624,8 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         p0 = occ.addPoint(*config.source_start, 5.0)
         p1 = occ.addPoint(*config.source_end, 5.0)
         source_line = occ.addLine(p0, p1)
-        source_cloud = [occ.addPoint(*point, config.source_mesh_size) for point in _source_refinement_cloud_points(config)]
         receiver_anchor_mesh_size = _receiver_anchor_mesh_size(config)
         rp = occ.addPoint(*config.receiver, receiver_anchor_mesh_size)
-        receiver_cloud = [
-            occ.addPoint(*point, receiver_anchor_mesh_size) for point in _receiver_refinement_cloud_points(config)
-        ]
         receiver_surface_cloud = [
             occ.addPoint(*point, receiver_anchor_mesh_size) for point in _receiver_surface_refinement_points(config)
         ]
@@ -1527,17 +1681,6 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.model.addPhysicalGroup(1, [source_line], PHYS_SOURCE_LINE)
         gmsh.model.setPhysicalName(1, PHYS_SOURCE_LINE, "source_wire")
 
-        top_layer_bottom = layer_depths[0] if layer_depths else float(config.earth_depth)
-        top_earth_vols = [
-            earth_vol
-            for earth_vol in earth_vols
-            if -top_layer_bottom <= occ.getCenterOfMass(3, earth_vol)[2] <= 0.0
-        ]
-        if not top_earth_vols:
-            raise RuntimeError("failed to identify top earth layer volumes for source and receiver embedding")
-        for earth_vol in top_earth_vols:
-            gmsh.model.mesh.embed(1, [source_line], 3, earth_vol)
-            gmsh.model.mesh.embed(0, [*source_cloud, rp, *receiver_cloud], 3, earth_vol)
         for interface_surf in interface:
             gmsh.model.mesh.embed(0, receiver_surface_cloud, 2, interface_surf)
 
@@ -1592,6 +1735,8 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         gmsh.model.mesh.generate(3)
         msh_path.parent.mkdir(parents=True, exist_ok=True)
         gmsh.write(str(msh_path))
+        _write_dolfinx_companion_mesh(config)
+        _write_mesh_contract(config)
 
         node_tags, _, _ = gmsh.model.mesh.getNodes()
         elem_types, elem_tags, _ = gmsh.model.mesh.getElements()
@@ -1604,6 +1749,10 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
             "source_wire": PHYS_SOURCE_LINE,
         }
         print(f"[mesh] Wrote {msh_path}", flush=True)
+        print(
+            f"[mesh] Wrote DOLFINx volume/facet companion {config.dolfinx_mesh_path()}",
+            flush=True,
+        )
         print(f"[mesh] nodes={len(node_tags)}, elements={n_elems}, element_types={list(elem_types)}", flush=True)
         print(f"[mesh] physical tags={physical}", flush=True)
     finally:
@@ -1619,7 +1768,7 @@ def load_mesh(config: PipelineConfig):
     from mpi4py import MPI
     from dolfinx.io import gmshio
 
-    msh_path = config.mesh_path()
+    msh_path = config.dolfinx_mesh_path()
     msh, cell_tags, facet_tags = gmshio.read_from_msh(str(msh_path), MPI.COMM_WORLD, rank=0, gdim=3)
     msh.topology.create_connectivity(msh.topology.dim - 1, msh.topology.dim)
     msh.topology.create_connectivity(msh.topology.dim, 0)
@@ -2024,6 +2173,259 @@ def _cell_geometry(msh, cell: int):
     msh.topology.create_connectivity(tdim, 0)
     vertices = msh.topology.connectivity(tdim, 0).links(cell)
     return msh.geometry.x[vertices]
+
+
+def _tetra_quality_metrics(vertices) -> dict[str, float]:
+    """Return scale-free tetra quality using the exact in/circumsphere radii."""
+
+    import numpy as np
+
+    points = np.asarray(vertices, dtype=float)
+    if points.shape != (4, 3) or not np.all(np.isfinite(points)):
+        raise ValueError("tetra vertices must be a finite (4, 3) array")
+    edges = [
+        float(np.linalg.norm(points[j] - points[i]))
+        for i in range(4)
+        for j in range(i + 1, 4)
+    ]
+    scale = max(edges, default=0.0)
+    if scale <= 0.0:
+        raise ValueError("zero-volume tetrahedron")
+    jacobian = np.column_stack(
+        (points[1] - points[0], points[2] - points[0], points[3] - points[0])
+    )
+    determinant = float(np.linalg.det(jacobian))
+    volume_tolerance = 1.0e-14 * scale**3
+    if determinant < -6.0 * volume_tolerance:
+        raise ValueError("inverted tetrahedron")
+    volume = determinant / 6.0
+    if volume <= volume_tolerance:
+        raise ValueError("zero-volume tetrahedron")
+
+    face_indices = ((1, 2, 3), (0, 3, 2), (0, 1, 3), (0, 2, 1))
+    face_areas = []
+    for i, j, k in face_indices:
+        face_areas.append(
+            0.5
+            * float(
+                np.linalg.norm(
+                    np.cross(points[j] - points[i], points[k] - points[i])
+                )
+            )
+        )
+    surface_area = float(sum(face_areas))
+    if surface_area <= 0.0:
+        raise ValueError("zero-volume tetrahedron")
+    inradius = 3.0 * volume / surface_area
+
+    matrix = 2.0 * (points[1:] - points[0])
+    rhs = np.sum(points[1:] ** 2, axis=1) - float(np.dot(points[0], points[0]))
+    try:
+        circumcenter = np.linalg.solve(matrix, rhs)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError("zero-volume tetrahedron") from exc
+    circumradius = float(np.linalg.norm(circumcenter - points[0]))
+    if not math.isfinite(circumradius) or circumradius <= 0.0 or inradius <= 0.0:
+        raise ValueError("zero-volume tetrahedron")
+    quality = 3.0 * inradius / circumradius
+    aspect = circumradius / (3.0 * inradius)
+    return {
+        "volume": float(volume),
+        "inradius": float(inradius),
+        "circumradius": float(circumradius),
+        "quality_3r_over_R": float(quality),
+        "aspect_R_over_3r": float(aspect),
+    }
+
+
+def _quality_stat(values) -> dict[str, float | int]:
+    import numpy as np
+
+    array = np.asarray(values, dtype=float)
+    if array.size == 0 or not np.all(np.isfinite(array)):
+        raise ValueError("tetra quality statistics require finite nonempty values")
+    return {
+        "count": int(array.size),
+        "min": float(np.min(array)),
+        "p01": float(np.percentile(array, 1.0)),
+        "median": float(np.median(array)),
+        "max": float(np.max(array)),
+    }
+
+
+def _summarize_tetra_cell_quality(msh, cells, *, selection_definition: str) -> dict[str, Any]:
+    unique_cells = sorted({int(cell) for cell in cells})
+    if not unique_cells:
+        raise RuntimeError(f"mesh-quality selection is empty: {selection_definition}")
+    rows = []
+    for cell in unique_cells:
+        try:
+            rows.append(_tetra_quality_metrics(_cell_geometry(msh, cell)))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"invalid tetrahedron in {selection_definition}: local cell {cell}: {exc}"
+            ) from exc
+    return {
+        "selection_definition": selection_definition,
+        "selection_count": int(len(unique_cells)),
+        "local_cell_ids": unique_cells,
+        "quality_3r_over_R": _quality_stat([row["quality_3r_over_R"] for row in rows]),
+        "aspect_R_over_3r": _quality_stat([row["aspect_R_over_3r"] for row in rows]),
+        "volume_m3": _quality_stat([row["volume"] for row in rows]),
+        "all_positive_volume": bool(all(row["volume"] > 0.0 for row in rows)),
+    }
+
+
+def _horizontal_distance_to_segment(point, start, end) -> float:
+    import numpy as np
+
+    p = np.asarray(point, dtype=float)[:2]
+    a = np.asarray(start, dtype=float)[:2]
+    b = np.asarray(end, dtype=float)[:2]
+    axis = b - a
+    denominator = float(np.dot(axis, axis))
+    if denominator <= 0.0:
+        return float(np.linalg.norm(p - a))
+    parameter = min(1.0, max(0.0, float(np.dot(p - a, axis) / denominator)))
+    return float(np.linalg.norm(p - (a + parameter * axis)))
+
+
+def _interface_source_receiver_patch_cells(msh, config: PipelineConfig) -> list[int]:
+    import numpy as np
+
+    tdim = msh.topology.dim
+    n_local = msh.topology.index_map(tdim).size_local
+    receiver_xy = np.asarray(config.receiver, dtype=float)[:2]
+    interface_tolerance = max(1.0e-9, 1.0e-12 * max(config.x_extent, config.y_extent))
+    selected = []
+    for cell in range(n_local):
+        coords = _cell_geometry(msh, cell)
+        interface_vertices = coords[np.abs(coords[:, 2]) <= interface_tolerance]
+        if interface_vertices.size == 0:
+            continue
+        source_near = any(
+            _horizontal_distance_to_segment(vertex, config.source_start, config.source_end)
+            <= float(config.source_refinement_radius) + interface_tolerance
+            for vertex in interface_vertices
+        )
+        receiver_near = any(
+            float(np.linalg.norm(vertex[:2] - receiver_xy))
+            <= float(config.receiver_refinement_radius) + interface_tolerance
+            for vertex in interface_vertices
+        )
+        if source_near or receiver_near:
+            selected.append(cell)
+    return selected
+
+
+def _apply_local_mesh_quality_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    gated = json.loads(json.dumps(summary, allow_nan=False))
+    thresholds = {
+        "min_quality_3r_over_R": LOCAL_MESH_MIN_QUALITY,
+        "max_aspect_R_over_3r": LOCAL_MESH_MAX_ASPECT,
+    }
+    required = (
+        "source_hit_cells",
+        "receiver_colliding_or_nearest_cells",
+        "interface_source_receiver_patch",
+    )
+    failures = []
+    selections = gated.get("selections")
+    if not isinstance(selections, dict):
+        selections = {}
+        gated["selections"] = selections
+    for name in required:
+        selection = selections.get(name)
+        passed = False
+        if isinstance(selection, dict):
+            quality_min = float(selection.get("quality_3r_over_R", {}).get("min", math.nan))
+            aspect_max = float(selection.get("aspect_R_over_3r", {}).get("max", math.nan))
+            passed = bool(
+                math.isfinite(quality_min)
+                and math.isfinite(aspect_max)
+                and bool(selection.get("all_positive_volume", False))
+                and quality_min >= LOCAL_MESH_MIN_QUALITY
+                and aspect_max <= LOCAL_MESH_MAX_ASPECT
+            )
+            selection["gate_passed"] = passed
+        if not passed:
+            failures.append(name)
+    gated["thresholds"] = thresholds
+    gated["failed_selections"] = failures
+    gated["passed"] = not failures
+    return gated
+
+
+def _require_local_mesh_quality_gate(summary: dict[str, Any]) -> None:
+    if not bool(summary.get("passed", False)):
+        failed = ", ".join(str(value) for value in summary.get("failed_selections", ()))
+        raise RuntimeError(
+            "local tetra quality gate failed: "
+            f"{failed}; required min(3r/R)>={LOCAL_MESH_MIN_QUALITY:g} and "
+            f"max(R/(3r))<={LOCAL_MESH_MAX_ASPECT:g}"
+        )
+
+
+def diagnose_local_mesh_quality(msh, config: PipelineConfig, source_info) -> dict[str, Any]:
+    """Audit only the source, receiver, and relevant interface tetrahedra."""
+
+    import numpy as np
+
+    local = _source_local_projection_diagnostics_from_info(source_info)
+    source_cells = local.get("unique_hit_cell_ids", ()) if isinstance(local, dict) else ()
+    if not source_cells:
+        raise RuntimeError("source local diagnostics do not identify actual quadrature hit cells")
+
+    receiver_point = np.asarray(config.receiver, dtype=float)
+    receiver_cells = [int(cell) for cell in _find_cells_for_point(msh, receiver_point)]
+    receiver_mode = "colliding"
+    if not receiver_cells:
+        centers = _cell_centers(msh)
+        if centers.shape[0] == 0:
+            raise RuntimeError("cannot select a receiver quality cell from an empty mesh")
+        receiver_cells = [int(np.argmin(np.linalg.norm(centers - receiver_point, axis=1)))]
+        receiver_mode = "nearest_center"
+    interface_cells = _interface_source_receiver_patch_cells(msh, config)
+    summary = {
+        "schema": "sotem_local_tetra_quality/v1",
+        "metric_definition": {
+            "inradius": "r = 3V / total_face_area",
+            "circumradius": "R from the tetrahedron circumcenter linear system",
+            "quality_3r_over_R": "3r/R; regular tetrahedron = 1",
+            "aspect_R_over_3r": "R/(3r) = 1/quality",
+        },
+        "receiver": {
+            "point": [float(value) for value in receiver_point],
+            "colliding_cell_count": int(len(receiver_cells)) if receiver_mode == "colliding" else 0,
+            "selection_mode": receiver_mode,
+            "selected_local_cell_ids": receiver_cells,
+        },
+        "selections": {
+            "source_hit_cells": _summarize_tetra_cell_quality(
+                msh,
+                source_cells,
+                selection_definition="unique DOLFINx cells actually hit by manual source quadrature",
+            ),
+            "receiver_colliding_or_nearest_cells": _summarize_tetra_cell_quality(
+                msh,
+                receiver_cells,
+                selection_definition=(
+                    "all DOLFINx cells colliding with the receiver point"
+                    if receiver_mode == "colliding"
+                    else "nearest-center DOLFINx cell because no collision was returned"
+                ),
+            ),
+            "interface_source_receiver_patch": _summarize_tetra_cell_quality(
+                msh,
+                interface_cells,
+                selection_definition=(
+                    "cells touching z=0 with an interface vertex inside the configured "
+                    "source-line or receiver refinement radius"
+                ),
+            ),
+        },
+    }
+    return _apply_local_mesh_quality_gate(summary)
 
 
 def _nedelec_interpolation_points(msh, spaces):
@@ -6946,6 +7348,7 @@ def _summarize_manual_line_source_local_diagnostics(
         "missed_points": missed,
         "missed_fraction": float(missed / npts) if npts > 0 else 0.0,
         "unique_hit_cells": int(len(cell_hit_counts)),
+        "unique_hit_cell_ids": sorted(cell_hit_counts),
         "cell_hit_count_min": int(min(hit_count_values)) if hit_count_values else 0,
         "cell_hit_count_max": int(max(hit_count_values)) if hit_count_values else 0,
         "cell_hit_count_mean": float(sum(hit_count_values) / len(hit_count_values)) if hit_count_values else 0.0,
@@ -7268,12 +7671,98 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _physical_tag_counts(cell_tags, facet_tags) -> dict[str, int]:
+    counts = {
+        "air_cells": int(len(cell_tags.find(PHYS_AIR))),
+        "earth_cells": int(len(cell_tags.find(PHYS_EARTH))),
+        "outer_boundary_facets": int(len(facet_tags.find(PHYS_OUTER))),
+        "air_earth_interface_facets": int(len(facet_tags.find(PHYS_SURFACE))),
+    }
+    missing = [name for name, count in counts.items() if count <= 0]
+    if missing:
+        raise RuntimeError(
+            "DOLFINx companion mesh is missing required physical tags: "
+            + ", ".join(missing)
+        )
+    return counts
+
+
+def _pre_forward_diagnostics(
+    msh,
+    cell_tags,
+    facet_tags,
+    spaces: dict[str, Any],
+    config: PipelineConfig,
+    mesh_quality: dict[str, Any],
+    *,
+    debye=None,
+) -> dict[str, Any]:
+    mesh_stats = _mesh_size_statistics(config.mesh_path())
+    memory = _mesh_memory_preflight(config, mesh_stats)
+    tdim = msh.topology.dim
+    global_cells = int(msh.topology.index_map(tdim).size_global)
+    V = spaces.get("V")
+    global_dofs = int(V.dofmap.index_map.size_global) if V is not None else None
+    segments = _source_line_segments_from_msh(config.mesh_path(), config)
+    source_mesh = None
+    if isinstance(segments, dict):
+        source_mesh = {
+            "physical_tag": int(PHYS_SOURCE_LINE),
+            "segment_count": int(segments["segment_count"]),
+            "segment_total_length_m": float(segments["total_length"]),
+            "segment_min_length_m": float(segments["min_segment_length"]),
+            "segment_max_length_m": float(segments["max_segment_length"]),
+        }
+    polarization = {
+        "mode": str(config.polarization),
+        "polarizable_cell_count": None,
+        "debye_fit_relative_l2": None,
+        "debye_fit_tolerance": float(config.cole_fit_tolerance),
+    }
+    if isinstance(debye, dict):
+        cells = debye.get("polarizable_cells")
+        polarization["polarizable_cell_count"] = int(len(cells)) if cells is not None else 0
+        fit = debye.get("fit")
+        if fit is not None:
+            polarization["debye_fit_relative_l2"] = float(fit.relative_l2)
+    return {
+        "schema": "sotem_pre_forward_preflight/v1",
+        "mesh_generator_version": MESH_GENERATOR_CONTRACT_VERSION,
+        "mesh_sha256": _sha256_path(config.mesh_path()),
+        "dolfinx_mesh_sha256": _sha256_path(config.dolfinx_mesh_path()),
+        "physical_tags": _physical_tag_counts(cell_tags, facet_tags),
+        "mesh_statistics": mesh_stats,
+        "memory": memory,
+        "global_cells": global_cells,
+        "global_nedelec_dofs": global_dofs,
+        "source_mesh": source_mesh,
+        "receiver": dict(mesh_quality.get("receiver", {})),
+        "polarization": polarization,
+    }
+
+
+def _write_pre_forward_diagnostics(
+    config: PipelineConfig,
+    mesh_quality: dict[str, Any],
+    preflight: dict[str, Any],
+) -> Path:
+    path = Path(config.workdir) / "mesh_quality_preflight.json"
+    payload = {"mesh_quality": mesh_quality, "preflight": preflight}
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_source_only_diagnostics(
     config: PipelineConfig,
     env: dict[str, Any],
     source_info,
     *,
     runtime: dict[str, Any] | None = None,
+    mesh_quality: dict[str, Any] | None = None,
+    preflight: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write source-only diagnostics without running the transient forward solve."""
 
@@ -7304,6 +7793,14 @@ def write_source_only_diagnostics(
         diagnostics["source_line_orientation"] = source_line_orientation
     if initial_field_diagnostics is not None:
         diagnostics["initial_field"] = initial_field_diagnostics
+    if mesh_quality is not None:
+        diagnostics["mesh_quality"] = json.loads(
+            json.dumps(mesh_quality, allow_nan=False, default=float)
+        )
+    if preflight is not None:
+        diagnostics["preflight"] = json.loads(
+            json.dumps(preflight, allow_nan=False, default=float)
+        )
     (workdir / "source_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, sort_keys=True), encoding="utf-8")
     (workdir / "source_run_config_resolved.yaml").write_text(
         _resolved_config_yaml(config), encoding="utf-8"
@@ -7349,6 +7846,62 @@ def write_source_only_diagnostics(
             f"transverse={float(source_line_orientation.get('transverse_residual_m', math.nan)):.6g} m; "
             f"monotonic={bool(source_line_orientation.get('s_parameter_monotonic', False))}; "
             f"reversed={bool(source_line_orientation.get('reversed_orientation', False))}"
+        )
+    if mesh_quality is not None:
+        lines.append("")
+        lines.append(
+            "local tetra quality gate: "
+            + ("PASS" if bool(mesh_quality.get("passed", False)) else "FAIL")
+        )
+        thresholds = mesh_quality.get("thresholds", {})
+        lines.append(
+            "  fixed thresholds: "
+            f"min(3r/R)>={float(thresholds.get('min_quality_3r_over_R', math.nan)):.6g}; "
+            f"max(R/(3r))<={float(thresholds.get('max_aspect_R_over_3r', math.nan)):.6g}"
+        )
+        for name, selection in mesh_quality.get("selections", {}).items():
+            lines.append(
+                f"  {name}: count={int(selection.get('selection_count', 0))}; "
+                f"quality_min={float(selection.get('quality_3r_over_R', {}).get('min', math.nan)):.6g}; "
+                f"quality_p01={float(selection.get('quality_3r_over_R', {}).get('p01', math.nan)):.6g}; "
+                f"quality_median={float(selection.get('quality_3r_over_R', {}).get('median', math.nan)):.6g}; "
+                f"quality_max={float(selection.get('quality_3r_over_R', {}).get('max', math.nan)):.6g}; "
+                f"aspect_max={float(selection.get('aspect_R_over_3r', {}).get('max', math.nan)):.6g}; "
+                f"positive_volume={bool(selection.get('all_positive_volume', False))}; "
+                f"gate={bool(selection.get('gate_passed', False))}"
+            )
+            lines.append(f"    selection: {selection.get('selection_definition')}")
+    if preflight is not None:
+        lines.append("")
+        lines.append(f"mesh SHA256: {preflight.get('mesh_sha256')}")
+        lines.append(f"DOLFINx mesh SHA256: {preflight.get('dolfinx_mesh_sha256')}")
+        lines.append(f"global cells: {preflight.get('global_cells')}")
+        lines.append(f"global Nedelec DOFs: {preflight.get('global_nedelec_dofs')}")
+        physical_tags = preflight.get("physical_tags", {})
+        lines.append(
+            "physical tags: "
+            + "; ".join(
+                f"{name}={int(value)}" for name, value in sorted(physical_tags.items())
+            )
+        )
+        memory = preflight.get("memory", {})
+        lines.append(
+            "memory preflight: "
+            f"estimated={float(memory.get('estimated_gb', math.nan)):.6g} GB; "
+            f"ok={bool(memory.get('ok', False))}"
+        )
+        receiver = preflight.get("receiver", {})
+        lines.append(
+            "receiver cell selection: "
+            f"mode={receiver.get('selection_mode')}; "
+            f"colliding_cells={int(receiver.get('colliding_cell_count', 0))}"
+        )
+        polarization = preflight.get("polarization", {})
+        lines.append(
+            "polarization preflight: "
+            f"mode={polarization.get('mode')}; "
+            f"cells={polarization.get('polarizable_cell_count')}; "
+            f"fit_relative_l2={polarization.get('debye_fit_relative_l2')}"
         )
     if runtime:
         lines.append("")
@@ -9507,11 +10060,32 @@ def _main_locked(argv: list[str]) -> int:
     if config.formulation == "h":
         source["current_density"] = _build_regularized_current_density(msh, spaces, config, cell_tags)
     runtime["setup_seconds"] = time.perf_counter() - t0
+    mesh_quality = diagnose_local_mesh_quality(msh, config, source)
+    preflight = _pre_forward_diagnostics(
+        msh,
+        cell_tags,
+        facet_tags,
+        spaces,
+        config,
+        mesh_quality,
+        debye=debye,
+    )
+    if msh.comm.rank == 0:
+        _write_pre_forward_diagnostics(config, mesh_quality, preflight)
     if config.source_only:
         if msh.comm.rank == 0:
             runtime["total_seconds"] = time.perf_counter() - run_t0
-            write_source_only_diagnostics(config, env, source, runtime=runtime)
+            write_source_only_diagnostics(
+                config,
+                env,
+                source,
+                runtime=runtime,
+                mesh_quality=mesh_quality,
+                preflight=preflight,
+            )
+        _require_local_mesh_quality_gate(mesh_quality)
         return 0
+    _require_local_mesh_quality_gate(mesh_quality)
     times = generate_time_array(config)
     t0 = time.perf_counter()
     precomputed_ref_result = get_empymod_reference(times, config, mode=ref_mode)

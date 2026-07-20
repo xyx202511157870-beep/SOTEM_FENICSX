@@ -1829,6 +1829,32 @@ def _patch_formal_forward_seams(monkeypatch, sp, events, *, audit_scale):
     monkeypatch.setattr(sp, "assign_materials", lambda *_args: {})
     monkeypatch.setattr(sp, "apply_transient_sponge", lambda *_args: None)
     monkeypatch.setattr(sp, "build_source", lambda *_args: {"mode": "test"})
+    passing_quality = {
+        "passed": True,
+        "failed_selections": [],
+        "thresholds": {
+            "min_quality_3r_over_R": 0.01,
+            "max_aspect_R_over_3r": 100.0,
+        },
+        "selections": {},
+        "receiver": {"colliding_cell_count": 1, "selection_mode": "colliding"},
+    }
+    monkeypatch.setattr(
+        sp, "diagnose_local_mesh_quality", lambda *_args: passing_quality
+    )
+    monkeypatch.setattr(
+        sp,
+        "_pre_forward_diagnostics",
+        lambda *_args, **_kwargs: {
+            "mesh_sha256": "test",
+            "global_cells": 1,
+            "global_nedelec_dofs": 1,
+            "memory": {"estimated_gb": 0.0, "ok": True},
+            "receiver": passing_quality["receiver"],
+            "polarization": {"mode": "none"},
+        },
+    )
+    monkeypatch.setattr(sp, "_write_pre_forward_diagnostics", lambda *_args: None)
     monkeypatch.setattr(
         sp,
         "_build_regularized_current_density",

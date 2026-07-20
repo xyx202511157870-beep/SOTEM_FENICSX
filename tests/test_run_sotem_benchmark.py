@@ -139,11 +139,36 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
         "build_source",
         lambda msh, spaces, config, cell_tags: {"mode": "test-source"},
     )
+    passing_quality = {
+        "passed": True,
+        "failed_selections": [],
+        "receiver": {"colliding_cell_count": 1, "selection_mode": "colliding"},
+    }
+    monkeypatch.setattr(
+        pipeline, "diagnose_local_mesh_quality", lambda *_args: passing_quality
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_pre_forward_diagnostics",
+        lambda *_args, **_kwargs: {
+            "mesh_sha256": "test",
+            "global_cells": 1,
+            "global_nedelec_dofs": 1,
+            "memory": {"estimated_gb": 0.0, "ok": True},
+            "receiver": passing_quality["receiver"],
+            "polarization": {"mode": "none"},
+        },
+    )
+    monkeypatch.setattr(pipeline, "_write_pre_forward_diagnostics", lambda *_args: None)
     monkeypatch.setattr(
         pipeline,
         "write_source_only_diagnostics",
-        lambda config, env, source, *, runtime: diagnostics.update(
-            config=config, source=source, runtime=runtime
+        lambda config, env, source, *, runtime, mesh_quality, preflight: diagnostics.update(
+            config=config,
+            source=source,
+            runtime=runtime,
+            mesh_quality=mesh_quality,
+            preflight=preflight,
         ),
     )
     monkeypatch.setattr(
@@ -186,6 +211,7 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
     )
     assert diagnostics["config"] is captured["config"]
     assert diagnostics["source"] == {"mode": "test-source"}
+    assert diagnostics["mesh_quality"]["passed"] is True
 
 
 @pytest.mark.parametrize(
