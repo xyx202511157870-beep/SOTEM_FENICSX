@@ -3,6 +3,39 @@ import pytest
 import scipy.sparse as sp
 
 
+def test_petsc_aij_destroys_matrix_when_assembly_fails():
+    from atem3d.solvers.petsc_ams import _petsc_aij_from_csr
+
+    class MatrixProbe:
+        def __init__(self):
+            self.destroyed = False
+
+        def createAIJ(self, **_kwargs):
+            return self
+
+        def assemble(self):
+            raise RuntimeError("synthetic matrix assembly failure")
+
+        def destroy(self):
+            self.destroyed = True
+
+    matrix_probe = MatrixProbe()
+
+    class PetscProbe:
+        IntType = np.int64
+        ScalarType = np.float64
+        COMM_SELF = object()
+
+        @staticmethod
+        def Mat():
+            return matrix_probe
+
+    with pytest.raises(RuntimeError, match="synthetic matrix assembly failure"):
+        _petsc_aij_from_csr(sp.eye(2, format="csr"), PetscProbe)
+
+    assert matrix_probe.destroyed is True
+
+
 def test_external_true_residual_gate_rejects_backend_success_above_tolerance():
     from atem3d.solvers.petsc_ams import require_true_residual
 
@@ -185,6 +218,80 @@ def test_petsc_ams_native_state_is_released_in_dependency_order():
     assert solver._petsc_matrix is None
     assert solver._gradient_csr_buffers == ()
     assert solver._matrix_csr_buffers == ()
+
+
+def test_petsc_ams_solve_destroys_first_vector_when_second_allocation_fails():
+    from atem3d.solvers.petsc_ams import PetscHypreAmsSolver
+
+    class VectorProbe:
+        def __init__(self):
+            self.destroyed = False
+
+        def destroy(self):
+            self.destroyed = True
+
+    first_vector = VectorProbe()
+
+    class MatrixProbe:
+        def __init__(self):
+            self.calls = 0
+
+        def createVecRight(self):
+            self.calls += 1
+            if self.calls == 1:
+                return first_vector
+            raise RuntimeError("synthetic second vector allocation failure")
+
+    solver = object.__new__(PetscHypreAmsSolver)
+    solver._petsc_matrix = MatrixProbe()
+
+    with pytest.raises(RuntimeError, match="synthetic second vector allocation failure"):
+        solver._solve_once(np.ones(2))
+
+    assert first_vector.destroyed is True
+
+
+def test_petsc_ams_solve_cleans_both_vectors_without_masking_body_failure():
+    from atem3d.solvers.petsc_ams import PetscHypreAmsSolver
+
+    class VectorProbe:
+        def __init__(self, *, get_array_error=None, destroy_error=None):
+            self.get_array_error = get_array_error
+            self.destroy_error = destroy_error
+            self.destroyed = False
+
+        def getArray(self):
+            if self.get_array_error is not None:
+                raise self.get_array_error
+            return np.zeros(2)
+
+        def destroy(self):
+            self.destroyed = True
+            if self.destroy_error is not None:
+                raise self.destroy_error
+
+    body_error = RuntimeError("synthetic solve body failure")
+    b = VectorProbe(
+        get_array_error=body_error,
+        destroy_error=RuntimeError("synthetic b cleanup failure"),
+    )
+    x = VectorProbe()
+    vectors = iter((b, x))
+
+    class MatrixProbe:
+        @staticmethod
+        def createVecRight():
+            return next(vectors)
+
+    solver = object.__new__(PetscHypreAmsSolver)
+    solver._petsc_matrix = MatrixProbe()
+
+    with pytest.raises(RuntimeError, match="synthetic solve body failure") as exc_info:
+        solver._solve_once(np.ones(2))
+
+    assert exc_info.value is body_error
+    assert b.destroyed is True
+    assert x.destroyed is True
 
 
 def test_tdem_simulation_petsc_ams_step_matches_sparse_direct_solution():

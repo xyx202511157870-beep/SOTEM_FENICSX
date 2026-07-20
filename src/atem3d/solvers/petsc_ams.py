@@ -130,12 +130,22 @@ def _petsc_aij_from_csr(matrix: sp.csr_matrix, PETSc):
     indptr = np.ascontiguousarray(matrix.indptr, dtype=PETSc.IntType)
     indices = np.ascontiguousarray(matrix.indices, dtype=PETSc.IntType)
     data = np.ascontiguousarray(matrix.data, dtype=PETSc.ScalarType)
-    result = PETSc.Mat().createAIJ(
-        size=matrix.shape,
-        csr=(indptr, indices, data),
-        comm=PETSc.COMM_SELF,
-    )
-    result.assemble()
+    result = None
+    try:
+        result = PETSc.Mat().createAIJ(
+            size=matrix.shape,
+            csr=(indptr, indices, data),
+            comm=PETSc.COMM_SELF,
+        )
+        result.assemble()
+    except BaseException:
+        if result is not None:
+            try:
+                result.destroy()
+            except BaseException:
+                # Preserve the allocation/assembly failure that caused cleanup.
+                pass
+        raise
     # petsc4py may borrow user CSR storage.  Return and retain the exact arrays
     # for at least as long as the PETSc Mat exists.
     return result, (indptr, indices, data)
@@ -281,9 +291,12 @@ class PetscHypreAmsSolver:
             raise errors[0]
 
     def _solve_once(self, rhs: np.ndarray) -> tuple[np.ndarray, int, int]:
-        b = self._petsc_matrix.createVecRight()
-        x = self._petsc_matrix.createVecRight()
+        b = None
+        x = None
+        body_error = None
         try:
+            b = self._petsc_matrix.createVecRight()
+            x = self._petsc_matrix.createVecRight()
             b.getArray()[:] = rhs
             b.assemble()
             x.set(0.0)
@@ -294,9 +307,22 @@ class PetscHypreAmsSolver:
                 int(self._ksp.getConvergedReason()),
                 int(self._ksp.getIterationNumber()),
             )
+        except BaseException as err:
+            body_error = err
+            raise
         finally:
-            b.destroy()
-            x.destroy()
+            cleanup_errors = []
+            # Release in reverse allocation order and attempt both releases,
+            # even when one native destroy operation itself fails.
+            for vector in (x, b):
+                if vector is None:
+                    continue
+                try:
+                    vector.destroy()
+                except BaseException as err:  # pragma: no cover - native failure
+                    cleanup_errors.append(err)
+            if cleanup_errors and body_error is None:
+                raise cleanup_errors[0]
 
     def solve(self, rhs: Any) -> np.ndarray:
         if self.destroyed:
