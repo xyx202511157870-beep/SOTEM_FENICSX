@@ -140,7 +140,7 @@ def test_public_z_down_geometry_is_mapped_once_to_internal_z_up(song_case):
         "internal_tolerance": 1.0e-11,
         "maxiter": 2000,
         "preconditioner": "hypre_ams",
-        "ksp_type": "gmres",
+        "ksp_type": "cg",
         "residual_replacement_steps": 2,
     }
     assert config["initialization_solver"] == {
@@ -154,7 +154,7 @@ def test_public_z_down_geometry_is_mapped_once_to_internal_z_up(song_case):
         "magnetic_ksp_type": "gmres",
         "magnetic_preconditioner": "hypre_ams",
     }
-    assert config["adapter_metadata"]["transient_solver"] == "petsc_gmres_hypre_ams"
+    assert config["adapter_metadata"]["transient_solver"] == "petsc_cg_hypre_ams"
     assert config["adapter_metadata"]["initial_magnetic_field"] == "ampere"
     assert config["adapter_metadata"]["initialization_solver"] == {
         "dc_electric": "petsc_cg_hypre_boomeramg",
@@ -193,6 +193,29 @@ def test_public_z_down_geometry_is_mapped_once_to_internal_z_up(song_case):
     }
     assert transform["Hz_vector_type"] == "axial"
     assert config["boundary"] == {"kind": "none", "thickness_cells": 0}
+
+
+def test_lei_step_32_regression_selects_spd_cg_backend(lei_case):
+    config = build_benchmark_config(
+        lei_case,
+        variant="noip",
+        spatial_level="S0",
+        boundary_level="B0",
+        substeps=1,
+    )
+
+    assert config["time_steps"][32] == pytest.approx(0.0032596778066694664)
+    assert config["boundary"] == {"kind": "none", "thickness_cells": 0}
+    assert config["solver"] == {
+        "type": "petsc_ams",
+        "tolerance": 1.0e-8,
+        "internal_tolerance": 1.0e-11,
+        "maxiter": 2000,
+        "preconditioner": "hypre_ams",
+        "ksp_type": "cg",
+        "residual_replacement_steps": 2,
+    }
+    assert config["adapter_metadata"]["transient_solver"] == "petsc_cg_hypre_ams"
 
 
 def _nodes(mesh, axis):
@@ -446,7 +469,7 @@ def _fake_solver_for_config(config, *, nonfinite=False):
             "dt_s": float(dt),
             "solver": "petsc_ksp_hypre_ams",
             "solve_mode": "petsc_ksp",
-            "ksp_type": "gmres",
+            "ksp_type": config["solver"]["ksp_type"],
             "pc_type": "hypre_ams",
             "backend_reason": 2,
             "backend_reported_converged": True,
@@ -865,7 +888,7 @@ def test_run_rejects_missing_initialization_phase(monkeypatch, lei_case):
         run_simpeg_benchmark(lei_case, variant="noip")
 
 
-def test_resource_metadata_discloses_petsc_initialization_and_full_scale_rerun_gate(
+def test_resource_metadata_discloses_spd_cg_choice_and_fail_closed_gates(
     song_case,
 ):
     config = build_benchmark_config(
@@ -877,11 +900,12 @@ def test_resource_metadata_discloses_petsc_initialization_and_full_scale_rerun_g
     )
 
     note = config["adapter_metadata"]["resource_note"].lower()
-    assert "petsc/hypre initialization" in note
+    assert "transient k+m/dt systems are spd" in note
+    assert "petsc cg/hypre ams" in note
+    assert "gmres backend breakdown at lei s0 step 32" in note
+    assert "backend convergence" in note
     assert "external residual" in note
-    assert "prior sparse-direct oom" in note
-    assert "full-scale s0" in note
-    assert "not yet rerun" in note
+    assert "mandatory" in note
 
 
 def test_run_rejects_nonfinite_solver_output(monkeypatch, lei_case):

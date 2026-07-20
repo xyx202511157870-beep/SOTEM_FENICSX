@@ -178,7 +178,7 @@ def _valid_linear_diagnostics(config):
             "dt_s": float(dt),
             "solver": "petsc_ksp_hypre_ams",
             "solve_mode": "petsc_ksp",
-            "ksp_type": "gmres",
+            "ksp_type": config["solver"]["ksp_type"],
             "pc_type": "hypre_ams",
             "backend_reason": 2,
             "backend_reported_converged": True,

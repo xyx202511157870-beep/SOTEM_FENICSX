@@ -266,6 +266,65 @@ def test_medium_tdem_petsc_initialization_passes_algebraic_and_physical_gates():
     )
 
 
+def test_medium_tdem_petsc_cg_completes_all_canonical_transient_steps():
+    pytest.importorskip("petsc4py")
+    pytest.importorskip("discretize")
+
+    from discretize import TensorMesh
+
+    from atem3d.ip import DebyeIPModel
+    from atem3d.simulation import TDEMIPSimulation
+    from atem3d.sources import GroundedWireSource, StepOffWaveform
+
+    mesh = TensorMesh([np.ones(20), np.ones(18), np.ones(16)], x0="CCC")
+    source = GroundedWireSource(
+        start=(-5.0, 0.0, 0.0),
+        end=(5.0, 0.0, 0.0),
+        current=1.0,
+        waveform=StepOffWaveform(off_time=0.0, on_value=1.0),
+    )
+    observation_times = np.logspace(-5.0, -1.0, 41)
+    time_steps = np.diff(np.r_[0.0, observation_times])
+    simulation = TDEMIPSimulation(
+        mesh=mesh,
+        ip_model=DebyeIPModel.no_ip(np.full(mesh.n_cells, 0.1)),
+        time_steps=time_steps,
+        sources=[source],
+        initialization_solver="petsc_hypre",
+        initialization_tolerance=1.0e-8,
+        initialization_internal_tolerance=1.0e-11,
+        initialization_maxiter=2000,
+        linear_solver="petsc_ams",
+        cg_tolerance=1.0e-8,
+        cg_maxiter=2000,
+        cg_preconditioner="hypre_ams",
+        petsc_ams_internal_tolerance=1.0e-11,
+        petsc_ams_refinement_steps=2,
+        petsc_ams_ksp_type="cg",
+    )
+
+    simulation.run_data_only()
+
+    assert simulation._petsc_ams_solver is None
+    assert len(simulation.linear_solver_diagnostics) == 41
+    assert [
+        diagnostic["step_index"]
+        for diagnostic in simulation.linear_solver_diagnostics
+    ] == list(range(41))
+    assert all(
+        diagnostic["ksp_type"] == "cg"
+        and diagnostic["backend_reason"] > 0
+        and diagnostic["backend_reported_converged"] is True
+        and diagnostic["external_true_relative_residual"] <= 1.0e-8
+        and diagnostic["residual_replacement_steps"] <= 2
+        for diagnostic in simulation.linear_solver_diagnostics
+    )
+    step_32 = simulation.linear_solver_diagnostics[32]
+    assert step_32["dt_s"] == pytest.approx(0.0032596778066694664)
+    assert step_32["backend_reason"] > 0
+    assert step_32["external_true_relative_residual"] <= 1.0e-8
+
+
 def test_petsc_ams_constructor_releases_partial_native_state(monkeypatch):
     pytest.importorskip("petsc4py")
 

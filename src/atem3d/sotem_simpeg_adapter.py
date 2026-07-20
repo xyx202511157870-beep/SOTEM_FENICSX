@@ -512,7 +512,7 @@ def build_benchmark_config(
             "internal_tolerance": 1.0e-11,
             "maxiter": 2000,
             "preconditioner": "hypre_ams",
-            "ksp_type": "gmres",
+            "ksp_type": "cg",
             "residual_replacement_steps": 2,
         },
         "initialization_solver": {
@@ -563,15 +563,16 @@ def build_benchmark_config(
             "material_fit": material_fit,
             "coordinate_transform": copy.deepcopy(_COORDINATE_TRANSFORM),
             "initial_magnetic_field": "ampere",
-            "transient_solver": "petsc_gmres_hypre_ams",
+            "transient_solver": "petsc_cg_hypre_ams",
             "initialization_solver": {
                 "dc_electric": "petsc_cg_hypre_boomeramg",
                 "ampere_magnetic": "petsc_gmres_hypre_ams",
             },
             "resource_note": (
-                "Canonical PETSc/HYPRE initialization uses independent external residual "
-                "and physical-balance gates after the prior sparse-direct OOM; the "
-                "full-scale S0 case has not yet rerun with this initialization path."
+                "Canonical transient K+M/dt systems are SPD and use PETSc CG/HYPRE "
+                "AMS after a full-scale GMRES backend breakdown at Lei S0 step 32; "
+                "backend convergence and independent external residual gates remain "
+                "mandatory."
             ),
         },
     }
