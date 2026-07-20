@@ -457,25 +457,33 @@ def _validated_initialization_diagnostics_for_publication(
             or not finite_number(reported_internal)
             or float(reported_internal) != internal_tolerance
         )
-        if not invalid and phase == "ampere_magnetic" and solve_mode == "petsc_ksp":
-            gauge_weight = record.get("gauge_stabilization_weight")
-            stiffness_scale = record.get("stiffness_operator_max_abs")
-            gauge_scale = record.get("gauge_operator_max_abs")
-            invalid = (
-                not finite_number(gauge_weight)
-                or float(gauge_weight) <= 0.0
-                or not finite_number(stiffness_scale)
-                or float(stiffness_scale) <= 0.0
-                or not finite_number(gauge_scale)
-                or float(gauge_scale) <= 0.0
+        if not invalid:
+            gauge_fields = (
+                "gauge_stabilization_weight",
+                "stiffness_operator_max_abs",
+                "gauge_operator_max_abs",
             )
-            if not invalid:
-                invalid = not math.isclose(
-                    float(gauge_weight),
-                    float(stiffness_scale) / float(gauge_scale),
-                    rel_tol=1.0e-12,
-                    abs_tol=0.0,
+            if phase != "ampere_magnetic" or solve_mode != "petsc_ksp":
+                invalid = any(field in record for field in gauge_fields)
+            else:
+                gauge_weight = record.get("gauge_stabilization_weight")
+                stiffness_scale = record.get("stiffness_operator_max_abs")
+                gauge_scale = record.get("gauge_operator_max_abs")
+                invalid = (
+                    not finite_number(gauge_weight)
+                    or float(gauge_weight) <= 0.0
+                    or not finite_number(stiffness_scale)
+                    or float(stiffness_scale) <= 0.0
+                    or not finite_number(gauge_scale)
+                    or float(gauge_scale) <= 0.0
                 )
+                if not invalid:
+                    invalid = not math.isclose(
+                        float(gauge_weight),
+                        float(stiffness_scale) / float(gauge_scale),
+                        rel_tol=1.0e-12,
+                        abs_tol=0.0,
+                    )
         if not invalid and solve_mode == "exact_zero_rhs":
             invalid = (
                 int(reason) != 0

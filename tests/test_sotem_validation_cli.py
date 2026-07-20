@@ -149,6 +149,28 @@ def _valid_initialization_diagnostics():
     return diagnostics
 
 
+_GAUGE_EVIDENCE_FIELDS = (
+    "gauge_stabilization_weight",
+    "stiffness_operator_max_abs",
+    "gauge_operator_max_abs",
+)
+
+
+def _set_exact_zero_initialization_diagnostics(diagnostics):
+    for record in diagnostics:
+        record.update(
+            solve_mode="exact_zero_rhs",
+            backend_reason=0,
+            backend_reported_converged=False,
+            backend_iterations=0,
+            external_true_relative_residual=0.0,
+            residual_replacement_steps=0,
+            balance_relative_residual=0.0,
+        )
+        for field in _GAUGE_EVIDENCE_FIELDS:
+            record.pop(field, None)
+
+
 def _valid_linear_diagnostics(config):
     return [
         {
@@ -267,17 +289,67 @@ def test_publication_validator_rejects_incoherent_exact_zero_diagnostics(
         substeps=1,
     )
     diagnostics = _valid_initialization_diagnostics()
-    for record in diagnostics:
-        record.update(
-            solve_mode="exact_zero_rhs",
-            backend_reason=0,
-            backend_reported_converged=False,
-            backend_iterations=0,
-            external_true_relative_residual=0.0,
-            residual_replacement_steps=0,
-            balance_relative_residual=0.0,
-        )
+    _set_exact_zero_initialization_diagnostics(diagnostics)
     diagnostics[0][field] = value
+
+    with pytest.raises(ValueError, match="initialization diagnostics"):
+        cli._validated_initialization_diagnostics_for_publication(
+            diagnostics,
+            config,
+        )
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        {"gauge_stabilization_weight": 5.0e14},
+        {"stiffness_operator_max_abs": 2.0e12},
+        {"gauge_operator_max_abs": 4.0e-3},
+        {
+            "gauge_stabilization_weight": 5.0e14,
+            "stiffness_operator_max_abs": 2.0e12,
+            "gauge_operator_max_abs": 4.0e-3,
+        },
+    ],
+)
+def test_publication_rejects_gauge_evidence_on_exact_zero_initialization(
+    injected,
+):
+    config = _lei_noip_config()
+    diagnostics = _valid_initialization_diagnostics()
+    _set_exact_zero_initialization_diagnostics(diagnostics)
+    diagnostics[1].update(injected)
+
+    with pytest.raises(ValueError, match="initialization diagnostics"):
+        cli._validated_initialization_diagnostics_for_publication(
+            diagnostics,
+            config,
+        )
+
+
+@pytest.mark.parametrize("solve_mode", ["petsc_ksp", "exact_zero_rhs"])
+@pytest.mark.parametrize(
+    "injected",
+    [
+        {"gauge_stabilization_weight": 5.0e14},
+        {"stiffness_operator_max_abs": 2.0e12},
+        {"gauge_operator_max_abs": 4.0e-3},
+        {
+            "gauge_stabilization_weight": 5.0e14,
+            "stiffness_operator_max_abs": 2.0e12,
+            "gauge_operator_max_abs": 4.0e-3,
+        },
+    ],
+)
+def test_publication_rejects_gauge_evidence_on_dc_initialization(
+    solve_mode,
+    injected,
+):
+    config = _lei_noip_config()
+    diagnostics = _valid_initialization_diagnostics()
+    if solve_mode == "exact_zero_rhs":
+        _set_exact_zero_initialization_diagnostics(diagnostics)
+    diagnostics[0].update(injected)
 
     with pytest.raises(ValueError, match="initialization diagnostics"):
         cli._validated_initialization_diagnostics_for_publication(

@@ -506,6 +506,28 @@ def _fake_solver_for_config(config, *, nonfinite=False):
     ), data
 
 
+_GAUGE_EVIDENCE_FIELDS = (
+    "gauge_stabilization_weight",
+    "stiffness_operator_max_abs",
+    "gauge_operator_max_abs",
+)
+
+
+def _set_exact_zero_initialization_diagnostics(diagnostics):
+    for record in diagnostics:
+        record.update(
+            solve_mode="exact_zero_rhs",
+            backend_reason=0,
+            backend_reported_converged=False,
+            backend_iterations=0,
+            external_true_relative_residual=0.0,
+            residual_replacement_steps=0,
+            balance_relative_residual=0.0,
+        )
+        for field in _GAUGE_EVIDENCE_FIELDS:
+            record.pop(field, None)
+
+
 def test_run_selects_only_canonical_outputs_and_reports_honest_metadata(monkeypatch, song_case):
     captured = {}
 
@@ -714,16 +736,9 @@ def test_run_accepts_truthful_exact_zero_initialization_diagnostics(
 ):
     def fake_build(config):
         simulation, _data = _fake_solver_for_config(config)
-        for record in simulation.initialization_solver_diagnostics:
-            record.update(
-                solve_mode="exact_zero_rhs",
-                backend_reason=0,
-                backend_reported_converged=False,
-                backend_iterations=0,
-                external_true_relative_residual=0.0,
-                residual_replacement_steps=0,
-                balance_relative_residual=0.0,
-            )
+        _set_exact_zero_initialization_diagnostics(
+            simulation.initialization_solver_diagnostics
+        )
         return simulation
 
     monkeypatch.setattr(adapter, "build_simulation", fake_build)
@@ -734,6 +749,77 @@ def test_run_accepts_truthful_exact_zero_initialization_diagnostics(
         item["solve_mode"] == "exact_zero_rhs"
         for item in result["initialization_solver_diagnostics"]
     )
+    assert all(
+        field not in result["initialization_solver_diagnostics"][1]
+        for field in _GAUGE_EVIDENCE_FIELDS
+    )
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        {"gauge_stabilization_weight": 5.0e14},
+        {"stiffness_operator_max_abs": 2.0e12},
+        {"gauge_operator_max_abs": 4.0e-3},
+        {
+            "gauge_stabilization_weight": 5.0e14,
+            "stiffness_operator_max_abs": 2.0e12,
+            "gauge_operator_max_abs": 4.0e-3,
+        },
+    ],
+)
+def test_run_rejects_gauge_evidence_on_exact_zero_initialization(
+    monkeypatch,
+    lei_case,
+    injected,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        _set_exact_zero_initialization_diagnostics(
+            simulation.initialization_solver_diagnostics
+        )
+        simulation.initialization_solver_diagnostics[1].update(injected)
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="initialization solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
+
+
+@pytest.mark.parametrize("solve_mode", ["petsc_ksp", "exact_zero_rhs"])
+@pytest.mark.parametrize(
+    "injected",
+    [
+        {"gauge_stabilization_weight": 5.0e14},
+        {"stiffness_operator_max_abs": 2.0e12},
+        {"gauge_operator_max_abs": 4.0e-3},
+        {
+            "gauge_stabilization_weight": 5.0e14,
+            "stiffness_operator_max_abs": 2.0e12,
+            "gauge_operator_max_abs": 4.0e-3,
+        },
+    ],
+)
+def test_run_rejects_gauge_evidence_on_dc_initialization(
+    monkeypatch,
+    lei_case,
+    solve_mode,
+    injected,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        if solve_mode == "exact_zero_rhs":
+            _set_exact_zero_initialization_diagnostics(
+                simulation.initialization_solver_diagnostics
+            )
+        simulation.initialization_solver_diagnostics[0].update(injected)
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="initialization solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
 
 
 @pytest.mark.parametrize(
@@ -755,16 +841,9 @@ def test_run_rejects_incoherent_exact_zero_initialization_diagnostics(
 ):
     def fake_build(config):
         simulation, _data = _fake_solver_for_config(config)
-        for record in simulation.initialization_solver_diagnostics:
-            record.update(
-                solve_mode="exact_zero_rhs",
-                backend_reason=0,
-                backend_reported_converged=False,
-                backend_iterations=0,
-                external_true_relative_residual=0.0,
-                residual_replacement_steps=0,
-                balance_relative_residual=0.0,
-            )
+        _set_exact_zero_initialization_diagnostics(
+            simulation.initialization_solver_diagnostics
+        )
         simulation.initialization_solver_diagnostics[0][field] = value
         return simulation
 
