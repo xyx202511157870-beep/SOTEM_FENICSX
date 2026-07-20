@@ -4306,12 +4306,42 @@ def assemble_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], f
         B_robin.assemble()
 
     debye_mats = []
+    debye_shared_basis = None
+    debye_shared_weights: tuple[float, ...] = ()
     if debye is not None and debye["terms"]:
-        for delta_fun in debye["delta_functions"]:
-            form = fem.form(delta_fun * ufl.inner(u, v) * ufl.dx)
-            mat = fem_petsc.assemble_matrix(form)
-            mat.assemble()
-            debye_mats.append(mat)
+        shared = debye.get("shared_mass_basis")
+        if shared is not None:
+            if not isinstance(shared, dict) or shared.get("kind") != "polarizable_cell_indicator":
+                raise ValueError("unsupported shared Debye mass basis metadata")
+            if shared.get("exact") is not True or "function" not in shared:
+                raise ValueError("shared Debye mass basis must be explicitly exact")
+            debye_shared_weights = tuple(float(value) for value in shared.get("weights", ()))
+            if len(debye_shared_weights) != len(debye["terms"]):
+                raise ValueError("shared Debye mass weights must match terms")
+            if not all(math.isfinite(value) for value in debye_shared_weights):
+                raise ValueError("shared Debye mass weights must be finite")
+            form = fem.form(shared["function"] * ufl.inner(u, v) * ufl.dx)
+            debye_shared_basis = fem_petsc.assemble_matrix(form)
+            try:
+                debye_shared_basis.assemble()
+            except BaseException:
+                debye_shared_basis.destroy()
+                raise
+        else:
+            delta_functions = tuple(debye.get("delta_functions", ()))
+            if len(delta_functions) != len(debye["terms"]):
+                raise ValueError("debye delta_functions must match debye terms")
+            for delta_fun in delta_functions:
+                form = fem.form(delta_fun * ufl.inner(u, v) * ufl.dx)
+                mat = fem_petsc.assemble_matrix(form)
+                try:
+                    mat.assemble()
+                except BaseException:
+                    mat.destroy()
+                    for assembled in debye_mats:
+                        assembled.destroy()
+                    raise
+                debye_mats.append(mat)
 
     log("[operators] Assembled K, M_sigma, and M_sigma_infinity matrices.", comm=msh.comm)
     return {
@@ -4320,6 +4350,8 @@ def assemble_operators(msh, spaces: dict[str, Any], materials: dict[str, Any], f
         "M_inf": M_inf,
         "B_robin": B_robin,
         "M_debye": debye_mats,
+        "M_debye_shared_basis": debye_shared_basis,
+        "M_debye_shared_weights": debye_shared_weights,
         "bc": bc,
         "bc_dofs": bc_dofs,
         "bc_global": bc_global,
@@ -5422,11 +5454,21 @@ def _build_debye_materials(msh, cell_tags, spaces: dict[str, Any], fit: DebyeFit
         _assign_dg0_by_cell(fn, polarizable_cells, term.delta_sigma)
         fn.x.scatter_forward()
         delta_functions.append(fn)
+    shared_basis = fem.Function(Q, name="delta_sigma_shared_indicator")
+    shared_basis.x.array[:] = 0.0
+    _assign_dg0_by_cell(shared_basis, polarizable_cells, 1.0)
+    shared_basis.x.scatter_forward()
     return {
         "fit": fit,
         "terms": fit.terms,
         "delta_functions": delta_functions,
         "polarizable_cells": polarizable_cells,
+        "shared_mass_basis": {
+            "kind": "polarizable_cell_indicator",
+            "exact": True,
+            "function": shared_basis,
+            "weights": tuple(float(term.delta_sigma) for term in fit.terms),
+        },
     }
 
 
@@ -5503,15 +5545,35 @@ def _debye_total_field_step_metadata(debye, dt: float) -> dict[str, Any]:
 
 
 def _matrix_for_effective_conductivity(operators, debye, dt: float):
-    from petsc4py import PETSc
-
     if debye is None or not debye["terms"]:
         return operators["M"]
+    from petsc4py import PETSc
+
+    terms = tuple(debye["terms"])
+    shared_basis = operators.get("M_debye_shared_basis")
+    shared_weights = tuple(operators.get("M_debye_shared_weights", ()))
+    if shared_basis is not None or shared_weights:
+        if shared_basis is None or len(shared_weights) != len(terms):
+            raise ValueError("shared Debye mass weights must match terms")
+        if not all(math.isfinite(float(value)) for value in shared_weights):
+            raise ValueError("shared Debye mass weights must be finite")
+    else:
+        debye_mats = tuple(operators.get("M_debye", ()))
+        if len(debye_mats) != len(terms):
+            raise ValueError("Debye mass matrices must match terms")
+
     M_eff = operators["M_inf"].copy()
     try:
-        for term, M_delta in zip(debye["terms"], operators["M_debye"]):
-            _alpha, beta = _debye_backward_euler_coefficients(term, dt)
-            M_eff.axpy(-beta, M_delta, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
+        if shared_basis is not None:
+            coefficient = 0.0
+            for term, weight in zip(terms, shared_weights):
+                _alpha, beta = _debye_backward_euler_coefficients(term, dt)
+                coefficient += beta * float(weight)
+            M_eff.axpy(-coefficient, shared_basis, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
+        else:
+            for term, M_delta in zip(terms, debye_mats):
+                _alpha, beta = _debye_backward_euler_coefficients(term, dt)
+                M_eff.axpy(-beta, M_delta, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
         M_eff.assemble()
     except BaseException:
         M_eff.destroy()
@@ -5522,20 +5584,60 @@ def _matrix_for_effective_conductivity(operators, debye, dt: float):
 def _assemble_history_rhs(operators, debye, memories, E_old, dt: float):
     if debye is None or not debye["terms"]:
         b = E_old.x.petsc_vec.duplicate()
-        operators["M"].mult(E_old.x.petsc_vec, b)
-        b.scale(1.0 / dt)
-        return b
+        try:
+            operators["M"].mult(E_old.x.petsc_vec, b)
+            b.scale(1.0 / dt)
+            return b
+        except BaseException:
+            b.destroy()
+            raise
+
+    terms = tuple(debye["terms"])
+    memories = tuple(memories)
+    if len(memories) != len(terms):
+        raise ValueError("Debye memories must match terms")
+    shared_basis = operators.get("M_debye_shared_basis")
+    shared_weights = tuple(operators.get("M_debye_shared_weights", ()))
+    if shared_basis is not None or shared_weights:
+        if shared_basis is None or len(shared_weights) != len(terms):
+            raise ValueError("shared Debye mass weights must match terms")
+        if not all(math.isfinite(float(value)) for value in shared_weights):
+            raise ValueError("shared Debye mass weights must be finite")
+    else:
+        debye_mats = tuple(operators.get("M_debye", ()))
+        if len(debye_mats) != len(terms):
+            raise ValueError("Debye mass matrices must match terms")
 
     b = E_old.x.petsc_vec.duplicate()
-    operators["M_inf"].mult(E_old.x.petsc_vec, b)
-    tmp = E_old.x.petsc_vec.duplicate()
-    for term, M_delta, chi in zip(debye["terms"], operators["M_debye"], memories):
-        _alpha, beta = _debye_backward_euler_coefficients(term, dt)
-        M_delta.mult(chi.x.petsc_vec, tmp)
-        b.axpy(-beta, tmp)
-    b.scale(1.0 / dt)
-    tmp.destroy()
-    return b
+    tmp = None
+    weighted_memory = None
+    succeeded = False
+    try:
+        operators["M_inf"].mult(E_old.x.petsc_vec, b)
+        tmp = E_old.x.petsc_vec.duplicate()
+        if shared_basis is not None:
+            weighted_memory = E_old.x.petsc_vec.duplicate()
+            weighted_memory.set(0.0)
+            for term, weight, chi in zip(terms, shared_weights, memories):
+                _alpha, beta = _debye_backward_euler_coefficients(term, dt)
+                weighted_memory.axpy(beta * float(weight), chi.x.petsc_vec)
+            shared_basis.mult(weighted_memory, tmp)
+            b.axpy(-1.0, tmp)
+        else:
+            for term, M_delta, chi in zip(terms, debye_mats, memories):
+                _alpha, beta = _debye_backward_euler_coefficients(term, dt)
+                M_delta.mult(chi.x.petsc_vec, tmp)
+                b.axpy(-beta, tmp)
+        b.scale(1.0 / dt)
+        succeeded = True
+        return b
+    finally:
+        if weighted_memory is not None:
+            weighted_memory.destroy()
+        if tmp is not None:
+            tmp.destroy()
+        if not succeeded:
+            b.destroy()
 
 
 def _theta_step_coefficients(dt: float, theta: float) -> dict[str, float]:
