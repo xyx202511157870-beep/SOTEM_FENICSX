@@ -42,6 +42,12 @@ POSTPROCESS_MODULES = {
     "matplotlib": "matplotlib",
 }
 REFERENCE_SOURCE_QUADRATURE_TOLERANCE = 0.005
+REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON_BEGIN = (
+    "BEGIN_REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON"
+)
+REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON_END = (
+    "END_REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON"
+)
 
 PHYS_AIR = 100
 PHYS_EARTH = 101
@@ -49,6 +55,7 @@ PHYS_OUTER = 201
 PHYS_SURFACE = 202
 PHYS_SOURCE_LINE = 301
 SPONGE_ALL_SIDES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+_CHECKOUT_SHARED_MODULES: dict[str, Any] = {}
 
 
 @dataclass
@@ -225,6 +232,94 @@ class PipelineConfig:
 
     def output_report(self) -> Path:
         return self.workdir / "verification_report.txt"
+
+
+def _load_checkout_shared_module(module_name: str):
+    """Load a dependency-free contract module from this checkout, never site-packages."""
+
+    cached = _CHECKOUT_SHARED_MODULES.get(module_name)
+    if cached is not None:
+        return cached
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "atem3d"
+        / f"{module_name}.py"
+    )
+    if not module_path.is_file():
+        raise FileNotFoundError(f"checkout contract module not found: {module_path}")
+    spec = importlib.util.spec_from_file_location(
+        f"_sotem_checkout_{module_name}", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load checkout contract module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    resolved_source = Path(module.__file__).resolve()
+    if resolved_source != module_path.resolve():
+        raise ImportError(
+            "checkout contract resolved to an unexpected source: "
+            f"{resolved_source} != {module_path.resolve()}"
+        )
+    _CHECKOUT_SHARED_MODULES[module_name] = module
+    return module
+
+
+def _formal_run_lock(workdir: str | Path):
+    return _load_checkout_shared_module("run_lock").run_lock(workdir)
+
+
+def _formal_acceptance_artifact_names() -> tuple[str, ...]:
+    """Return every published artifact that makes a formal output dir non-fresh."""
+
+    contract = _load_checkout_shared_module("artifact_contract")
+    required_case_artifacts = tuple(contract.REQUIRED_CASE_ARTIFACTS)
+    required_effect_artifacts = tuple(
+        contract.REQUIRED_POLARIZATION_EFFECT_ARTIFACTS
+    )
+
+    pipeline_artifacts = (
+        "verification_data.npz",
+        "verification_result.png",
+        "verification_report.txt",
+        "receiver_diagnostics.csv",
+        "receiver_diagnostics.png",
+        "receiver_reference_errors.csv",
+        "receiver_reference_error_curves.png",
+    )
+    final_acceptance_artifacts = (
+        "final_acceptance_summary.json",
+        "final_acceptance_report.txt",
+    )
+    return tuple(
+        dict.fromkeys(
+            (
+                *required_case_artifacts,
+                *required_effect_artifacts,
+                *pipeline_artifacts,
+                *final_acceptance_artifacts,
+            )
+        )
+    )
+
+
+def _existing_formal_acceptance_artifacts(config: PipelineConfig) -> tuple[Path, ...]:
+    workdir = Path(config.workdir)
+    return tuple(
+        workdir / name
+        for name in _formal_acceptance_artifact_names()
+        if os.path.lexists(workdir / name)
+    )
+
+
+def _require_fresh_formal_output_directory(config: PipelineConfig) -> None:
+    existing = _existing_formal_acceptance_artifacts(config)
+    if existing:
+        names = ", ".join(path.name for path in existing)
+        raise RuntimeError(
+            "stale formal acceptance artifact(s) already exist; refusing to reuse "
+            f"or overwrite workdir {config.workdir}: {names}"
+        )
 
 
 def validate_geometry_consistency(config: PipelineConfig) -> dict[str, float]:
@@ -6249,6 +6344,9 @@ def _require_reference_source_quadrature_audit(
     summary.update(
         {
             "artifact_schema": "atem3d.reference_source_quadrature_audit.v1",
+            "artifact_scope": "reference-only",
+            "final_acceptance_eligible": False,
+            "final_acceptance_status": "blocked",
             "approved_reference_identity": _require_approved_empymod_reference_identity(
                 config
             ),
@@ -7877,6 +7975,9 @@ def write_report(
                 f"time={values['time_at_max']:.6e} s; "
                 f"pass={values['passed']}"
             )
+        lines.append(REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON_BEGIN)
+        lines.append(_canonical_json_bytes(gate).decode("utf-8"))
+        lines.append(REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON_END)
 
     lines.append("")
     lines.append("solver log:")
@@ -8920,9 +9021,29 @@ def _load_forward_partial(config: PipelineConfig):
     }
 
 
-def postprocess_saved_forward(config: PipelineConfig, env: dict[str, str], *, ref_mode: str = "noip", runtime=None):
+def postprocess_saved_forward(
+    config: PipelineConfig,
+    env: dict[str, str],
+    *,
+    ref_mode: str = "noip",
+    runtime=None,
+):
     """Postprocess an existing forward_partial.npz without rerunning FEM."""
 
+    with _formal_run_lock(config.workdir):
+        return _postprocess_saved_forward_locked(
+            config, env, ref_mode=ref_mode, runtime=runtime
+        )
+
+
+def _postprocess_saved_forward_locked(
+    config: PipelineConfig,
+    env: dict[str, str],
+    *,
+    ref_mode: str,
+    runtime,
+):
+    _require_fresh_formal_output_directory(config)
     runtime = {} if runtime is None else dict(runtime)
     t0 = time.perf_counter()
     fem_result = _load_forward_partial(config)
@@ -9006,7 +9127,33 @@ def _parse_string_csv(value: str | None) -> tuple[str, ...]:
     return tuple(raw.strip() for raw in str(value).split(",") if raw.strip())
 
 
+def _formal_cli_preflight(argv: list[str]) -> tuple[Path, bool]:
+    default_workdir = Path(__file__).resolve().parent
+    if "-h" in argv or "--help" in argv:
+        return default_workdir, False
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--workdir", type=Path, default=default_workdir)
+    parser.add_argument("--mesh-only", action="store_true")
+    parser.add_argument("--source-only", action="store_true")
+    parser.add_argument("--postprocess-partial", action="store_true")
+    parser.add_argument("--check-env-only", action="store_true")
+    args, _unknown = parser.parse_known_args(argv)
+    is_formal = not args.check_env_only and (
+        args.postprocess_partial or (not args.mesh_only and not args.source_only)
+    )
+    return args.workdir, is_formal
+
+
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    workdir, is_formal = _formal_cli_preflight(raw_argv)
+    if is_formal:
+        with _formal_run_lock(workdir):
+            return _main_locked(raw_argv)
+    return _main_locked(raw_argv)
+
+
+def _main_locked(argv: list[str]) -> int:
     run_t0 = time.perf_counter()
     runtime: dict[str, float] = {}
     parser = argparse.ArgumentParser(description=__doc__)
@@ -9286,6 +9433,11 @@ def main(argv: list[str] | None = None) -> int:
         config.formulation = validate_formulation(config)
     except ValueError as exc:
         raise SystemExit(f"[formulation] {exc}") from None
+    is_formal_run = not args.check_env_only and (
+        args.postprocess_partial or (not args.mesh_only and not args.source_only)
+    )
+    if is_formal_run:
+        _require_fresh_formal_output_directory(config)
     config.workdir.mkdir(parents=True, exist_ok=True)
     print(
         "[model] "
@@ -9304,7 +9456,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.postprocess_partial:
         ref_mode = "cole-cole-exact" if config.polarization == "cole-cole" else "noip"
-        postprocess_saved_forward(config, env, ref_mode=ref_mode, runtime={"mesh_seconds": 0.0})
+        postprocess_saved_forward(
+            config,
+            env,
+            ref_mode=ref_mode,
+            runtime={"mesh_seconds": 0.0},
+        )
         return 0
 
     from mpi4py import MPI

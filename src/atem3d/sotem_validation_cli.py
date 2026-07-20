@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
 from datetime import datetime, timezone
 import csv
 import ctypes
@@ -29,6 +28,7 @@ import uuid
 import numpy as np
 
 from .polarization_effect import write_polarization_effect_artifacts
+from .run_lock import run_lock as _run_lock
 from .sotem_benchmark import BenchmarkCase, load_benchmark_case
 from .sotem_gate import summarize_sotem_gates
 from .sotem_observables import CanonicalResponse, canonical_response
@@ -92,48 +92,6 @@ def _positive_cli_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
-
-
-@contextmanager
-def _run_lock(run_dir: str | Path):
-    """Hold a non-blocking cross-process writer lock for one run directory."""
-
-    run_path = Path(run_dir).expanduser().resolve()
-    lock_path = run_path.parent / f".{run_path.name}.writer.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("a+b")
-    acquired = False
-    try:
-        handle.seek(0, os.SEEK_END)
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
-        handle.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            raise RuntimeError(f"another writer holds the run lock: {run_path}") from exc
-        acquired = True
-        yield
-    finally:
-        if acquired:
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
 
 
 def _process_peak_rss_bytes() -> int:

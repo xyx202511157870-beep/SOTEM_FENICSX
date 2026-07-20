@@ -129,6 +129,15 @@ def test_postprocess_saved_forward_uses_forward_partial_without_rerunning_fem(tm
     assert "source mode: postprocess_partial/auto" in text
     assert "reference source-quadrature acceptance gate" in text
     assert "distinct from the ordinary 1e-6 floor error metric" in text
+    begin = "BEGIN_REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON"
+    end = "END_REFERENCE_SOURCE_QUADRATURE_AUDIT_JSON"
+    report_audit = json.loads(text.split(begin, 1)[1].split(end, 1)[0].strip())
+    assert report_audit == evidence
+    assert report_audit == summary["reference_source_quadrature_audit"]
+    assert sp._canonical_json_bytes(report_audit) == sp._canonical_json_bytes(evidence)
+    assert sp._canonical_json_bytes(report_audit) == sp._canonical_json_bytes(
+        summary["reference_source_quadrature_audit"]
+    )
 
 
 def test_write_report_records_model_runtime(tmp_path):

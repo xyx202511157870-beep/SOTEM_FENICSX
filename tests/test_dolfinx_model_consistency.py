@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1557,7 +1560,7 @@ def test_postprocess_cli_selects_exact_cole_cole_reference(monkeypatch, tmp_path
 
     monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
 
-    def postprocess_saved_forward(config, env, *, ref_mode, runtime):
+    def postprocess_saved_forward(config, env, *, ref_mode, runtime, **_kwargs):
         captured["config"] = config
         captured["ref_mode"] = ref_mode
         return {}
@@ -1935,6 +1938,9 @@ def test_formal_forward_passes_reference_gate_before_solver_and_reuses_precomput
     )
     assert evidence == evidence_chain["validation"] == evidence_chain["report"]
     assert evidence["artifact_schema"] == "atem3d.reference_source_quadrature_audit.v1"
+    assert evidence["artifact_scope"] == "reference-only"
+    assert evidence["final_acceptance_eligible"] is False
+    assert evidence["final_acceptance_status"] == "blocked"
     assert evidence["approved_reference_identity"] == sp._approved_empymod_reference_identity()
     assert evidence["primary_srcpts"] == 9
     assert evidence["audit_srcpts"] == 17
@@ -1952,6 +1958,335 @@ def test_formal_forward_passes_reference_gate_before_solver_and_reuses_precomput
             "time_at_max",
             "passed",
         }
+
+
+@pytest.mark.parametrize(
+    "artifact_name,extra_args",
+    [
+        ("error_summary.json", []),
+        ("verification_result.png", ["--resume-forward"]),
+        ("verification_report.txt", ["--postprocess-partial"]),
+    ],
+)
+def test_formal_main_rejects_stale_acceptance_artifacts_before_environment_reference_or_solver(
+    monkeypatch, tmp_path, artifact_name, extra_args
+):
+    sp = _load_pipeline_module()
+    workdir = tmp_path / "stale-formal-run"
+    workdir.mkdir()
+    stale_path = workdir / artifact_name
+    stale_bytes = b"old-formal-artifact\x00must-not-change"
+    stale_path.write_bytes(stale_bytes)
+    audit_path = workdir / "reference_source_quadrature_audit.json"
+    audit_bytes = b'{"artifact_scope":"reference-only","old":true}\n'
+    audit_path.write_bytes(audit_bytes)
+
+    for seam in (
+        "check_environment",
+        "generate_verification_mesh",
+        "get_empymod_reference",
+        "run_fetd_forward",
+        "run_h_forward",
+        "_save_npz",
+        "plot_verification",
+        "write_validation_artifacts",
+        "write_report",
+    ):
+        monkeypatch.setattr(
+            sp,
+            seam,
+            lambda *_args, _seam=seam, **_kwargs: pytest.fail(
+                f"stale formal run reached forbidden seam: {_seam}"
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match="stale formal acceptance artifact.*refusing"):
+        sp.main(
+            [
+                "--workdir",
+                str(workdir),
+                *extra_args,
+                "--no-install",
+            ]
+        )
+
+    assert stale_path.read_bytes() == stale_bytes
+    assert audit_path.read_bytes() == audit_bytes
+
+
+def test_direct_postprocess_rejects_stale_acceptance_artifact_before_loading_partial_or_reference(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+    partial_bytes = b"legal-stage-only-partial"
+    stale_bytes = b"old-report-must-not-change"
+    config.forward_partial_npz().write_bytes(partial_bytes)
+    config.output_report().write_bytes(stale_bytes)
+
+    for seam in ("_load_forward_partial", "get_empymod_reference", "_save_npz"):
+        monkeypatch.setattr(
+            sp,
+            seam,
+            lambda *_args, _seam=seam, **_kwargs: pytest.fail(
+                f"stale postprocess reached forbidden seam: {_seam}"
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match="stale formal acceptance artifact.*refusing"):
+        sp.postprocess_saved_forward(config, {})
+
+    assert config.forward_partial_npz().read_bytes() == partial_bytes
+    assert config.output_report().read_bytes() == stale_bytes
+
+
+def test_direct_postprocess_has_no_caller_controlled_lock_bypass(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path)
+
+    with pytest.raises(TypeError, match="_formal_lock_held"):
+        sp.postprocess_saved_forward(config, {}, _formal_lock_held=True)
+
+
+def test_formal_artifact_guard_preserves_legal_reference_and_resume_stage_files(tmp_path):
+    sp = _load_pipeline_module()
+    from atem3d.final_acceptance import (
+        REQUIRED_CASE_ARTIFACTS,
+        REQUIRED_POLARIZATION_EFFECT_ARTIFACTS,
+    )
+
+    config = sp.PipelineConfig(workdir=tmp_path)
+    stage_files = {
+        config.reference_source_quadrature_audit_json(): b"reference-stage-audit",
+        config.forward_partial_npz(): b"partial-stage",
+        config.forward_checkpoint_npz(): b"resume-stage",
+    }
+    for path, payload in stage_files.items():
+        path.write_bytes(payload)
+
+    formal_names = set(sp._formal_acceptance_artifact_names())
+    assert set(REQUIRED_CASE_ARTIFACTS) <= formal_names
+    assert set(REQUIRED_POLARIZATION_EFFECT_ARTIFACTS) <= formal_names
+    assert {path.name for path in stage_files}.isdisjoint(formal_names)
+    assert sp._existing_formal_acceptance_artifacts(config) == ()
+    sp._require_fresh_formal_output_directory(config)
+
+    assert {path: path.read_bytes() for path in stage_files} == stage_files
+
+
+def test_formal_artifact_names_ignore_unrelated_installed_atem3d_contract(monkeypatch):
+    sp = _load_pipeline_module()
+    fake_contract = SimpleNamespace(
+        REQUIRED_CASE_ARTIFACTS=("fake_old_case_artifact.txt",),
+        REQUIRED_POLARIZATION_EFFECT_ARTIFACTS=("fake_old_effect_artifact.txt",),
+    )
+    monkeypatch.setitem(sys.modules, "atem3d.final_acceptance", fake_contract)
+
+    names = set(sp._formal_acceptance_artifact_names())
+
+    assert "error_summary.json" in names
+    assert "polarization_effect_summary.json" in names
+    assert "fake_old_case_artifact.txt" not in names
+    assert "fake_old_effect_artifact.txt" not in names
+
+
+def test_direct_subprocess_uses_checkout_artifact_contract_over_fake_pythonpath(
+    tmp_path
+):
+    root = Path(__file__).resolve().parents[1]
+    pipeline_path = root / "dolfinx" / "sotem_pipeline.py"
+    fake_root = tmp_path / "fake-site"
+    fake_package = fake_root / "atem3d"
+    fake_package.mkdir(parents=True)
+    (fake_package / "__init__.py").write_text("", encoding="utf-8")
+    (fake_package / "artifact_contract.py").write_text(
+        "REQUIRED_CASE_ARTIFACTS=('fake_old_case.txt',)\n"
+        "REQUIRED_POLARIZATION_EFFECT_ARTIFACTS=('fake_old_effect.txt',)\n",
+        encoding="utf-8",
+    )
+    script = (
+        "import importlib.util,json,sys; from pathlib import Path; "
+        "path=Path(sys.argv[1]); "
+        "spec=importlib.util.spec_from_file_location('direct_pipeline',path); "
+        "module=importlib.util.module_from_spec(spec); sys.modules[spec.name]=module; "
+        "spec.loader.exec_module(module); "
+        "print(json.dumps(module._formal_acceptance_artifact_names()))"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(fake_root)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(pipeline_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    names = set(json.loads(completed.stdout))
+
+    assert "error_summary.json" in names
+    assert "polarization_effect_summary.json" in names
+    assert "fake_old_case.txt" not in names
+    assert "fake_old_effect.txt" not in names
+
+
+def test_formal_run_lock_is_reentrant_releases_after_exception_and_rejects_process(
+    tmp_path
+):
+    sp = _load_pipeline_module()
+    run_dir = tmp_path / "locked-run"
+    marker = tmp_path / "locked.marker"
+    release = tmp_path / "release.marker"
+    run_lock_path = (
+        Path(__file__).resolve().parents[1] / "src" / "atem3d" / "run_lock.py"
+    )
+    script = (
+        "import importlib.util,sys,time; from pathlib import Path; "
+        "spec=importlib.util.spec_from_file_location('child_run_lock',sys.argv[1]); "
+        "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+        "run=Path(sys.argv[2]); marker=Path(sys.argv[3]); release=Path(sys.argv[4]); "
+        "\nwith module.run_lock(run):\n marker.write_text('locked')\n"
+        " while not release.exists(): time.sleep(0.01)\n"
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(run_lock_path),
+            str(run_dir),
+            str(marker),
+            str(release),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 10.0
+        while not marker.exists() and process.poll() is None:
+            if time.monotonic() >= deadline:
+                pytest.fail("child process did not acquire formal run lock")
+            time.sleep(0.01)
+        assert process.poll() is None
+        with pytest.raises(RuntimeError, match="another writer holds the run lock"):
+            with sp._formal_run_lock(run_dir):
+                pytest.fail("competing process acquired formal run lock")
+    finally:
+        release.write_text("release", encoding="utf-8")
+        process.wait(timeout=10)
+
+    with pytest.raises(RuntimeError, match="synthetic exception"):
+        with sp._formal_run_lock(run_dir):
+            with sp._formal_run_lock(run_dir):
+                raise RuntimeError("synthetic exception")
+    with sp._formal_run_lock(run_dir):
+        pass
+
+
+def test_formal_artifact_guard_rejects_dangling_link_without_following_target(tmp_path):
+    sp = _load_pipeline_module()
+    workdir = tmp_path / "link-workdir"
+    workdir.mkdir()
+    missing_target = tmp_path / "outside" / "must-remain-missing.json"
+    stale_link = workdir / "error_summary.json"
+    try:
+        stale_link.symlink_to(missing_target)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    with pytest.raises(RuntimeError, match="error_summary.json"):
+        sp._require_fresh_formal_output_directory(
+            sp.PipelineConfig(workdir=workdir)
+        )
+
+    assert stale_link.is_symlink()
+    assert not missing_target.exists()
+
+
+def test_formal_main_holds_writer_lock_through_reference_solver_and_failure(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    events = []
+    _patch_formal_forward_seams(monkeypatch, sp, events, audit_scale=1.0001)
+
+    class RecordingLock:
+        def __enter__(self):
+            events.append("lock:enter")
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append("lock:exit")
+
+    monkeypatch.setattr(
+        sp, "_formal_run_lock", lambda _workdir: RecordingLock()
+    )
+
+    def failing_forward(*_args, **_kwargs):
+        assert events[0] == "lock:enter"
+        assert "reference:None" in events
+        assert "reference:17" in events
+        events.append("solver:inside-lock")
+        raise RuntimeError("synthetic locked forward failure")
+
+    monkeypatch.setattr(sp, "run_fetd_forward", failing_forward)
+    monkeypatch.setattr(
+        sp,
+        "run_h_forward",
+        lambda *_args, **_kwargs: pytest.fail("unselected H solver called"),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic locked forward failure"):
+        sp.main(["--workdir", str(tmp_path), "--no-install"])
+
+    assert events[-2:] == ["solver:inside-lock", "lock:exit"]
+
+
+def test_help_does_not_acquire_formal_writer_lock(monkeypatch):
+    sp = _load_pipeline_module()
+    monkeypatch.setattr(
+        sp,
+        "_formal_run_lock",
+        lambda _workdir: pytest.fail("--help must not acquire formal writer lock"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        sp.main(["--help"])
+
+    assert exc.value.code == 0
+
+
+def test_fresh_forward_failure_keeps_reference_only_audit_and_blocks_final_acceptance(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    events = []
+    _patch_formal_forward_seams(monkeypatch, sp, events, audit_scale=1.0001)
+    monkeypatch.setattr(
+        sp,
+        "run_fetd_forward",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("synthetic forward failure")
+        ),
+    )
+    monkeypatch.setattr(
+        sp,
+        "run_h_forward",
+        lambda *_args, **_kwargs: pytest.fail("unselected H solver called"),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic forward failure"):
+        sp.main(["--workdir", str(tmp_path), "--no-install"])
+
+    audit = json.loads(
+        sp.PipelineConfig(workdir=tmp_path)
+        .reference_source_quadrature_audit_json()
+        .read_text(encoding="utf-8")
+    )
+    assert audit["artifact_scope"] == "reference-only"
+    assert audit["final_acceptance_eligible"] is False
+    assert audit["final_acceptance_status"] == "blocked"
+    assert audit["global_pass"] is True
+    assert sp._existing_formal_acceptance_artifacts(
+        sp.PipelineConfig(workdir=tmp_path)
+    ) == ()
 
 
 def test_h_form_resume_fails_before_environment_mesh_reference_forward_or_writes(

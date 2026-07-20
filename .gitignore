@@ -20,6 +20,7 @@ __pycache__/
 *.npz
 *.npy
 *.log
+.*.writer.lock
 *.svg
 dolfinx/paper_reproduction/
 dolfinx/runs/
