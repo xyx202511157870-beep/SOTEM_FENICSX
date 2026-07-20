@@ -61,6 +61,26 @@ _TRANSACTION_SCHEMA = "atem3d.sotem.stage-transaction"
 _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
+def _approved_empymod_reference_identity() -> dict[str, Any]:
+    """Return the immutable scientific identity approved for validation runs."""
+
+    return {
+        "equation": "quasistatic",
+        "electric_permittivity": {"horizontal": 0.0, "vertical": 0.0},
+        "magnetic_permeability": {"horizontal": 1.0, "vertical": 1.0},
+        "hankel_transform": {
+            "method": "dlf",
+            "filter": "key_201_2009",
+            "pts_per_dec": 0,
+        },
+        "fourier_transform": {
+            "method": "dlf",
+            "filter": "key_201_2012",
+            "pts_per_dec": 0,
+        },
+    }
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1016,6 +1036,7 @@ def _validate_reference_metadata_identity(
     case_id: str,
     variant: str,
     srcpts: int,
+    reference_identity: Mapping[str, Any],
     expected_hash: str,
 ) -> dict[str, Any]:
     metadata_path = _safe_evidence_path(
@@ -1048,6 +1069,11 @@ def _validate_reference_metadata_identity(
         raise ValueError("reference metadata srcpts must be an explicit positive integer")
     if metadata_srcpts != srcpts:
         raise ValueError("reference metadata srcpts does not match stage inputs")
+    metadata_identity = metadata.get("reference_identity")
+    if not isinstance(metadata_identity, Mapping):
+        raise ValueError("reference metadata lacks an explicit reference identity")
+    if metadata_identity != _json_value(reference_identity):
+        raise ValueError("reference metadata identity does not match stage inputs")
     return metadata
 
 
@@ -1342,11 +1368,29 @@ def _pipeline_config_for_case(case: BenchmarkCase, variant: str):
     return pipeline.PipelineConfig(**values)
 
 
+def _reference_identity_for_config(config) -> dict[str, Any]:
+    pipeline = _load_pipeline_module()
+    identity = pipeline._empymod_reference_identity(config)
+    if not isinstance(identity, dict):
+        raise ValueError("empymod reference identity must be a JSON object")
+    identity = _json_value(identity)
+    if identity != _approved_empymod_reference_identity():
+        raise ValueError("validation CLI refuses an unapproved empymod reference identity")
+    return identity
+
+
 def _reference(args: argparse.Namespace) -> int:
     started_at = _utc_text()
     started_monotonic = time.perf_counter()
     run_dir, case, manifest = _open_run(args, expected_solver="empymod")
-    inputs = {"variant": args.variant, "srcpts": args.srcpts}
+    config = _pipeline_config_for_case(case, args.variant)
+    config.empymod_srcpts = args.srcpts
+    reference_identity = _reference_identity_for_config(config)
+    inputs = {
+        "variant": args.variant,
+        "srcpts": args.srcpts,
+        "reference_identity": reference_identity,
+    }
     outputs = [
         run_dir / "empymod.csv",
         run_dir / "reference_empymod_or_1d.csv",
@@ -1362,6 +1406,7 @@ def _reference(args: argparse.Namespace) -> int:
             case_id=case.case_id,
             variant=args.variant,
             srcpts=args.srcpts,
+            reference_identity=reference_identity,
             expected_hash=expected_hash,
         )
 
@@ -1377,8 +1422,6 @@ def _reference(args: argparse.Namespace) -> int:
     _refuse_existing_outputs(outputs)
     _ensure_safe_directory(run_dir, run_dir / "artifacts")
 
-    config = _pipeline_config_for_case(case, args.variant)
-    config.empymod_srcpts = args.srcpts
     result = get_empymod_reference(
         np.asarray(case.observation_times, dtype=float),
         config,
@@ -1403,6 +1446,7 @@ def _reference(args: argparse.Namespace) -> int:
         "reference_mode": args.variant,
         "reference_provenance": provenance,
         "srcpts": args.srcpts,
+        "reference_identity": reference_identity,
         "coordinate_system": "z_down",
         "columns": list(response.columns),
     }
@@ -1595,7 +1639,16 @@ def _source_run_evidence(
         srcpts = recorded_inputs.get("srcpts")
         if type(srcpts) is not int or srcpts <= 0:
             raise ValueError(f"{role} reference srcpts provenance is invalid")
-        expected_inputs = {"variant": variant, "srcpts": srcpts}
+        reference_identity = recorded_inputs.get("reference_identity")
+        if not isinstance(reference_identity, Mapping):
+            raise ValueError(f"{role} reference identity provenance is invalid")
+        if reference_identity != _approved_empymod_reference_identity():
+            raise ValueError(f"{role} reference identity is not approved")
+        expected_inputs = {
+            "variant": variant,
+            "srcpts": srcpts,
+            "reference_identity": reference_identity,
+        }
     else:
         expected_inputs = {"variant": variant}
     if stage_name == "simpeg":
@@ -1625,6 +1678,7 @@ def _source_run_evidence(
             case_id=str(manifest.get("case_id")),
             variant=variant,
             srcpts=srcpts,
+            reference_identity=reference_identity,
             expected_hash=metadata_hash,
         )
     evidence_path = run_dir / evidence_name
@@ -1649,6 +1703,7 @@ def _source_run_evidence(
     }
     if stage_name == "reference":
         identity["srcpts"] = srcpts
+        identity["reference_identity"] = _json_value(reference_identity)
     return evidence_path, identity
 
 
@@ -1727,9 +1782,16 @@ def _validated_effect_sources(
         raise ValueError(
             "polarization-effect reference srcpts quadrature must match exactly"
         )
+    noip_identity = identities["noip_reference"]["reference_identity"]
+    ip_identity = identities["ip_reference"]["reference_identity"]
+    if noip_identity != ip_identity:
+        raise ValueError(
+            "polarization-effect reference transform identity must match exactly"
+        )
     return evidence_paths, {
         "source_runs": identities,
         "reference_srcpts": noip_srcpts,
+        "reference_identity": noip_identity,
         "threshold": 0.10,
     }
 

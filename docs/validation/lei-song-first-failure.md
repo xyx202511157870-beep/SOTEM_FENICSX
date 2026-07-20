@@ -122,3 +122,65 @@ created.
 
 Generated CSV/JSON/mesh/NPZ artifacts remain ignored. Only this summary and the
 small CLI-control implementation are committed.
+
+## Follow-up root cause and quasistatic analytical gate
+
+The failed runs above are preserved unchanged, but they are **not eligible as final
+references**. Their empymod calls omitted explicit constitutive and Fourier-transform
+arguments. Consequently empymod used relative electric permittivity 1 instead of the
+quasistatic value 0 and its lagged Fourier DLF default (`pts_per_dec=-1`). FEniCSx and
+SimPEG solve the quasistatic problem, so the old runs did not share their governing
+equation. Their metadata also lacked a transform/constitutive identity capable of
+detecting that mismatch.
+
+The approved replacement identity is fixed independently of source quadrature:
+
+- equation: quasistatic;
+- every layer: `epermH=epermV=0` and `mpermH=mpermV=1`;
+- Hankel transform: DLF, `key_201_2009`, standard mode (`pts_per_dec=0`);
+- Fourier transform: DLF, `key_201_2012`, standard mode (`pts_per_dec=0`).
+
+The ignored diagnostic script
+`generated/lei_quasistatic_transform_diag.py` has SHA-256
+`a4485cc6fa06b8a0745aad6facacb5356a606599762d61d73b567e2246c8eced`.
+For Ex at all 41 observation times, its independent oracle integrates the analytical
+diffusive-half-space solution along the finite wire with GL2049. The metric headed
+"max" below is `max(abs(candidate-oracle)/abs(oracle))`; L2 is
+`norm(candidate-oracle)/norm(oracle)`.
+
+| Standard-DLF quasistatic Ex candidate | max | relative L2 |
+|---|---:|---:|
+| srcpts 257 | 3.04434e-5 | 7.14062e-6 |
+| srcpts 513 | 3.04437e-5 | 7.15652e-6 |
+| srcpts 1025 | 3.04437e-5 | 7.15576e-6 |
+
+The direct source-quadrature comparisons use the same pointwise relative metric:
+Ex 513 -> 1025 has max `1.14276e-9`, dBzdt 513 -> 1025 has max
+`1.71337e-9`, and evaluating Ex at `1e-5 s` alone versus inside the complete time
+array differs by `1.28643e-13`. Thus standard Fourier DLF removes the material
+time-array dependence seen in the lagged transform. These analytical checks approve
+the physical/transform identity; they do not change the separately controlled CLI
+default `srcpts=5` or waive the required 5/9/17 source-convergence rerun.
+
+The final independent analytical-curl plateau check covers all 41 times and selects
+GL257 with 2 m curl spacing as its oracle. For spatial differencing, 4 m -> 2 m has
+peak-normalized maximum `1.4043e-5` and relative L2 `9.67e-6`; 2 m -> 1 m has
+peak-normalized maximum `1.9741e-5` and relative L2 `1.354e-5`. For line quadrature,
+GL65 -> GL129 has peak-normalized maximum `2.3576e-5` and relative L2 `2.034e-5`;
+GL129 -> GL257 has peak-normalized maximum `1.6267e-5` and relative L2 `8.628e-6`.
+Against that oracle, layered standard-DLF srcpts 129 with quasistatic permittivity
+has peak-normalized maximum `8.1834e-6`, relative L2 `5.8476e-6`, and maximum under
+the 1%-of-peak floor metric `7.2277e-4` (`0.0723%`). Keeping empymod's default unit
+permittivity instead gives peak-normalized maximum `18.94094%` and relative L2
+`4.84656%`. Raw curl cancellation in the weak `0.1 s` tail is not spatially stable;
+that sample remains in the comparison but uses the stated 1%-of-peak floor in the
+denominator, so unstable raw weak-tail relative error is not substituted for the
+strong-signal gate. These differently defined metrics are reported separately and
+are not substituted into the original Task 10 gate table.
+
+The production reference path now records this identity in stage inputs, the durable
+transaction journal, and `empymod_metadata.json`; resume, recovery, and polarization-
+effect source selection require exact agreement and reject legacy evidence with a
+missing identity. This follow-up establishes an independent-reference prerequisite
+only. It does **not** claim that a FEniCSx or SimPEG forward response has been run or
+validated.

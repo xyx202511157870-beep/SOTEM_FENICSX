@@ -1566,6 +1566,17 @@ def test_reference_srcpts_controls_real_adapter_and_resume_identity(tmp_path, mo
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert metadata["srcpts"] == 9
     assert manifest["stages"]["reference"]["inputs"]["srcpts"] == 9
+    identity = cli._load_pipeline_module()._empymod_reference_identity(
+        cli._pipeline_config_for_case(case, "noip")
+    )
+    assert metadata["reference_identity"] == identity
+    assert manifest["stages"]["reference"]["inputs"]["reference_identity"] == identity
+    journal = json.loads(
+        (run_dir / "artifacts" / "reference" / "_transaction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert journal["inputs"]["reference_identity"] == identity
 
     with pytest.raises(ValueError, match="inputs|resume|different"):
         cli.main(
@@ -1657,6 +1668,146 @@ def _rewrite_reference_metadata_srcpts(run_dir, replacement):
     transaction_path.write_text(
         json.dumps(transaction, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def _rewrite_reference_identity_everywhere(run_dir, replacement):
+    metadata_paths = (
+        run_dir / "empymod_metadata.json",
+        run_dir / "artifacts" / "reference" / "empymod_metadata.json",
+    )
+    for path in metadata_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if replacement == "missing":
+            payload.pop("reference_identity")
+        else:
+            payload["reference_identity"] = replacement
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    digest = cli._sha256_file(metadata_paths[0])
+    assert cli._sha256_file(metadata_paths[1]) == digest
+
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    inputs = manifest["stages"]["reference"]["inputs"]
+    if replacement == "missing":
+        inputs.pop("reference_identity")
+    else:
+        inputs["reference_identity"] = replacement
+    manifest["stages"]["reference"]["file_sha256"]["empymod_metadata.json"] = digest
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    if replacement == "missing":
+        transaction["inputs"].pop("reference_identity")
+    else:
+        transaction["inputs"]["reference_identity"] = replacement
+    transaction["file_sha256"]["artifacts/reference/empymod_metadata.json"] = digest
+    transaction_path.write_text(
+        json.dumps(transaction, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _rewrite_reference_metadata_identity_and_hashes(run_dir, replacement):
+    metadata_paths = (
+        run_dir / "empymod_metadata.json",
+        run_dir / "artifacts" / "reference" / "empymod_metadata.json",
+    )
+    for path in metadata_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["reference_identity"] = replacement
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    digest = cli._sha256_file(metadata_paths[0])
+    assert cli._sha256_file(metadata_paths[1]) == digest
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stages"]["reference"]["file_sha256"]["empymod_metadata.json"] = digest
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    transaction["file_sha256"]["artifacts/reference/empymod_metadata.json"] = digest
+    transaction_path.write_text(
+        json.dumps(transaction, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def test_reference_resume_rejects_rehashed_metadata_identity_tamper(
+    tmp_path, monkeypatch
+):
+    run_dir = _prepare(tmp_path, run_name="rid-meta")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    command = _command("reference", run_dir, LEI_CASE)
+    assert cli.main(command) == 0
+    _rewrite_reference_metadata_identity_and_hashes(
+        run_dir, {"equation": "full-wave"}
+    )
+
+    with pytest.raises(ValueError, match="identity|metadata"):
+        cli.main(command)
+
+
+@pytest.mark.parametrize("replacement", ["missing", {"equation": "full-wave"}])
+def test_reference_resume_rejects_rehashed_reference_identity_tamper(
+    tmp_path, monkeypatch, replacement
+):
+    run_dir = _prepare(tmp_path, run_name="reference-identity-tamper")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    command = _command("reference", run_dir, LEI_CASE)
+    assert cli.main(command) == 0
+    _rewrite_reference_identity_everywhere(run_dir, replacement)
+
+    with pytest.raises(ValueError, match="identity|inputs|metadata"):
+        cli.main(command)
+
+
+def test_effect_rejects_reference_transform_identity_mismatch_before_writing(
+    tmp_path, monkeypatch
+):
+    runs = _build_effect_source_runs(tmp_path, monkeypatch)
+    mismatched = json.loads(
+        (
+            runs["ip_reference"] / "artifacts" / "reference" / "empymod_metadata.json"
+        ).read_text(encoding="utf-8")
+    )["reference_identity"]
+    mismatched["fourier_transform"] = {
+        "method": "dlf",
+        "filter": "key_201_2012",
+        "pts_per_dec": -1,
+    }
+    _rewrite_reference_identity_everywhere(runs["ip_reference"], mismatched)
+    effect_run = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver="polarization_effect",
+        run_name="effect-reference-identity-mismatch",
+    )
+    manifest_path = effect_run / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+
+    with pytest.raises(ValueError, match="identity|transform"):
+        cli.main(_effect_args(effect_run, runs))
+
+    assert manifest_path.read_bytes() == manifest_before
+    assert not (effect_run / "effect").exists()
 
 
 @pytest.mark.parametrize("replacement", ["missing", 17])
@@ -1753,12 +1904,23 @@ def test_transaction_journal_hash_and_json_use_one_byte_snapshot(tmp_path, monke
         return original_read_bytes(path)
 
     monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    reference_identity = cli._approved_empymod_reference_identity()
     journal, files, snapshot_sha256 = cli._verify_transaction_bundle(
-        run_dir, "reference", {"variant": "noip", "srcpts": 5}
+        run_dir,
+        "reference",
+        {
+            "variant": "noip",
+            "srcpts": 5,
+            "reference_identity": reference_identity,
+        },
     )
 
     assert reads == 1
-    assert journal["inputs"] == {"srcpts": 5, "variant": "noip"}
+    assert journal["inputs"] == {
+        "srcpts": 5,
+        "variant": "noip",
+        "reference_identity": reference_identity,
+    }
     assert files
     assert snapshot_sha256 == cli._sha256_bytes(original_bytes)
 

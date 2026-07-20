@@ -583,12 +583,60 @@ def test_model_consistency_reports_empymod_reference_settings():
     assert diagnostics["reference_audit_srcpts"] == 65
 
 
+def test_model_consistency_reports_resolved_quasistatic_reference_identity():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(sp.PipelineConfig())
+
+    assert diagnostics["empymod_reference_identity"] == sp._empymod_reference_identity(
+        sp.PipelineConfig()
+    )
+    assert diagnostics["empymod_reference_identity"]["equation"] == "quasistatic"
+    assert diagnostics["empymod_reference_identity"]["fourier_transform"] == {
+        "method": "dlf",
+        "filter": "key_201_2012",
+        "pts_per_dec": 0,
+    }
+
+
+def test_resolved_config_yaml_records_empymod_reference_identity_fields():
+    sp = _load_pipeline_module()
+
+    resolved = sp._resolved_config_yaml(sp.PipelineConfig())
+
+    for line in (
+        "empymod_equation: quasistatic\n",
+        "empymod_eperm_h: 0\n",
+        "empymod_eperm_v: 0\n",
+        "empymod_mperm_h: 1\n",
+        "empymod_mperm_v: 1\n",
+        "empymod_ht: dlf\n",
+        "empymod_ht_filter: key_201_2009\n",
+        "empymod_ht_pts_per_dec: 0\n",
+        "empymod_ft: dlf\n",
+        "empymod_ft_filter: key_201_2012\n",
+        "empymod_ft_pts_per_dec: 0\n",
+    ):
+        assert line in resolved
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
         {"empymod_srcpts": 0},
+        {"empymod_equation": "full-wave"},
+        {"empymod_eperm_h": 1.0},
+        {"empymod_eperm_v": 1.0},
+        {"empymod_mperm_h": 2.0},
+        {"empymod_mperm_v": 2.0},
         {"empymod_ht": "bad"},
+        {"empymod_ht_filter": ""},
+        {"empymod_ht_pts_per_dec": 0.5},
+        {"empymod_ht_pts_per_dec": True},
         {"empymod_ft": "bad"},
+        {"empymod_ft_filter": ""},
+        {"empymod_ft_pts_per_dec": 0.5},
+        {"empymod_ft_pts_per_dec": False},
         {"reference_audit_srcpts": -1},
     ],
 )
@@ -1158,6 +1206,36 @@ def test_empymod_polarizable_layer_indices_select_middle_layer_only():
     )
 
     assert indices == [2]
+
+
+@pytest.mark.parametrize(
+    "builder_name",
+    ["_exact_cole_cole_empymod_material", "_debye_cole_cole_empymod_material"],
+)
+def test_cole_cole_empymod_callbacks_flatten_standard_dlf_frequency_grid(
+    builder_name, monkeypatch
+):
+    sp = _load_pipeline_module()
+    if builder_name == "_debye_cole_cole_empymod_material":
+        monkeypatch.setattr(
+            sp,
+            "fit_cole_cole_to_debye",
+            lambda _config: SimpleNamespace(
+                sigma_infinity=0.02,
+                terms=(SimpleNamespace(delta_sigma=0.01, tau=0.1),),
+            ),
+        )
+    _depth, material = getattr(sp, builder_name)(sp.PipelineConfig())
+
+    eta_h, eta_v = material["func_eta"](
+        material,
+        {"freq": np.asarray([[1.0, 2.0], [3.0, 4.0]])},
+    )
+
+    assert eta_h.shape == (4, 2)
+    assert eta_v.shape == (4, 2)
+    assert np.isfinite(eta_h).all()
+    np.testing.assert_allclose(eta_h, eta_v)
 
 
 @pytest.mark.parametrize("value", [0.0, -0.01, float("nan"), float("inf"), -float("inf")])

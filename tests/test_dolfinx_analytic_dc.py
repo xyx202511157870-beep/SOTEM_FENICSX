@@ -144,7 +144,13 @@ def test_ramp_average_from_dense_supports_after_ramp_window():
 
 def test_empymod_call_kwargs_include_configured_source_points_and_qwe_transforms():
     sp = _load_pipeline_module()
-    config = sp.PipelineConfig(empymod_srcpts=33, empymod_ht="qwe", empymod_ft="qwe")
+    config = sp.PipelineConfig(
+        empymod_srcpts=33,
+        empymod_ht="qwe",
+        empymod_ht_pts_per_dec=7,
+        empymod_ft="qwe",
+        empymod_ft_pts_per_dec=11,
+    )
 
     kwargs = sp._empymod_call_kwargs(config)
 
@@ -153,14 +159,102 @@ def test_empymod_call_kwargs_include_configured_source_points_and_qwe_transforms
     assert kwargs["ft"] == "qwe"
     assert kwargs["htarg"]["rtol"] < 1.0e-10
     assert kwargs["ftarg"]["rtol"] <= 1.0e-10
+    assert kwargs["htarg"]["pts_per_dec"] == 7
+    assert kwargs["ftarg"]["pts_per_dec"] == 11
+    identity = sp._empymod_reference_identity(config)
+    assert identity["hankel_transform"]["pts_per_dec"] == kwargs["htarg"]["pts_per_dec"]
+    assert identity["fourier_transform"]["pts_per_dec"] == kwargs["ftarg"]["pts_per_dec"]
 
 
-def test_empymod_call_kwargs_omit_default_dlf_transform_arguments():
+def test_empymod_call_kwargs_make_approved_quasistatic_dlf_identity_explicit():
     sp = _load_pipeline_module()
 
-    kwargs = sp._empymod_call_kwargs(sp.PipelineConfig())
+    kwargs = sp._empymod_call_kwargs(sp.PipelineConfig(), n_layers=3)
 
-    assert kwargs == {"srcpts": 5}
+    assert kwargs == {
+        "srcpts": 5,
+        "epermH": [0.0, 0.0, 0.0],
+        "epermV": [0.0, 0.0, 0.0],
+        "mpermH": [1.0, 1.0, 1.0],
+        "mpermV": [1.0, 1.0, 1.0],
+        "ht": "dlf",
+        "htarg": {"dlf": "key_201_2009", "pts_per_dec": 0},
+        "ft": "dlf",
+        "ftarg": {"dlf": "key_201_2012", "pts_per_dec": 0},
+    }
+
+
+def test_empymod_reference_identity_is_json_safe_and_approved_by_default():
+    sp = _load_pipeline_module()
+
+    identity = sp._empymod_reference_identity(sp.PipelineConfig())
+
+    assert identity == {
+        "equation": "quasistatic",
+        "electric_permittivity": {"horizontal": 0.0, "vertical": 0.0},
+        "magnetic_permeability": {"horizontal": 1.0, "vertical": 1.0},
+        "hankel_transform": {
+            "method": "dlf",
+            "filter": "key_201_2009",
+            "pts_per_dec": 0,
+        },
+        "fourier_transform": {
+            "method": "dlf",
+            "filter": "key_201_2012",
+            "pts_per_dec": 0,
+        },
+    }
+    import json
+
+    assert json.loads(json.dumps(identity)) == identity
+
+
+@pytest.mark.parametrize("mode", ["noip", "cole-cole-exact", "cole-cole-debye"])
+def test_all_empymod_reference_modes_pass_quasistatic_identity_to_bipole(mode, monkeypatch):
+    sp = _load_pipeline_module()
+    calls = []
+
+    def fake_bipole(**kwargs):
+        calls.append(kwargs)
+        return np.ones(np.asarray(kwargs["freqtime"]).size)
+
+    monkeypatch.setitem(sys.modules, "empymod", types.SimpleNamespace(bipole=fake_bipole))
+    if mode == "cole-cole-exact":
+        monkeypatch.setattr(
+            sp,
+            "_exact_cole_cole_empymod_material",
+            lambda _config: (
+                [0.0, 350.0],
+                {"res": [1.0e8, 100.0, 100.0], "func_eta": object()},
+            ),
+        )
+    elif mode == "cole-cole-debye":
+        monkeypatch.setattr(
+            sp,
+            "_debye_cole_cole_empymod_material",
+            lambda _config: (
+                [0.0, 350.0],
+                {"res": [1.0e8, 100.0, 100.0], "func_eta": object()},
+            ),
+        )
+
+    sp.get_empymod_reference(
+        np.asarray([1.0e-4, 1.0e-3]),
+        sp.PipelineConfig(ramp_off_time=0.0),
+        mode=mode,
+    )
+
+    assert calls
+    n_layers = 2 if mode == "noip" else 3
+    for kwargs in calls:
+        assert kwargs["epermH"] == [0.0] * n_layers
+        assert kwargs["epermV"] == [0.0] * n_layers
+        assert kwargs["mpermH"] == [1.0] * n_layers
+        assert kwargs["mpermV"] == [1.0] * n_layers
+        assert kwargs["ht"] == "dlf"
+        assert kwargs["htarg"] == {"dlf": "key_201_2009", "pts_per_dec": 0}
+        assert kwargs["ft"] == "dlf"
+        assert kwargs["ftarg"] == {"dlf": "key_201_2012", "pts_per_dec": 0}
 
 
 def test_horizontal_electric_vector_error_uses_vector_norm_denominator():

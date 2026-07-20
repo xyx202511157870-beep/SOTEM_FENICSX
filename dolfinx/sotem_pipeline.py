@@ -140,8 +140,17 @@ class PipelineConfig:
     cole_n_freq: int = 96
     cole_fit_tolerance: float = 0.01
     empymod_srcpts: int = 5
+    empymod_equation: str = "quasistatic"
+    empymod_eperm_h: float = 0.0
+    empymod_eperm_v: float = 0.0
+    empymod_mperm_h: float = 1.0
+    empymod_mperm_v: float = 1.0
     empymod_ht: str = "dlf"
+    empymod_ht_filter: str = "key_201_2009"
+    empymod_ht_pts_per_dec: int = 0
     empymod_ft: str = "dlf"
+    empymod_ft_filter: str = "key_201_2012"
+    empymod_ft_pts_per_dec: int = 0
     reference_audit_srcpts: int = 0
 
     ksp_type: str = "gmres"
@@ -660,6 +669,25 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     empymod_ft = str(config.empymod_ft).strip().lower()
     if empymod_ft not in {"dlf", "sin", "cos", "qwe", "fftlog", "fft"}:
         raise ValueError("empymod_ft must be 'dlf', 'sin', 'cos', 'qwe', 'fftlog', or 'fft'")
+    empymod_equation = str(config.empymod_equation).strip().lower()
+    if empymod_equation != "quasistatic":
+        raise ValueError("empymod_equation must be 'quasistatic'")
+    if float(config.empymod_eperm_h) != 0.0 or float(config.empymod_eperm_v) != 0.0:
+        raise ValueError("quasistatic empymod reference requires epermH=epermV=0")
+    if float(config.empymod_mperm_h) != 1.0 or float(config.empymod_mperm_v) != 1.0:
+        raise ValueError("SOTEM empymod reference requires mpermH=mpermV=1")
+    for name, value in (
+        ("empymod_ht_filter", config.empymod_ht_filter),
+        ("empymod_ft_filter", config.empymod_ft_filter),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty filter name")
+    for name, value in (
+        ("empymod_ht_pts_per_dec", config.empymod_ht_pts_per_dec),
+        ("empymod_ft_pts_per_dec", config.empymod_ft_pts_per_dec),
+    ):
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise ValueError(f"{name} must be a non-bool integer")
     reference_audit_srcpts = int(config.reference_audit_srcpts)
     if reference_audit_srcpts < 0:
         raise ValueError(f"reference_audit_srcpts must be nonnegative; got {reference_audit_srcpts}")
@@ -825,6 +853,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "empymod_srcpts": empymod_srcpts,
             "empymod_ht": empymod_ht,
             "empymod_ft": empymod_ft,
+            "empymod_reference_identity": _empymod_reference_identity(config),
             "reference_audit_srcpts": reference_audit_srcpts,
             "error_min_time": float(config.error_min_time),
         }
@@ -5501,26 +5530,84 @@ def _empymod_rec_mapping(receiver, component: str):
     raise ValueError(f"unsupported empymod component {component}")
 
 
-def _empymod_call_kwargs(config: PipelineConfig, *, srcpts: int | None = None) -> dict[str, Any]:
-    """Return optional empymod transform/source-integration keyword arguments."""
+def _empymod_reference_identity(config: PipelineConfig) -> dict[str, Any]:
+    """Return the JSON-safe physical and numerical identity of the reference."""
 
-    kwargs: dict[str, Any] = {"srcpts": int(config.empymod_srcpts if srcpts is None else srcpts)}
     ht = str(config.empymod_ht).strip().lower()
     ft = str(config.empymod_ft).strip().lower()
-    if ht != "dlf":
-        kwargs["ht"] = ht
-        if ht == "qwe":
-            kwargs["htarg"] = {"rtol": 1.0e-12, "atol": 1.0e-30, "nquad": 51, "maxint": 80, "pts_per_dec": 0}
-    if ft != "dlf":
-        kwargs["ft"] = ft
-        if ft == "qwe":
-            kwargs["ftarg"] = {
-                "rtol": 1.0e-10,
-                "atol": 1.0e-24,
-                "nquad": 31,
-                "maxint": 300,
-                "pts_per_dec": 30,
-            }
+    return {
+        "equation": str(config.empymod_equation).strip().lower(),
+        "electric_permittivity": {
+            "horizontal": float(config.empymod_eperm_h),
+            "vertical": float(config.empymod_eperm_v),
+        },
+        "magnetic_permeability": {
+            "horizontal": float(config.empymod_mperm_h),
+            "vertical": float(config.empymod_mperm_v),
+        },
+        "hankel_transform": {
+            "method": ht,
+            "filter": str(config.empymod_ht_filter) if ht == "dlf" else None,
+            "pts_per_dec": int(config.empymod_ht_pts_per_dec),
+        },
+        "fourier_transform": {
+            "method": ft,
+            "filter": str(config.empymod_ft_filter) if ft in {"dlf", "sin", "cos"} else None,
+            "pts_per_dec": int(config.empymod_ft_pts_per_dec),
+        },
+    }
+
+
+def _empymod_call_kwargs(
+    config: PipelineConfig,
+    *,
+    srcpts: int | None = None,
+    n_layers: int | None = None,
+) -> dict[str, Any]:
+    """Return optional empymod transform/source-integration keyword arguments."""
+
+    if n_layers is None:
+        _depth, base_res = _empymod_depth_res(config)
+        n_layers = len(base_res)
+    if type(n_layers) is not int or n_layers <= 0:
+        raise ValueError("n_layers must be an explicit positive integer")
+    kwargs: dict[str, Any] = {
+        "srcpts": int(config.empymod_srcpts if srcpts is None else srcpts),
+        "epermH": [float(config.empymod_eperm_h)] * n_layers,
+        "epermV": [float(config.empymod_eperm_v)] * n_layers,
+        "mpermH": [float(config.empymod_mperm_h)] * n_layers,
+        "mpermV": [float(config.empymod_mperm_v)] * n_layers,
+    }
+    ht = str(config.empymod_ht).strip().lower()
+    ft = str(config.empymod_ft).strip().lower()
+    kwargs["ht"] = ht
+    if ht == "dlf":
+        kwargs["htarg"] = {
+            "dlf": str(config.empymod_ht_filter),
+            "pts_per_dec": int(config.empymod_ht_pts_per_dec),
+        }
+    elif ht == "qwe":
+        kwargs["htarg"] = {
+            "rtol": 1.0e-12,
+            "atol": 1.0e-30,
+            "nquad": 51,
+            "maxint": 80,
+            "pts_per_dec": int(config.empymod_ht_pts_per_dec),
+        }
+    kwargs["ft"] = ft
+    if ft in {"dlf", "sin", "cos"}:
+        kwargs["ftarg"] = {
+            "dlf": str(config.empymod_ft_filter),
+            "pts_per_dec": int(config.empymod_ft_pts_per_dec),
+        }
+    elif ft == "qwe":
+        kwargs["ftarg"] = {
+            "rtol": 1.0e-10,
+            "atol": 1.0e-24,
+            "nquad": 31,
+            "maxint": 300,
+            "pts_per_dec": int(config.empymod_ft_pts_per_dec),
+        }
     return kwargs
 
 
@@ -5593,7 +5680,7 @@ def _exact_cole_cole_empymod_material(config: PipelineConfig):
     sigma = 1.0 / np.asarray(base_res, dtype=float)
 
     def func_eta(_model, context):
-        freq = np.asarray(context["freq"], dtype=float)
+        freq = np.asarray(context["freq"], dtype=float).reshape(-1)
         eta = np.tile(sigma, (freq.size, 1)).astype(complex)
         exact = cole_cole_complex_conductivity(
             freq,
@@ -5625,7 +5712,7 @@ def _debye_cole_cole_empymod_material(config: PipelineConfig):
         sigma[index] = fit.sigma_infinity
 
     def func_eta(_model, context):
-        freq = np.asarray(context["freq"], dtype=float)
+        freq = np.asarray(context["freq"], dtype=float).reshape(-1)
         eta = np.tile(sigma, (freq.size, 1)).astype(complex)
         for index in indices:
             for term in fit.terms:
@@ -5771,7 +5858,17 @@ def get_empymod_reference(t_array, config: PipelineConfig, mode: str = "noip", *
     components = _forward_components(config)
     ramp_window = "after_ramp" if str(config.time_origin).strip().lower() == "after_ramp" else "ramp_start"
     dense_times = _reference_ramp_dense_times(times, config.ramp_off_time, window=ramp_window)
-    empymod_kwargs = _empymod_call_kwargs(config, srcpts=srcpts)
+    material_resistivities = res.get("res") if isinstance(res, dict) else res
+    if not isinstance(material_resistivities, (list, tuple)):
+        try:
+            material_resistivities = list(material_resistivities)
+        except TypeError as exc:
+            raise ValueError("empymod material lacks an explicit layer-resistivity sequence") from exc
+    empymod_kwargs = _empymod_call_kwargs(
+        config,
+        srcpts=srcpts,
+        n_layers=len(material_resistivities),
+    )
     for component in components:
         rec, mrec, signal, factor = _empymod_rec_mapping(config.receiver, component)
         eval_times = dense_times if component in {"Ex", "Ey", "Hz", "dBzdt"} and config.ramp_off_time > 0.0 else times
@@ -6648,6 +6745,17 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "divergence_control_scale": str(config.divergence_control_scale),
         "polarization": str(config.polarization),
         "cole_fit_tolerance": float(config.cole_fit_tolerance),
+        "empymod_equation": str(config.empymod_equation),
+        "empymod_eperm_h": float(config.empymod_eperm_h),
+        "empymod_eperm_v": float(config.empymod_eperm_v),
+        "empymod_mperm_h": float(config.empymod_mperm_h),
+        "empymod_mperm_v": float(config.empymod_mperm_v),
+        "empymod_ht": str(config.empymod_ht),
+        "empymod_ht_filter": str(config.empymod_ht_filter),
+        "empymod_ht_pts_per_dec": int(config.empymod_ht_pts_per_dec),
+        "empymod_ft": str(config.empymod_ft),
+        "empymod_ft_filter": str(config.empymod_ft_filter),
+        "empymod_ft_pts_per_dec": int(config.empymod_ft_pts_per_dec),
     }
     lines = []
     for key, value in values.items():
