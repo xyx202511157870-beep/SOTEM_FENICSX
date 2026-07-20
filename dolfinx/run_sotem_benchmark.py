@@ -34,6 +34,24 @@ def _float_flag(name: str, value: float) -> str:
     return f"--{name}={float(value)}"
 
 
+def _observation_times_arg(value: str) -> tuple[float, ...]:
+    try:
+        times = tuple(float(item) for item in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "observation times must be comma-separated numbers"
+        ) from exc
+    if not times or any(not math.isfinite(item) or item <= 0.0 for item in times):
+        raise argparse.ArgumentTypeError(
+            "observation times must be finite and positive"
+        )
+    if any(right <= left for left, right in zip(times, times[1:])):
+        raise argparse.ArgumentTypeError(
+            "observation times must be strictly increasing"
+        )
+    return times
+
+
 def _source_geometry(case: BenchmarkCase) -> tuple[float, float]:
     start_x, start_y, start_z = case.source_start_down
     end_x, end_y, end_z = case.source_end_down
@@ -64,6 +82,9 @@ def build_pipeline_argv(
     variant: str,
     level: str,
     workdir: str | Path,
+    *,
+    observation_times: tuple[float, ...] | None = None,
+    source_only: bool = False,
 ) -> list[str]:
     """Translate a normalized benchmark model to explicit pipeline arguments."""
 
@@ -79,7 +100,12 @@ def build_pipeline_argv(
     start_x, start_y, start_down = case.source_start_down
     end_x, end_y, end_down = case.source_end_down
     receiver_x, receiver_y, receiver_down = case.receiver_down
-    observation_times = ",".join(str(float(value)) for value in case.observation_times)
+    selected_times = (
+        tuple(float(value) for value in case.observation_times)
+        if observation_times is None
+        else observation_times
+    )
+    observation_times_text = ",".join(str(value) for value in selected_times)
 
     argv = [
         f"--workdir={Path(workdir)}",
@@ -97,7 +123,7 @@ def build_pipeline_argv(
         _float_flag("rho-air", case.rho_air_ohm_m),
         _float_flag("expected-source-length", source_length),
         _float_flag("expected-parallel-offset", parallel_offset),
-        f"--observation-times={observation_times}",
+        f"--observation-times={observation_times_text}",
         "--time-origin=after_ramp",
         "--time-method=theta",
         "--time-theta=1.0",
@@ -114,6 +140,8 @@ def build_pipeline_argv(
         "--error-min-time=0.0",
         "--reference-audit-srcpts=9",
     ]
+    if source_only:
+        argv.append("--source-only")
 
     if "rho_ohm_m" in case.earth:
         argv.append(_float_flag("rho-earth", case.earth["rho_ohm_m"]))
@@ -159,12 +187,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variant", choices=["noip", "ip"], required=True)
     parser.add_argument("--level", choices=_LEVELS, required=True)
     parser.add_argument("--workdir", type=Path, required=True)
+    parser.add_argument("--observation-times", type=_observation_times_arg)
+    parser.add_argument("--source-only", action="store_true")
     parser.add_argument("--check-env-only", action="store_true")
     parser.add_argument("--no-install", action="store_true")
     args = parser.parse_args(argv)
 
     case = load_benchmark_case(args.case)
-    pipeline_argv = build_pipeline_argv(case, args.variant, args.level, args.workdir)
+    pipeline_argv = build_pipeline_argv(
+        case,
+        args.variant,
+        args.level,
+        args.workdir,
+        observation_times=args.observation_times,
+        source_only=args.source_only,
+    )
     if args.check_env_only:
         pipeline_argv.append("--check-env-only")
     if args.no_install:

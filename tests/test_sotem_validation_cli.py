@@ -1310,6 +1310,55 @@ def test_reference_rejects_invalid_variant_and_missing_paths(tmp_path):
         )
 
 
+def test_reference_srcpts_controls_real_adapter_and_resume_identity(tmp_path, monkeypatch):
+    run_dir = _prepare(tmp_path, run_name="reference-srcpts")
+    case = cli.load_benchmark_case(LEI_CASE)
+    captured = {}
+
+    def fake_reference(times, config, *, mode):
+        captured["srcpts"] = config.empymod_srcpts
+        return {**_fake_response(case), "reference_mode": mode}
+
+    monkeypatch.setattr(cli, "get_empymod_reference", fake_reference)
+    command = _command(
+        "reference",
+        run_dir,
+        LEI_CASE,
+        extra=("--variant", "noip", "--srcpts", "9"),
+    )
+
+    assert cli.main(command) == 0
+    assert captured["srcpts"] == 9
+    metadata = json.loads((run_dir / "empymod_metadata.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert metadata["srcpts"] == 9
+    assert manifest["stages"]["reference"]["inputs"]["srcpts"] == 9
+
+    with pytest.raises(ValueError, match="inputs|resume|different"):
+        cli.main(
+            _command(
+                "reference",
+                run_dir,
+                LEI_CASE,
+                extra=("--variant", "noip", "--srcpts", "17"),
+            )
+        )
+
+
+@pytest.mark.parametrize("srcpts", ["0", "-1"])
+def test_reference_rejects_nonpositive_srcpts_without_running(tmp_path, srcpts):
+    run_dir = _prepare(tmp_path, run_name=f"bad-srcpts-{srcpts}")
+    with pytest.raises(SystemExit):
+        cli.main(
+            _command(
+                "reference",
+                run_dir,
+                LEI_CASE,
+                extra=("--variant", "noip", "--srcpts", srcpts),
+            )
+        )
+
+
 def test_pyproject_registers_sotem_validation_entrypoint():
     payload = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'atem3d-sotem-validate = "atem3d.sotem_validation_cli:main"' in payload

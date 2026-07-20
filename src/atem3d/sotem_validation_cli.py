@@ -80,6 +80,13 @@ def _nonempty_text(value: str) -> str:
     return value
 
 
+def _positive_cli_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
+    return parsed
+
+
 @contextmanager
 def _run_lock(run_dir: str | Path):
     """Hold a non-blocking cross-process writer lock for one run directory."""
@@ -1239,7 +1246,7 @@ def _reference(args: argparse.Namespace) -> int:
     started_at = _utc_text()
     started_monotonic = time.perf_counter()
     run_dir, case, manifest = _open_run(args, expected_solver="empymod")
-    inputs = {"variant": args.variant}
+    inputs = {"variant": args.variant, "srcpts": args.srcpts}
     outputs = [
         run_dir / "empymod.csv",
         run_dir / "reference_empymod_or_1d.csv",
@@ -1257,6 +1264,7 @@ def _reference(args: argparse.Namespace) -> int:
     _ensure_safe_directory(run_dir, run_dir / "artifacts")
 
     config = _pipeline_config_for_case(case, args.variant)
+    config.empymod_srcpts = args.srcpts
     result = get_empymod_reference(
         np.asarray(case.observation_times, dtype=float),
         config,
@@ -1279,6 +1287,7 @@ def _reference(args: argparse.Namespace) -> int:
         "case_id": case.case_id,
         "reference_mode": args.variant,
         "reference_provenance": provenance,
+        "srcpts": args.srcpts,
         "coordinate_system": "z_down",
         "columns": list(response.columns),
     }
@@ -1459,7 +1468,19 @@ def _source_run_evidence(
         solver_id=solver_id,
         level=str(effect_manifest.get("level")),
     )
-    expected_inputs = {"variant": variant}
+    if stage_name == "reference":
+        stage_record = manifest.get("stages", {}).get(stage_name, {})
+        recorded_inputs = stage_record.get("inputs", {})
+        if not isinstance(recorded_inputs, Mapping):
+            raise ValueError(f"{role} reference stage inputs are invalid")
+        if recorded_inputs.get("variant") != variant:
+            raise ValueError(f"{role} reference variant mismatch")
+        srcpts = recorded_inputs.get("srcpts")
+        if type(srcpts) is not int or srcpts <= 0:
+            raise ValueError(f"{role} reference srcpts provenance is invalid")
+        expected_inputs = {"variant": variant, "srcpts": srcpts}
+    else:
+        expected_inputs = {"variant": variant}
     if stage_name == "simpeg":
         expected_inputs["level"] = manifest.get("level")
     if not _completed_stage_is_intact(
@@ -1487,7 +1508,7 @@ def _source_run_evidence(
     actual_hash = _sha256_file(evidence_path)
     if actual_hash != expected_hash:
         raise ValueError(f"{role} {evidence_name} evidence hash mismatch")
-    return evidence_path, {
+    identity = {
         "run_dir": str(run_dir),
         "run_id": manifest["run_id"],
         "case_id": manifest["case_id"],
@@ -1499,6 +1520,9 @@ def _source_run_evidence(
         "evidence_file": evidence_name,
         "evidence_file_sha256": actual_hash,
     }
+    if stage_name == "reference":
+        identity["srcpts"] = expected_inputs["srcpts"]
+    return evidence_path, identity
 
 
 def _validated_effect_sources(
@@ -1802,6 +1826,7 @@ def _parser() -> argparse.ArgumentParser:
     reference.add_argument(
         "--variant", choices=("noip", "cole-cole-exact"), default="noip"
     )
+    reference.add_argument("--srcpts", type=_positive_cli_int, default=5)
     reference.set_defaults(handler=_reference)
 
     simpeg = subparsers.add_parser("simpeg", help="run the ATEM3D SimPEG-Debye adapter")

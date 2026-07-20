@@ -110,6 +110,60 @@ def test_main_rejects_invalid_level_without_traceback(capsys, tmp_path):
     assert "Traceback" not in stderr
 
 
+def test_main_passes_source_only_and_observation_override_to_real_pipeline(monkeypatch, tmp_path):
+    runner = _load_runner()
+    times = "1e-5,1e-4,1e-3,1e-2,1e-1"
+    captured = _run_through_real_pipeline(
+        monkeypatch,
+        runner,
+        [
+            "--case",
+            "benchmarks/sotem/lei2023_noip.yaml",
+            "--variant",
+            "noip",
+            "--level",
+            "S0T0B0",
+            "--workdir",
+            str(tmp_path),
+            "--observation-times",
+            times,
+            "--source-only",
+            "--check-env-only",
+            "--no-install",
+        ],
+    )
+
+    assert captured["config"].source_only is True
+    assert captured["config"].observation_times == pytest.approx(
+        (1e-5, 1e-4, 1e-3, 1e-2, 1e-1)
+    )
+
+
+@pytest.mark.parametrize(
+    "times",
+    ["", "0.0,1e-3", "1e-3,nan", "1e-3,inf", "1e-3,1e-3", "1e-3,1e-4"],
+)
+def test_main_rejects_invalid_observation_override(capsys, tmp_path, times):
+    runner = _load_runner()
+    with pytest.raises(SystemExit) as exc_info:
+        runner.main(
+            [
+                "--case",
+                "benchmarks/sotem/lei2023_noip.yaml",
+                "--variant",
+                "noip",
+                "--level",
+                "S0T0B0",
+                "--workdir",
+                str(tmp_path),
+                "--observation-times",
+                times,
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert "observation" in capsys.readouterr().err.lower()
+
+
 def test_song_ip_runner_reaches_real_pipeline_config_and_validation(monkeypatch, tmp_path):
     runner = _load_runner()
 
