@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pytest
+import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from discretize import TensorMesh
 from scipy.constants import mu_0
@@ -1408,6 +1409,50 @@ def test_step_off_initial_magnetic_flux_satisfies_static_ampere_balance():
     np.testing.assert_allclose(lhs, rhs, rtol=1e-8, atol=1e-10)
 
 
+def test_ampere_gauge_stabilization_balances_operator_coefficient_scales():
+    stiffness = sp.diags([2.0e12, 5.0e11], format="csr")
+    gauge = sp.diags([4.0e-3, 1.0e-3], format="csr")
+
+    matrix, stabilization = simulation_module._balanced_gauge_stabilization(
+        stiffness, gauge
+    )
+
+    assert stabilization == {
+        "gauge_stabilization_weight": pytest.approx(5.0e14),
+        "stiffness_operator_max_abs": pytest.approx(2.0e12),
+        "gauge_operator_max_abs": pytest.approx(4.0e-3),
+    }
+    assert np.max(
+        np.abs((stabilization["gauge_stabilization_weight"] * gauge).data)
+    ) == pytest.approx(
+        np.max(np.abs(stiffness.data))
+    )
+    np.testing.assert_allclose(
+        matrix.toarray(),
+        (
+            stiffness
+            + stabilization["gauge_stabilization_weight"] * gauge
+        ).toarray(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("stiffness", "gauge"),
+    [
+        (sp.csr_matrix((2, 2)), sp.eye(2, format="csr")),
+        (sp.eye(2, format="csr"), sp.csr_matrix((2, 2))),
+        (sp.diags([np.inf, 1.0], format="csr"), sp.eye(2, format="csr")),
+        (sp.eye(2, format="csr"), sp.diags([np.nan, 1.0], format="csr")),
+    ],
+)
+def test_ampere_gauge_stabilization_rejects_invalid_operator_scales(
+    stiffness,
+    gauge,
+):
+    with pytest.raises(ValueError, match="finite nonzero scale"):
+        simulation_module._balanced_gauge_stabilization(stiffness, gauge)
+
+
 def test_small_noncanonical_simulation_defaults_to_direct_initialization():
     mesh = _mesh()
     simulation = TDEMIPSimulation(
@@ -1503,6 +1548,22 @@ def test_petsc_initialization_records_two_gated_balances_and_destroys_local_solv
         and np.isfinite(item["balance_relative_residual"])
         and item["balance_relative_residual"] <= 1.0e-8
         for item in simulation.initialization_solver_diagnostics
+    )
+    stiffness = (
+        mesh.edge_curl.T
+        @ simulation.face_mu_inverse_matrix
+        @ mesh.edge_curl
+    ).tocsr()
+    gauge = (mesh.nodal_gradient @ mesh.nodal_gradient.T).tocsr()
+    ampere_diagnostic = simulation.initialization_solver_diagnostics[1]
+    assert ampere_diagnostic["stiffness_operator_max_abs"] == pytest.approx(
+        np.max(np.abs(stiffness.data))
+    )
+    assert ampere_diagnostic["gauge_operator_max_abs"] == pytest.approx(
+        np.max(np.abs(gauge.data))
+    )
+    assert ampere_diagnostic["gauge_stabilization_weight"] == pytest.approx(
+        np.max(np.abs(stiffness.data)) / np.max(np.abs(gauge.data))
     )
     current = (
         mesh.get_edge_inner_product(np.full(mesh.n_cells, 0.1)) @ e0

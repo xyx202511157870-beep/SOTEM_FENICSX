@@ -72,6 +72,42 @@ class ReceiverDataResult:
     memories: list[np.ndarray]
 
 
+def _balanced_gauge_stabilization(
+    stiffness: sp.spmatrix,
+    gauge: sp.spmatrix,
+) -> tuple[sp.csr_matrix, dict[str, float]]:
+    """Balance the curl-curl and gauge coefficient scales.
+
+    The two operators act on orthogonal discrete subspaces because ``C G = 0``.
+    A positive gauge weight therefore fixes the vector-potential null space
+    without changing the recovered magnetic flux ``C a``.  Matching the largest
+    matrix coefficients avoids making the gauge subspace numerically singular
+    when permeability and mesh scales make curl-curl much larger than ``G G.T``.
+    """
+
+    stiffness = stiffness.tocsr()
+    gauge = gauge.tocsr()
+    stiffness_scale = float(np.max(np.abs(stiffness.data))) if stiffness.nnz else 0.0
+    gauge_scale = float(np.max(np.abs(gauge.data))) if gauge.nnz else 0.0
+    if (
+        not np.isfinite(stiffness_scale)
+        or stiffness_scale <= 0.0
+        or not np.isfinite(gauge_scale)
+        or gauge_scale <= 0.0
+    ):
+        raise ValueError(
+            "Ampere stiffness and gauge operators must have finite nonzero scale"
+        )
+    gauge_weight = stiffness_scale / gauge_scale
+    if not np.isfinite(gauge_weight) or gauge_weight <= 0.0:
+        raise ValueError("Ampere gauge stabilization weight must be finite and positive")
+    return (stiffness + gauge_weight * gauge).tocsr(), {
+        "gauge_stabilization_weight": float(gauge_weight),
+        "stiffness_operator_max_abs": stiffness_scale,
+        "gauge_operator_max_abs": gauge_scale,
+    }
+
+
 @dataclass
 class TDEMIPSimulation:
     """Backward-Euler EB finite-volume TDEM-IP simulation.
@@ -487,7 +523,7 @@ class TDEMIPSimulation:
         gradient = self.mesh.nodal_gradient.tocsr()
         stiffness = curl.T @ self.face_mu_inverse_matrix @ curl
         gauge = gradient @ gradient.T
-        matrix = (stiffness + gauge).tocsr()
+        matrix, gauge_diagnostics = _balanced_gauge_stabilization(stiffness, gauge)
         if self.initialization_solver == "direct":
             vector_potential = spla.spsolve(matrix.tocsc(), current)
             return curl @ vector_potential
@@ -510,6 +546,7 @@ class TDEMIPSimulation:
                 solver.last_diagnostics,
                 phase="ampere_magnetic",
             )
+            diagnostic.update(gauge_diagnostics)
         except BaseException as err:
             primary_error = err
             raise

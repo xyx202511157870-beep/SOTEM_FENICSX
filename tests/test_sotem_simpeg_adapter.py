@@ -493,6 +493,11 @@ def _fake_solver_for_config(config, *, nonfinite=False):
             ),
         )
     ]
+    initialization_diagnostics[1].update(
+        gauge_stabilization_weight=5.0e14,
+        stiffness_operator_max_abs=2.0e12,
+        gauge_operator_max_abs=4.0e-3,
+    )
     return SimpleNamespace(
         mesh=mesh,
         run_data_only=lambda: result,
@@ -667,6 +672,34 @@ def test_run_rejects_failed_initialization_diagnostic(
     def fake_build(config):
         simulation, _data = _fake_solver_for_config(config)
         simulation.initialization_solver_diagnostics[0][field] = value
+        return simulation
+
+    monkeypatch.setattr(adapter, "build_simulation", fake_build)
+
+    with pytest.raises(RuntimeError, match="initialization solver diagnostics"):
+        run_simpeg_benchmark(lei_case, variant="noip")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("gauge_stabilization_weight", None),
+        ("gauge_stabilization_weight", np.inf),
+        ("gauge_stabilization_weight", -1.0),
+        ("stiffness_operator_max_abs", np.nan),
+        ("gauge_operator_max_abs", 0.0),
+        ("gauge_stabilization_weight", 4.0e14),
+    ],
+)
+def test_run_rejects_invalid_ampere_gauge_stabilization_diagnostic(
+    monkeypatch,
+    lei_case,
+    field,
+    value,
+):
+    def fake_build(config):
+        simulation, _data = _fake_solver_for_config(config)
+        simulation.initialization_solver_diagnostics[1][field] = value
         return simulation
 
     monkeypatch.setattr(adapter, "build_simulation", fake_build)

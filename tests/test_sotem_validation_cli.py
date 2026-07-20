@@ -106,7 +106,7 @@ def _valid_simpeg_provenance(case, variant, level="S0T0B0"):
 
 
 def _valid_initialization_diagnostics():
-    return [
+    diagnostics = [
         {
             "phase": phase,
             "solver": solver,
@@ -141,6 +141,12 @@ def _valid_initialization_diagnostics():
             ),
         )
     ]
+    diagnostics[1].update(
+        gauge_stabilization_weight=5.0e14,
+        stiffness_operator_max_abs=2.0e12,
+        gauge_operator_max_abs=4.0e-3,
+    )
+    return diagnostics
 
 
 def _valid_linear_diagnostics(config):
@@ -272,6 +278,38 @@ def test_publication_validator_rejects_incoherent_exact_zero_diagnostics(
             balance_relative_residual=0.0,
         )
     diagnostics[0][field] = value
+
+    with pytest.raises(ValueError, match="initialization diagnostics"):
+        cli._validated_initialization_diagnostics_for_publication(
+            diagnostics,
+            config,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("gauge_stabilization_weight", None),
+        ("gauge_stabilization_weight", np.inf),
+        ("stiffness_operator_max_abs", -1.0),
+        ("gauge_operator_max_abs", 0.0),
+        ("gauge_stabilization_weight", 4.0e14),
+    ],
+)
+def test_publication_validator_rejects_invalid_gauge_stabilization_evidence(
+    field,
+    value,
+):
+    case = cli.load_benchmark_case(LEI_CASE)
+    config = cli.build_benchmark_config(
+        case,
+        variant="noip",
+        spatial_level="S0",
+        boundary_level="B0",
+        substeps=1,
+    )
+    diagnostics = _valid_initialization_diagnostics()
+    diagnostics[1][field] = value
 
     with pytest.raises(ValueError, match="initialization diagnostics"):
         cli._validated_initialization_diagnostics_for_publication(

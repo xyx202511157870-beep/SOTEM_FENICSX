@@ -776,6 +776,25 @@ def _validated_initialization_solver_diagnostics(
             or not finite_number(reported_internal_tolerance)
             or float(reported_internal_tolerance) != internal_tolerance
         )
+        if not invalid and phase == "ampere_magnetic" and solve_mode == "petsc_ksp":
+            gauge_weight = record.get("gauge_stabilization_weight")
+            stiffness_scale = record.get("stiffness_operator_max_abs")
+            gauge_scale = record.get("gauge_operator_max_abs")
+            invalid = (
+                not finite_number(gauge_weight)
+                or float(gauge_weight) <= 0.0
+                or not finite_number(stiffness_scale)
+                or float(stiffness_scale) <= 0.0
+                or not finite_number(gauge_scale)
+                or float(gauge_scale) <= 0.0
+            )
+            if not invalid:
+                invalid = not np.isclose(
+                    float(gauge_weight),
+                    float(stiffness_scale) / float(gauge_scale),
+                    rtol=1.0e-12,
+                    atol=0.0,
+                )
         if not invalid and solve_mode == "exact_zero_rhs":
             invalid = (
                 int(reason) != 0
