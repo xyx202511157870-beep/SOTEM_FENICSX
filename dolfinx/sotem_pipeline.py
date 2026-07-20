@@ -1781,7 +1781,7 @@ def load_mesh(config: PipelineConfig):
 
 
 def build_function_spaces(msh, config: PipelineConfig | None = None):
-    """Build Nedelec, DG0 scalar/vector, and H1 spaces."""
+    """Build Nedelec, material/source DG0, curl-observation, and H1 spaces."""
 
     from dolfinx import fem
 
@@ -1789,13 +1789,15 @@ def build_function_spaces(msh, config: PipelineConfig | None = None):
     V = fem.functionspace(msh, ("N1curl", nedelec_order))
     Q = fem.functionspace(msh, ("DG", 0))
     W = fem.functionspace(msh, ("DG", 0, (3,)))
+    curl_degree = nedelec_order - 1
+    W_curl = fem.functionspace(msh, ("DG", curl_degree, (3,)))
     S = fem.functionspace(msh, ("Lagrange", 1))
     log(
         f"[spaces] V=N1curl({nedelec_order}) dofs global={V.dofmap.index_map.size_global}, "
-        f"DG0 cells global={Q.dofmap.index_map.size_global}",
+        f"DG0 cells global={Q.dofmap.index_map.size_global}, curl=vector DG{curl_degree}",
         comm=msh.comm,
     )
-    return {"V": V, "Q": Q, "W": W, "S": S}
+    return {"V": V, "Q": Q, "W": W, "W_curl": W_curl, "S": S}
 
 
 def _assign_dg0_by_cell(function, cells, value: float) -> None:
@@ -3571,14 +3573,18 @@ def _find_cells_for_point(msh, point):
 
 
 def compute_dbdt(E, spaces: dict[str, Any]):
-    """Compute dB/dt = -curl(E) as a DG0 vector field."""
+    """Compute dB/dt = -curl(E) in the order-matched observation space."""
 
     import ufl
     from dolfinx import fem
 
-    W = spaces["W"]
-    dbdt = fem.Function(W, name="dBdt")
-    expr = fem.Expression(-ufl.curl(E), W.element.interpolation_points(), comm=E.function_space.mesh.comm)
+    W_curl = spaces["W_curl"]
+    dbdt = fem.Function(W_curl, name="dBdt")
+    expr = fem.Expression(
+        -ufl.curl(E),
+        W_curl.element.interpolation_points(),
+        comm=E.function_space.mesh.comm,
+    )
     dbdt.interpolate(expr)
     dbdt.x.scatter_forward()
     return dbdt
