@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -1788,11 +1789,7 @@ def test_effect_rejects_reference_transform_identity_mismatch_before_writing(
             runs["ip_reference"] / "artifacts" / "reference" / "empymod_metadata.json"
         ).read_text(encoding="utf-8")
     )["reference_identity"]
-    mismatched["fourier_transform"] = {
-        "method": "dlf",
-        "filter": "key_201_2012",
-        "pts_per_dec": -1,
-    }
+    mismatched["fourier_transform"]["parameters"]["pts_per_dec"] = -1
     _rewrite_reference_identity_everywhere(runs["ip_reference"], mismatched)
     effect_run = _prepare(
         tmp_path,
@@ -1808,6 +1805,58 @@ def test_effect_rejects_reference_transform_identity_mismatch_before_writing(
 
     assert manifest_path.read_bytes() == manifest_before
     assert not (effect_run / "effect").exists()
+
+
+def test_effect_compares_complete_identities_after_each_source_validation(
+    tmp_path, monkeypatch
+):
+    source_dirs = {}
+    for role in ("noip_simpeg", "noip_reference", "ip_simpeg", "ip_reference"):
+        source_dirs[role] = tmp_path / role
+        source_dirs[role].mkdir()
+    approved = cli._approved_empymod_reference_identity()
+    alternate = json.loads(json.dumps(approved))
+    alternate["fourier_transform"]["parameters"]["pts_per_dec"] = -1
+    calls = []
+
+    def validated_source_seam(run_dir, *, role, **_kwargs):
+        calls.append(role)
+        identity = {
+            "run_dir": str(run_dir),
+            "run_id": role,
+            "case_id": "song2025_layered_pair",
+            "case_hash": "0" * 64,
+            "level": "S0T0B0",
+            "solver_id": "empymod" if "reference" in role else SIMPEG_SOLVER,
+            "stage": "reference" if "reference" in role else "simpeg",
+            "variant": "ip" if role == "ip_simpeg" else "noip",
+            "evidence_file": "validated.csv",
+            "evidence_file_sha256": "1" * 64,
+        }
+        if "reference" in role:
+            identity["srcpts"] = 5
+            identity["reference_identity"] = (
+                alternate if role == "ip_reference" else approved
+            )
+        return run_dir / "validated.csv", identity
+
+    monkeypatch.setattr(cli, "_source_run_evidence", validated_source_seam)
+    args = SimpleNamespace(
+        noip_simpeg_run=source_dirs["noip_simpeg"],
+        noip_reference_run=source_dirs["noip_reference"],
+        ip_simpeg_run=source_dirs["ip_simpeg"],
+        ip_reference_run=source_dirs["ip_reference"],
+    )
+
+    with pytest.raises(ValueError, match="transform identity"):
+        cli._validated_effect_sources(
+            args,
+            effect_run_dir=tmp_path / "effect",
+            effect_case=cli.load_benchmark_case(SONG_CASE),
+            effect_manifest={},
+        )
+
+    assert calls == ["noip_simpeg", "noip_reference", "ip_simpeg", "ip_reference"]
 
 
 @pytest.mark.parametrize("replacement", ["missing", 17])

@@ -62,23 +62,10 @@ _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _approved_empymod_reference_identity() -> dict[str, Any]:
-    """Return the immutable scientific identity approved for validation runs."""
+    """Return the pipeline-owned scientific identity approved for validation."""
 
-    return {
-        "equation": "quasistatic",
-        "electric_permittivity": {"horizontal": 0.0, "vertical": 0.0},
-        "magnetic_permeability": {"horizontal": 1.0, "vertical": 1.0},
-        "hankel_transform": {
-            "method": "dlf",
-            "filter": "key_201_2009",
-            "pts_per_dec": 0,
-        },
-        "fourier_transform": {
-            "method": "dlf",
-            "filter": "key_201_2012",
-            "pts_per_dec": 0,
-        },
-    }
+    identity = _load_pipeline_module()._approved_empymod_reference_identity()
+    return _json_value(identity)
 
 
 def _utc_now() -> datetime:

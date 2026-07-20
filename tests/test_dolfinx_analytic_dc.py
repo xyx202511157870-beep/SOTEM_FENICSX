@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -148,8 +149,16 @@ def test_empymod_call_kwargs_include_configured_source_points_and_qwe_transforms
         empymod_srcpts=33,
         empymod_ht="qwe",
         empymod_ht_pts_per_dec=7,
+        empymod_ht_qwe_rtol=2.0e-11,
+        empymod_ht_qwe_atol=3.0e-29,
+        empymod_ht_qwe_nquad=43,
+        empymod_ht_qwe_maxint=77,
         empymod_ft="qwe",
         empymod_ft_pts_per_dec=11,
+        empymod_ft_qwe_rtol=4.0e-9,
+        empymod_ft_qwe_atol=5.0e-23,
+        empymod_ft_qwe_nquad=25,
+        empymod_ft_qwe_maxint=211,
     )
 
     kwargs = sp._empymod_call_kwargs(config)
@@ -157,13 +166,20 @@ def test_empymod_call_kwargs_include_configured_source_points_and_qwe_transforms
     assert kwargs["srcpts"] == 33
     assert kwargs["ht"] == "qwe"
     assert kwargs["ft"] == "qwe"
-    assert kwargs["htarg"]["rtol"] < 1.0e-10
-    assert kwargs["ftarg"]["rtol"] <= 1.0e-10
+    assert kwargs["htarg"]["rtol"] == 2.0e-11
+    assert kwargs["htarg"]["atol"] == 3.0e-29
+    assert kwargs["htarg"]["nquad"] == 43
+    assert kwargs["htarg"]["maxint"] == 77
+    assert kwargs["ftarg"]["rtol"] == 4.0e-9
+    assert kwargs["ftarg"]["atol"] == 5.0e-23
+    assert kwargs["ftarg"]["nquad"] == 25
+    assert kwargs["ftarg"]["maxint"] == 211
     assert kwargs["htarg"]["pts_per_dec"] == 7
     assert kwargs["ftarg"]["pts_per_dec"] == 11
     identity = sp._empymod_reference_identity(config)
-    assert identity["hankel_transform"]["pts_per_dec"] == kwargs["htarg"]["pts_per_dec"]
-    assert identity["fourier_transform"]["pts_per_dec"] == kwargs["ftarg"]["pts_per_dec"]
+    assert identity["hankel_transform"]["parameters"] == kwargs["htarg"]
+    assert identity["fourier_transform"]["parameters"] == kwargs["ftarg"]
+    assert json.loads(json.dumps(identity, allow_nan=False)) == identity
 
 
 def test_empymod_call_kwargs_make_approved_quasistatic_dlf_identity_explicit():
@@ -195,18 +211,65 @@ def test_empymod_reference_identity_is_json_safe_and_approved_by_default():
         "magnetic_permeability": {"horizontal": 1.0, "vertical": 1.0},
         "hankel_transform": {
             "method": "dlf",
-            "filter": "key_201_2009",
-            "pts_per_dec": 0,
+            "parameters": {
+                "filter": "key_201_2009",
+                "pts_per_dec": 0,
+            },
         },
         "fourier_transform": {
             "method": "dlf",
-            "filter": "key_201_2012",
-            "pts_per_dec": 0,
+            "parameters": {
+                "filter": "key_201_2012",
+                "pts_per_dec": 0,
+            },
         },
     }
-    import json
-
     assert json.loads(json.dumps(identity)) == identity
+
+
+@pytest.mark.parametrize(
+    ("config_kwargs", "transform_name", "kwargs_name"),
+    [
+        ({"empymod_ht": "quad"}, "hankel_transform", "htarg"),
+        ({"empymod_ft": "fftlog"}, "fourier_transform", "ftarg"),
+        ({"empymod_ft": "fft"}, "fourier_transform", "ftarg"),
+    ],
+)
+def test_diagnostic_transform_kwargs_are_translated_from_complete_identity(
+    config_kwargs, transform_name, kwargs_name
+):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(**config_kwargs)
+
+    identity = sp._empymod_reference_identity(config)
+    kwargs = sp._empymod_call_kwargs(config)
+
+    assert kwargs[kwargs_name] == identity[transform_name]["parameters"]
+    assert json.loads(json.dumps(identity, allow_nan=False)) == identity
+
+
+def test_changed_dlf_identity_source_updates_call_kwargs_without_a_second_source():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        empymod_ht_filter="key_101_2009",
+        empymod_ht_pts_per_dec=3,
+        empymod_ft_filter="key_101_2012",
+        empymod_ft_pts_per_dec=-1,
+    )
+
+    identity = sp._empymod_reference_identity(config)
+    kwargs = sp._empymod_call_kwargs(config)
+
+    assert identity["hankel_transform"]["parameters"] == {
+        "filter": "key_101_2009",
+        "pts_per_dec": 3,
+    }
+    assert kwargs["htarg"] == {"dlf": "key_101_2009", "pts_per_dec": 3}
+    assert identity["fourier_transform"]["parameters"] == {
+        "filter": "key_101_2012",
+        "pts_per_dec": -1,
+    }
+    assert kwargs["ftarg"] == {"dlf": "key_101_2012", "pts_per_dec": -1}
 
 
 @pytest.mark.parametrize("mode", ["noip", "cole-cole-exact", "cole-cole-debye"])

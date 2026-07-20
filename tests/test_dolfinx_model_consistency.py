@@ -571,16 +571,24 @@ def test_model_consistency_accepts_mean_receiver_evaluation_mode():
     assert diagnostics["receiver_evaluation_mode"] == "mean"
 
 
-def test_model_consistency_reports_empymod_reference_settings():
+def test_qwe_reference_identity_remains_available_for_function_level_diagnostics():
     sp = _load_pipeline_module()
 
-    config = sp.PipelineConfig(empymod_srcpts=33, empymod_ht="qwe", empymod_ft="qwe", reference_audit_srcpts=65)
-    diagnostics = sp.validate_model_consistency(config)
+    config = sp.PipelineConfig(
+        empymod_srcpts=33,
+        empymod_ht="qwe",
+        empymod_ht_qwe_rtol=2.0e-11,
+        empymod_ft="qwe",
+        empymod_ft_pts_per_dec=13,
+        empymod_ft_qwe_rtol=3.0e-9,
+    )
+    identity = sp._empymod_reference_identity(config)
+    kwargs = sp._empymod_call_kwargs(config)
 
-    assert diagnostics["empymod_srcpts"] == 33
-    assert diagnostics["empymod_ht"] == "qwe"
-    assert diagnostics["empymod_ft"] == "qwe"
-    assert diagnostics["reference_audit_srcpts"] == 65
+    assert identity["hankel_transform"]["parameters"]["rtol"] == 2.0e-11
+    assert identity["fourier_transform"]["parameters"]["rtol"] == 3.0e-9
+    assert kwargs["htarg"] == identity["hankel_transform"]["parameters"]
+    assert kwargs["ftarg"] == identity["fourier_transform"]["parameters"]
 
 
 def test_model_consistency_reports_resolved_quasistatic_reference_identity():
@@ -594,9 +602,62 @@ def test_model_consistency_reports_resolved_quasistatic_reference_identity():
     assert diagnostics["empymod_reference_identity"]["equation"] == "quasistatic"
     assert diagnostics["empymod_reference_identity"]["fourier_transform"] == {
         "method": "dlf",
-        "filter": "key_201_2012",
-        "pts_per_dec": 0,
+        "parameters": {
+            "filter": "key_201_2012",
+            "pts_per_dec": 0,
+        },
     }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"empymod_ht": "qwe"},
+        {"empymod_ht": "quad"},
+        {"empymod_ft": "qwe", "empymod_ft_pts_per_dec": 20},
+        {"empymod_ht_filter": "key_101_2009"},
+        {"empymod_ft_filter": "key_101_2012"},
+        {"empymod_ht_pts_per_dec": 1},
+        {"empymod_ft_pts_per_dec": -1},
+        {"empymod_eperm_h": 1.0},
+        {"empymod_eperm_v": 1.0},
+        {"empymod_mperm_h": 2.0},
+        {"empymod_mperm_v": 2.0},
+    ],
+)
+def test_formal_model_validation_rejects_diagnostic_only_reference_identity(changes):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="diagnostic-only|approved"):
+        sp.validate_model_consistency(sp.PipelineConfig(**changes))
+
+
+def test_formal_model_validation_accepts_exact_approved_reference_identity():
+    sp = _load_pipeline_module()
+
+    diagnostics = sp.validate_model_consistency(sp.PipelineConfig())
+
+    assert diagnostics["empymod_reference_identity"] == sp._approved_empymod_reference_identity()
+
+
+def test_acceptance_artifact_writer_rejects_diagnostic_identity_before_writing(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path / "acceptance", empymod_ht="qwe")
+    times = np.asarray([1.0e-4])
+    data = np.asarray([[1.0, 2.0, 3.0]])
+
+    with pytest.raises(ValueError, match="diagnostic-only|approved"):
+        sp.write_validation_artifacts(
+            times,
+            data,
+            data.copy(),
+            ("Ex", "Ey", "dBzdt"),
+            config,
+            case_type="noip",
+            reference_type="empymod",
+        )
+
+    assert not config.workdir.exists()
 
 
 def test_resolved_config_yaml_records_empymod_reference_identity_fields():
