@@ -985,22 +985,27 @@ def _transaction_export_hashes(
 
 def _validate_reference_metadata_identity(
     run_dir: Path,
-    manifest: Mapping[str, Any],
     *,
+    case_id: str,
     variant: str,
     srcpts: int,
+    expected_hash: str,
 ) -> dict[str, Any]:
-    stages = manifest.get("stages", {})
-    record = stages.get("reference") if isinstance(stages, Mapping) else None
-    hashes = record.get("file_sha256", {}) if isinstance(record, Mapping) else {}
-    expected_hash = hashes.get("empymod_metadata.json") if isinstance(hashes, Mapping) else None
     metadata_path = _safe_evidence_path(
         run_dir, "artifacts/reference/empymod_metadata.json"
     )
-    if type(expected_hash) is not str or _sha256_file(metadata_path) != expected_hash:
+    try:
+        metadata_bytes = metadata_path.read_bytes()
+    except OSError as exc:
+        raise ValueError("reference metadata cannot be read") from exc
+    if (
+        type(expected_hash) is not str
+        or not _HEX64.fullmatch(expected_hash)
+        or _sha256_bytes(metadata_bytes) != expected_hash
+    ):
         raise ValueError("reference metadata hash is not bound to the stage")
     try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata = json.loads(metadata_bytes)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("reference metadata must be a JSON object") from exc
     if not isinstance(metadata, dict):
@@ -1009,7 +1014,7 @@ def _validate_reference_metadata_identity(
         raise ValueError("reference metadata solver_id mismatch")
     if metadata.get("reference_mode") != variant:
         raise ValueError("reference metadata reference_mode mismatch")
-    if metadata.get("case_id") != manifest.get("case_id"):
+    if metadata.get("case_id") != case_id:
         raise ValueError("reference metadata case_id mismatch")
     metadata_srcpts = metadata.get("srcpts")
     if type(metadata_srcpts) is not int or metadata_srcpts <= 0:
@@ -1017,6 +1022,50 @@ def _validate_reference_metadata_identity(
     if metadata_srcpts != srcpts:
         raise ValueError("reference metadata srcpts does not match stage inputs")
     return metadata
+
+
+def _prevalidate_existing_reference_bundle(
+    run_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    inputs: Mapping[str, Any],
+) -> None:
+    """Validate an existing reference bundle without materializing any exports."""
+
+    stages = manifest.get("stages", {})
+    if not isinstance(stages, Mapping):
+        raise ValueError("run manifest stages must be a mapping")
+    record = stages.get("reference")
+    bundle = _bundle_dir(run_dir, "reference")
+    if record is None and not bundle.exists() and not _is_linklike(bundle):
+        return
+    if not bundle.exists() or _is_linklike(bundle):
+        raise ValueError("reference transaction bundle is not a safe directory")
+    if record is not None:
+        if not isinstance(record, Mapping) or record.get("status") != "complete":
+            raise ValueError("run manifest has an invalid reference stage record")
+        if record.get("inputs") != _json_value(inputs):
+            raise ValueError("completed reference stage inputs do not match")
+        stage_hashes = record.get("file_sha256")
+        if not isinstance(stage_hashes, Mapping) or not stage_hashes:
+            raise ValueError("completed reference stage lacks evidence hashes")
+    else:
+        stage_hashes = None
+
+    journal, _bundle_files = _verify_transaction_bundle(run_dir, "reference", inputs)
+    if journal.get("manifest_status") != "reference_complete":
+        raise ValueError("published reference bundle status mismatch")
+    export_hashes = _transaction_export_hashes("reference", journal)
+    if stage_hashes is not None and export_hashes != stage_hashes:
+        raise ValueError("completed reference manifest and bundle hashes differ")
+    expected_hash = export_hashes.get("empymod_metadata.json")
+    _validate_reference_metadata_identity(
+        run_dir,
+        case_id=str(manifest.get("case_id")),
+        variant=str(inputs.get("variant")),
+        srcpts=inputs.get("srcpts"),
+        expected_hash=expected_hash,
+    )
 
 
 def _materialize_bundle_exports(
@@ -1290,6 +1339,7 @@ def _reference(args: argparse.Namespace) -> int:
         run_dir / "reference_empymod_or_1d.csv",
         run_dir / "empymod_metadata.json",
     ]
+    _prevalidate_existing_reference_bundle(run_dir, manifest, inputs=inputs)
     if _recover_or_complete_stage(
         run_dir,
         manifest,
@@ -1297,12 +1347,6 @@ def _reference(args: argparse.Namespace) -> int:
         status="reference_complete",
         inputs=inputs,
     ):
-        _validate_reference_metadata_identity(
-            run_dir,
-            manifest,
-            variant=args.variant,
-            srcpts=args.srcpts,
-        )
         return 0
     _refuse_existing_outputs(outputs)
     _ensure_safe_directory(run_dir, run_dir / "artifacts")
@@ -1547,11 +1591,13 @@ def _source_run_evidence(
     if _transaction_export_hashes(stage_name, journal) != stage.get("file_sha256"):
         raise ValueError(f"{role} {stage_name} manifest and bundle hashes differ")
     if stage_name == "reference":
+        metadata_hash = stage.get("file_sha256", {}).get("empymod_metadata.json")
         _validate_reference_metadata_identity(
             run_dir,
-            manifest,
+            case_id=str(manifest.get("case_id")),
             variant=variant,
             srcpts=srcpts,
+            expected_hash=metadata_hash,
         )
     evidence_path = run_dir / evidence_name
     expected_hash = stage["file_sha256"].get(evidence_name)
@@ -1646,7 +1692,17 @@ def _validated_effect_sources(
         )
         evidence_paths[role] = evidence_path
         identities[role] = identity
-    return evidence_paths, {"source_runs": identities, "threshold": 0.10}
+    noip_srcpts = identities["noip_reference"]["srcpts"]
+    ip_srcpts = identities["ip_reference"]["srcpts"]
+    if noip_srcpts != ip_srcpts:
+        raise ValueError(
+            "polarization-effect reference srcpts quadrature must match exactly"
+        )
+    return evidence_paths, {
+        "source_runs": identities,
+        "reference_srcpts": noip_srcpts,
+        "threshold": 0.10,
+    }
 
 
 def _effect(args: argparse.Namespace) -> int:
@@ -1700,6 +1756,11 @@ def _effect(args: argparse.Namespace) -> int:
                 threshold=0.10,
             )
             _json_value(summary)
+            summary = dict(summary)
+            summary["reference_srcpts"] = inputs["reference_srcpts"]
+            _atomic_write_json(
+                staged_output / "polarization_effect_summary.json", summary
+            )
             if not staged_output.is_dir() or not any(staged_output.iterdir()):
                 raise RuntimeError("polarization effect API produced no evidence files")
 

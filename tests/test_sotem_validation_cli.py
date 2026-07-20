@@ -439,11 +439,13 @@ def test_effect_composes_four_completed_cli_runs_end_to_end(tmp_path, monkeypatc
     )
     assert summary["definition"] == "ip_minus_noip"
     assert summary["threshold"] == 0.10
+    assert summary["reference_srcpts"] == 5
     assert (output / "polarization_effect_predictions.csv").is_file()
     assert (output / "polarization_effect_reference.csv").is_file()
     manifest = json.loads((effect_run / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "effect_complete"
     stage_inputs = manifest["stages"]["effect"]["inputs"]
+    assert stage_inputs["reference_srcpts"] == 5
     assert set(stage_inputs["source_runs"]) == {
         "noip_simpeg",
         "noip_reference",
@@ -1000,6 +1002,94 @@ def test_stage_bundle_recovers_manifest_commit_after_interruption(tmp_path, monk
     assert json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["status"] == "reference_complete"
 
 
+def test_orphan_reference_bundle_is_semantically_validated_before_recovery(
+    tmp_path, monkeypatch
+):
+    run_dir = _prepare(tmp_path, run_name="invalid-orphan-reference")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    original_record = cli._record_stage
+    monkeypatch.setattr(
+        cli,
+        "_record_stage",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+    )
+    command = _command("reference", run_dir, LEI_CASE, extra=("--variant", "noip"))
+    with pytest.raises(RuntimeError, match="interrupted"):
+        cli.main(command)
+
+    root_exports = [
+        run_dir / "empymod.csv",
+        run_dir / "reference_empymod_or_1d.csv",
+        run_dir / "empymod_metadata.json",
+    ]
+    for output in root_exports:
+        output.unlink()
+    bundle_metadata = run_dir / "artifacts" / "reference" / "empymod_metadata.json"
+    metadata = json.loads(bundle_metadata.read_text(encoding="utf-8"))
+    metadata["srcpts"] = 17
+    bundle_metadata.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    transaction_path = run_dir / "artifacts" / "reference" / "_transaction.json"
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    transaction["file_sha256"]["artifacts/reference/empymod_metadata.json"] = (
+        cli._sha256_file(bundle_metadata)
+    )
+    transaction_path.write_text(
+        json.dumps(transaction, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    manifest_path = run_dir / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+    monkeypatch.setattr(cli, "_record_stage", original_record)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda *args, **kwargs: pytest.fail("invalid orphan must not rerun solver"),
+    )
+
+    with pytest.raises(ValueError, match="metadata|srcpts|identity"):
+        cli.main(command)
+
+    assert all(not output.exists() for output in root_exports)
+    assert manifest_path.read_bytes() == manifest_before
+
+
+def test_bad_reference_does_not_restore_missing_root_export(
+    tmp_path, monkeypatch
+):
+    run_dir = _prepare(tmp_path, run_name="bad-ref")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    command = _command("reference", run_dir, LEI_CASE, extra=("--variant", "noip"))
+    assert cli.main(command) == 0
+    missing_output = run_dir / "empymod.csv"
+    missing_output.unlink()
+    _rewrite_reference_metadata_srcpts(run_dir, 17)
+    manifest_path = run_dir / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+
+    with pytest.raises(ValueError, match="metadata|srcpts|identity"):
+        cli.main(command)
+
+    assert not missing_output.exists()
+    assert manifest_path.read_bytes() == manifest_before
+
+
 def test_completed_stage_restores_a_missing_export_from_its_bundle(tmp_path, monkeypatch):
     run_dir = _prepare(tmp_path, run_name="missing-export-run")
     case = cli.load_benchmark_case(LEI_CASE)
@@ -1463,6 +1553,81 @@ def test_effect_rejects_rehashed_reference_metadata_srcpts_tamper(
 
     with pytest.raises(ValueError, match="metadata|srcpts|identity"):
         cli.main(_effect_args(effect_run, runs))
+
+
+def test_reference_metadata_hash_and_json_use_one_byte_snapshot(tmp_path, monkeypatch):
+    run_dir = _prepare(tmp_path, run_name="single-read-reference")
+    case = cli.load_benchmark_case(LEI_CASE)
+    monkeypatch.setattr(
+        cli,
+        "get_empymod_reference",
+        lambda times, config, *, mode, srcpts: {
+            **_fake_response(case),
+            "reference_mode": mode,
+        },
+    )
+    command = _command("reference", run_dir, LEI_CASE)
+    assert cli.main(command) == 0
+    metadata_path = run_dir / "artifacts" / "reference" / "empymod_metadata.json"
+    original_bytes = metadata_path.read_bytes()
+    changed = json.loads(original_bytes)
+    changed["srcpts"] = 17
+    changed_bytes = json.dumps(changed).encode("utf-8")
+    original_read_bytes = Path.read_bytes
+    reads = 0
+
+    def swapping_read_bytes(path):
+        nonlocal reads
+        if path == metadata_path:
+            reads += 1
+            return original_bytes if reads == 1 else changed_bytes
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", swapping_read_bytes)
+    assert cli.main(command) == 0
+    assert reads == 1
+
+
+def test_effect_rejects_mismatched_reference_srcpts_before_writing(
+    tmp_path, monkeypatch
+):
+    runs = _build_effect_source_runs(tmp_path, monkeypatch)
+    ip_reference_9 = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver="empymod",
+        run_name="ip-reference-9",
+    )
+    assert cli.main(
+        _command(
+            "reference",
+            ip_reference_9,
+            SONG_CASE,
+            extra=("--variant", "cole-cole-exact", "--srcpts", "9"),
+        )
+    ) == 0
+    runs["ip_reference"] = ip_reference_9
+    effect_run = _prepare(
+        tmp_path,
+        case=SONG_CASE,
+        solver="polarization_effect",
+        run_name="effect-srcpts-mismatch",
+    )
+    manifest_path = effect_run / "manifest.json"
+    manifest_before = manifest_path.read_bytes()
+    monkeypatch.setattr(
+        cli,
+        "write_polarization_effect_artifacts",
+        lambda *args, **kwargs: pytest.fail(
+            "mismatched reference quadrature must fail before effect API"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="srcpts|quadrature"):
+        cli.main(_effect_args(effect_run, runs))
+
+    assert manifest_path.read_bytes() == manifest_before
+    assert not (effect_run / "effect").exists()
 
 
 def test_reference_rejects_v1_stage_with_implicit_default_srcpts(

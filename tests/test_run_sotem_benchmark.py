@@ -1,5 +1,7 @@
 import importlib.util
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -112,7 +114,48 @@ def test_main_rejects_invalid_level_without_traceback(capsys, tmp_path):
 
 def test_main_passes_source_only_and_observation_override_to_real_pipeline(monkeypatch, tmp_path):
     runner = _load_runner()
+    pipeline = runner.PIPELINE_MODULE
     times = "1e-5,1e-4,1e-3,1e-2,1e-1"
+    fake_mesh = SimpleNamespace(comm=SimpleNamespace(rank=0))
+    diagnostics = {}
+    monkeypatch.setitem(
+        sys.modules,
+        "mpi4py",
+        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=1))),
+    )
+    monkeypatch.setattr(pipeline, "generate_verification_mesh", lambda config: config.mesh_path())
+    monkeypatch.setattr(
+        pipeline, "load_mesh", lambda config: (fake_mesh, object(), object())
+    )
+    monkeypatch.setattr(pipeline, "build_function_spaces", lambda msh, config: {})
+    monkeypatch.setattr(
+        pipeline, "assign_materials", lambda msh, cell_tags, spaces, config: {}
+    )
+    monkeypatch.setattr(
+        pipeline, "apply_transient_sponge", lambda msh, materials, config: None
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_source",
+        lambda msh, spaces, config, cell_tags: {"mode": "test-source"},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "write_source_only_diagnostics",
+        lambda config, env, source, *, runtime: diagnostics.update(
+            config=config, source=source, runtime=runtime
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_fetd_forward",
+        lambda *args, **kwargs: pytest.fail("source-only must not run FETD forward"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_h_forward",
+        lambda *args, **kwargs: pytest.fail("source-only must not run H forward"),
+    )
     captured = _run_through_real_pipeline(
         monkeypatch,
         runner,
@@ -128,7 +171,6 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
             "--observation-times",
             times,
             "--source-only",
-            "--check-env-only",
             "--no-install",
         ],
     )
@@ -137,6 +179,8 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
     assert captured["config"].observation_times == pytest.approx(
         (1e-5, 1e-4, 1e-3, 1e-2, 1e-1)
     )
+    assert diagnostics["config"] is captured["config"]
+    assert diagnostics["source"] == {"mode": "test-source"}
 
 
 @pytest.mark.parametrize(
