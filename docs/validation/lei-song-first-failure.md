@@ -117,7 +117,7 @@ created.
 - Windows reference environment: CPython `3.12.10`, empymod `2.6.0`, NumPy `2.4.3`, SciPy `1.17.1`, discretize `0.12.0`, SimPEG `0.25.2`, pymatsolver `0.4.0`, PyYAML `6.0.3`.
 - WSL executable preflight only: `/home/paidaxin/miniconda3/envs/fenicsx/bin/python --version` returned Python `3.10.20`; it was not used after the reference gate failed.
 - Supplied full Windows baseline evidence: `1206 passed, 10 skipped, 164 warnings in 63.76s`.
-- Fresh task-related verification: `python -m pytest tests/test_sotem_validation_cli.py tests/test_run_sotem_benchmark.py tests/test_error_metric_floor.py tests/test_sotem_metrics.py` returned `162 passed, 2 skipped in 28.20s`.
+- Fresh task-related verification: `python -m pytest tests/test_sotem_validation_cli.py tests/test_run_sotem_benchmark.py tests/test_error_metric_floor.py tests/test_sotem_metrics.py` returned `166 passed, 2 skipped in 31.29s`.
 - A fresh hash audit re-read all 12 successful manifests and verified every recorded stage-output SHA-256 against the files on disk.
 
 Generated CSV/JSON/mesh/NPZ artifacts remain ignored. Only this summary and the
