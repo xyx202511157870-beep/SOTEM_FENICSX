@@ -204,7 +204,8 @@ def test_order_one_single_cell_source_passes_fixed_projection_gate():
     source["vector"].destroy()
 
 
-def test_order_one_cross_cell_global_gauss_is_rejected_despite_projected_p1_balance():
+@pytest.mark.parametrize("nedelec_order", [1, 2])
+def test_cross_cell_exact_segments_satisfy_raw_de_rham_and_reverse_orientation(nedelec_order):
     pytest.importorskip("dolfinx.fem")
     pytest.importorskip("dolfinx.mesh")
     from dolfinx import mesh
@@ -213,18 +214,28 @@ def test_order_one_cross_cell_global_gauss_is_rejected_despite_projected_p1_bala
     sp = _load_pipeline_module()
     msh = mesh.create_unit_cube(MPI.COMM_WORLD, 2, 2, 2)
     config = sp.PipelineConfig(
-        nedelec_order=1,
+        nedelec_order=nedelec_order,
         source_start=(0.2, 0.285, 0.389),
         source_end=(0.8, 0.285, 0.389),
         source_mode="manual_line",
         source_quadrature_points=33,
+        source_projection_mode="raw",
         rtol=1.0e-11,
         atol=1.0e-13,
         max_it=1000,
     )
     spaces = sp.build_function_spaces(msh, config)
-    source = sp.build_source(msh, spaces, config)
-    gate = sp._source_projection_gate_diagnostics(source)
+    source = sp._build_manual_line_source(msh, spaces, config)
+    reverse_config = sp.PipelineConfig(
+        nedelec_order=nedelec_order,
+        source_start=config.source_end,
+        source_end=config.source_start,
+        source_mode="manual_line",
+        source_quadrature_points=33,
+        source_projection_mode="raw",
+    )
+    reverse = sp._build_manual_line_source(msh, spaces, reverse_config)
+    reverse["vector"].scale(-1.0)
 
     relative = _relative_endpoint_residual(
         sp,
@@ -234,17 +245,18 @@ def test_order_one_cross_cell_global_gauss_is_rejected_despite_projected_p1_bala
         source["vector"],
         config,
     )
+    reversal_error = _relative_vector_difference(source["vector"], reverse["vector"])
 
-    assert spaces["S"].element.basix_element.degree == 1
+    assert spaces["S"].element.basix_element.degree == nedelec_order
     assert relative < 1.0e-9
-    assert gate["passed"] is False
-    assert gate["failed_metrics"] == [
-        "raw_endpoint_relative_residual",
-        "correction_l2_over_raw",
-    ]
-    with pytest.raises(RuntimeError, match="raw_endpoint_relative_residual"):
-        sp._require_source_projection_gate(source)
+    assert reversal_error < 1.0e-12
+    diagnostics = source["local_projection_diagnostics"]
+    assert diagnostics["integration_mode"] == "exact_tetra_intervals"
+    assert diagnostics["interval_gate"]["passed"] is True
+    assert diagnostics["quadrature_points_per_segment_min"] == nedelec_order + 1
+    assert diagnostics["quadrature_points_per_segment_max"] == nedelec_order + 1
     source["vector"].destroy()
+    reverse["vector"].destroy()
 
 
 @pytest.mark.parametrize("nedelec_order", [1, 2])

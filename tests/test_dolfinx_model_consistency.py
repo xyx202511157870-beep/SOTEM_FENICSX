@@ -465,6 +465,34 @@ def test_source_projection_mode_defaults_to_charge_conserving_and_accepts_raw_di
     assert raw_diagnostics["source_projection_mode"] == "raw"
 
 
+def test_collision_sampling_source_is_explicitly_ineligible_for_formal_acceptance():
+    sp = _load_pipeline_module()
+    source_info = {
+        "mode": "manual_line_collision_diagnostic",
+        "projection_diagnostics": {
+            "endpoint_norm": 1.0,
+            "before_residual": 0.0,
+            "after_residual": 0.0,
+            "correction_l2_over_raw": 0.0,
+        },
+        "boundary_elimination_diagnostics": {"relative_residual": 0.0},
+        "local_projection_diagnostics": {
+            "integration_mode": "collision_sampling_diagnostic/global_gauss",
+            "formal_acceptance_eligible": False,
+        },
+    }
+
+    diagnostics = sp._source_preflight_gate_diagnostics(source_info)
+
+    assert diagnostics["passed"] is False
+    assert diagnostics["failed_gates"] == ["source_integration"]
+    assert diagnostics["gates"]["source_integration"]["failed_metrics"] == [
+        "formal_acceptance_eligible"
+    ]
+    with pytest.raises(RuntimeError, match="source_integration.formal_acceptance_eligible"):
+        sp._require_source_preflight_gates(source_info)
+
+
 def _source_projection_info(*, raw_relative, correction_relative, after_relative):
     return {
         "projection_diagnostics": {

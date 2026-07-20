@@ -135,7 +135,7 @@ class PipelineConfig:
     min_steps_before_first_observation: int = 1
     output_interval_substeps: int = 1
 
-    source_mode: str = "auto"  # auto, line, manual_line, regularized
+    source_mode: str = "auto"  # auto, line, manual_line, manual_line_collision_diagnostic, regularized
     source_projection_mode: str = "charge_conserving"  # charge_conserving, raw
     source_rhs_sign: float = -1.0
     source_term_mode: str = "impressed_current"  # impressed_current, primary_dc
@@ -2655,6 +2655,251 @@ def _manual_line_source_integration_points(config: PipelineConfig, *, mesh_segme
     return points, weights, svals, diagnostics
 
 
+def _line_tetra_positive_interval(vertices, source_start, source_end, *, tolerance=1.0e-13):
+    """Return the positive-length source parameter interval inside an affine tetrahedron."""
+
+    import numpy as np
+
+    points = np.asarray(vertices, dtype=float)
+    start = np.asarray(source_start, dtype=float)
+    end = np.asarray(source_end, dtype=float)
+    if points.shape != (4, 3) or not np.all(np.isfinite(points)):
+        raise ValueError("tetra vertices must be a finite (4, 3) array")
+    if start.shape != (3,) or end.shape != (3,) or not np.all(np.isfinite([start, end])):
+        raise ValueError("source endpoints must be finite three-vectors")
+    axis = end - start
+    if float(np.linalg.norm(axis)) <= 0.0:
+        raise ValueError("source_start and source_end must be distinct")
+    jacobian = np.column_stack(
+        (points[1] - points[0], points[2] - points[0], points[3] - points[0])
+    )
+    scale = max(float(np.linalg.norm(jacobian[:, i])) for i in range(3))
+    determinant = float(np.linalg.det(jacobian))
+    if not math.isfinite(determinant) or scale <= 0.0 or abs(determinant) <= 1.0e-14 * scale**3:
+        raise ValueError("tetrahedron must be non-degenerate and affine")
+    reference_start = np.linalg.solve(jacobian, start - points[0])
+    reference_delta = np.linalg.solve(jacobian, axis)
+    lambda_start = np.concatenate(([1.0 - float(np.sum(reference_start))], reference_start))
+    lambda_delta = np.concatenate(([-float(np.sum(reference_delta))], reference_delta))
+    lower = 0.0
+    upper = 1.0
+    coefficient_tolerance = max(float(tolerance), 64.0 * np.finfo(float).eps)
+    for offset, slope in zip(lambda_start, lambda_delta):
+        if abs(float(slope)) <= coefficient_tolerance:
+            if float(offset) < -coefficient_tolerance:
+                return None
+            continue
+        root = -float(offset) / float(slope)
+        if slope > 0.0:
+            lower = max(lower, root)
+        else:
+            upper = min(upper, root)
+    lower = min(1.0, max(0.0, float(lower)))
+    upper = min(1.0, max(0.0, float(upper)))
+    if upper - lower <= coefficient_tolerance:
+        return None
+    return lower, upper
+
+
+def _cluster_line_parameters(values, *, tolerance: float) -> list[float]:
+    """Cluster numerically coincident tetrahedron intersections deterministically."""
+
+    finite = sorted(float(value) for value in values if math.isfinite(float(value)))
+    if not finite:
+        return []
+    clusters: list[list[float]] = [[finite[0]]]
+    for value in finite[1:]:
+        if value - clusters[-1][-1] <= tolerance:
+            clusters[-1].append(value)
+        else:
+            clusters.append([value])
+    representatives = []
+    for cluster in clusters:
+        if cluster[0] <= tolerance:
+            representative = 0.0
+        elif cluster[-1] >= 1.0 - tolerance:
+            representative = 1.0
+        else:
+            representative = float(sum(cluster) / len(cluster))
+        representatives.append(representative)
+    return representatives
+
+
+def _atomic_line_cell_intervals(cell_intervals, *, parameter_tolerance=1.0e-12):
+    """Partition candidate cell intervals and assign every atom by global cell id."""
+
+    intervals = []
+    for item in cell_intervals:
+        start = min(1.0, max(0.0, float(item["s_start"])))
+        end = min(1.0, max(0.0, float(item["s_end"])))
+        if end - start <= parameter_tolerance:
+            continue
+        intervals.append(
+            {
+                "s_start": start,
+                "s_end": end,
+                "cell": int(item["cell"]),
+                "global_cell": int(item["global_cell"]),
+            }
+        )
+    endpoints = _cluster_line_parameters(
+        [0.0, 1.0]
+        + [value for item in intervals for value in (item["s_start"], item["s_end"])],
+        tolerance=float(parameter_tolerance),
+    )
+    atoms = []
+    gap_parameter_length = 0.0
+    multi_candidate_count = 0
+    candidate_overlap_parameter_length = 0.0
+    for start, end in zip(endpoints[:-1], endpoints[1:]):
+        if end - start <= parameter_tolerance:
+            continue
+        midpoint = 0.5 * (start + end)
+        candidates = [
+            item
+            for item in intervals
+            if item["s_start"] - parameter_tolerance <= midpoint
+            and midpoint <= item["s_end"] + parameter_tolerance
+        ]
+        if not candidates:
+            gap_parameter_length += end - start
+            continue
+        if len(candidates) > 1:
+            multi_candidate_count += 1
+            candidate_overlap_parameter_length += (end - start) * (len(candidates) - 1)
+        owner = min(candidates, key=lambda item: (item["global_cell"], item["cell"]))
+        atoms.append(
+            {
+                "s_start": float(start),
+                "s_end": float(end),
+                "cell": int(owner["cell"]),
+                "global_cell": int(owner["global_cell"]),
+                "candidate_count": int(len(candidates)),
+            }
+        )
+    assigned_parameter_length = float(
+        sum(item["s_end"] - item["s_start"] for item in atoms)
+    )
+    assigned_overlap = float(
+        sum(
+            max(0.0, previous["s_end"] - current["s_start"])
+            for previous, current in zip(atoms[:-1], atoms[1:])
+        )
+    )
+    start_covered = any(
+        item["s_start"] <= parameter_tolerance and item["s_end"] > parameter_tolerance
+        for item in intervals
+    )
+    end_covered = any(
+        item["s_end"] >= 1.0 - parameter_tolerance
+        and item["s_start"] < 1.0 - parameter_tolerance
+        for item in intervals
+    )
+    diagnostics = {
+        "candidate_positive_interval_count": int(len(intervals)),
+        "atomic_interval_count": int(len(atoms)),
+        "multi_candidate_atomic_interval_count": int(multi_candidate_count),
+        "candidate_overlap_parameter_length": float(candidate_overlap_parameter_length),
+        "union_coverage_fraction": assigned_parameter_length,
+        "gap_parameter_length": float(gap_parameter_length),
+        "assigned_overlap_parameter_length": assigned_overlap,
+        "overlap_parameter_length": assigned_overlap,
+        "start_endpoint_covered": bool(start_covered),
+        "end_endpoint_covered": bool(end_covered),
+        "positive_intervals": bool(intervals and atoms),
+    }
+    diagnostics["passed"] = bool(
+        diagnostics["positive_intervals"]
+        and diagnostics["start_endpoint_covered"]
+        and diagnostics["end_endpoint_covered"]
+        and diagnostics["gap_parameter_length"] <= parameter_tolerance
+        and diagnostics["assigned_overlap_parameter_length"] <= parameter_tolerance
+        and abs(diagnostics["union_coverage_fraction"] - 1.0) <= parameter_tolerance
+    )
+    return {"intervals": atoms, "diagnostics": diagnostics}
+
+
+def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
+    """Intersect the complete source line with every serial affine tetrahedron."""
+
+    import numpy as np
+
+    parameter_tolerance = 1.0e-12
+    serial = int(msh.comm.size) == 1
+    if not serial:
+        raise RuntimeError("exact manual-line source integration currently requires serial assembly")
+    tdim = int(msh.topology.dim)
+    if tdim != 3:
+        raise RuntimeError("exact manual-line source integration requires a three-dimensional mesh")
+    n_local = int(msh.topology.index_map(tdim).size_local)
+    local_ids = np.arange(n_local, dtype=np.int32)
+    global_ids = msh.topology.index_map(tdim).local_to_global(local_ids)
+    geometry_dofmap = np.asarray(msh.geometry.dofmap)
+    affine_tetra = bool(
+        geometry_dofmap.ndim == 2
+        and geometry_dofmap.shape[0] >= n_local
+        and geometry_dofmap.shape[1] == 4
+    )
+    if not affine_tetra:
+        raise RuntimeError("exact manual-line source integration requires affine tetrahedra")
+    candidates = []
+    for cell in range(n_local):
+        vertices = np.asarray(msh.geometry.x[geometry_dofmap[cell]], dtype=float)
+        interval = _line_tetra_positive_interval(
+            vertices,
+            config.source_start,
+            config.source_end,
+        )
+        if interval is None:
+            continue
+        candidates.append(
+            {
+                "s_start": float(interval[0]),
+                "s_end": float(interval[1]),
+                "cell": int(cell),
+                "global_cell": int(global_ids[cell]),
+            }
+        )
+    result = _atomic_line_cell_intervals(
+        candidates,
+        parameter_tolerance=parameter_tolerance,
+    )
+    diagnostics = result["diagnostics"]
+    source_length = float(
+        np.linalg.norm(np.asarray(config.source_end) - np.asarray(config.source_start))
+    )
+    diagnostics.update(
+        {
+            "serial": serial,
+            "affine_tetrahedra": affine_tetra,
+            "parameter_tolerance": parameter_tolerance,
+            "source_length": source_length,
+            "interval_total_length": diagnostics["union_coverage_fraction"] * source_length,
+            "gap_length": diagnostics["gap_parameter_length"] * source_length,
+            "overlap_length": diagnostics["assigned_overlap_parameter_length"] * source_length,
+        }
+    )
+    diagnostics["passed"] = bool(
+        diagnostics["passed"]
+        and diagnostics["serial"]
+        and diagnostics["affine_tetrahedra"]
+        and abs(diagnostics["interval_total_length"] - source_length)
+        <= parameter_tolerance * max(source_length, 1.0)
+    )
+    if not diagnostics["passed"]:
+        raise RuntimeError(
+            "exact source line tetrahedron interval gate failed: "
+            f"coverage={diagnostics['union_coverage_fraction']:.16g}, "
+            f"gap={diagnostics['gap_length']:.6e} m, "
+            f"overlap={diagnostics['overlap_length']:.6e} m, "
+            f"start={diagnostics['start_endpoint_covered']}, "
+            f"end={diagnostics['end_endpoint_covered']}, "
+            f"positive={diagnostics['positive_intervals']}, "
+            f"affine={diagnostics['affine_tetrahedra']}, serial={diagnostics['serial']}"
+        )
+    return {"intervals": result["intervals"], "diagnostics": diagnostics}
+
+
 def _manual_line_orientation_diagnostics(config: PipelineConfig, *, weights, svals):
     """Return source-line quadrature orientation diagnostics for manual_line."""
 
@@ -2708,7 +2953,134 @@ def _numeric_list(values) -> list[float]:
 
 
 def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfig):
-    """Assemble -dI/dt int_Gamma t.v dl by direct Nedelec basis tabulation."""
+    """Assemble the source by exact affine-tetrahedron line segmentation."""
+
+    import numpy as np
+    from dolfinx import fem
+    from petsc4py import PETSc
+
+    V = spaces["V"]
+    source_fun = fem.Function(V, name="manual_line_source_work")
+    source_vec = source_fun.x.petsc_vec.copy()
+    source_vec.set(0.0)
+    p0 = np.asarray(config.source_start, dtype=float)
+    p1 = np.asarray(config.source_end, dtype=float)
+    axis = p1 - p0
+    length = float(np.linalg.norm(axis))
+    if length <= 0.0:
+        raise ValueError("source_start and source_end must be distinct")
+    tangent = axis / length
+    segmentation = _exact_source_line_cell_intervals(msh, config)
+    intervals = segmentation["intervals"]
+    interval_gate = segmentation["diagnostics"]
+    quadrature_order = int(config.nedelec_order) + 1
+    qx, qw = np.polynomial.legendre.leggauss(quadrature_order)
+    be = V.element.basix_element
+    dofmap = V.dofmap
+    index_map = dofmap.index_map
+    msh.topology.create_entity_permutations()
+    permutations = msh.topology.get_cell_permutation_info()
+    added = 0
+    hit_cell_ids: list[int] = []
+    all_svals: list[float] = []
+    all_weights: list[float] = []
+    cell_l1_contributions: dict[int, float] = {}
+    dof_l1_contributions: dict[int, float] = {}
+    interval_lengths = []
+    for interval in intervals:
+        s_start = float(interval["s_start"])
+        s_end = float(interval["s_end"])
+        cell = int(interval["cell"])
+        local_s = 0.5 * (s_end - s_start) * qx + 0.5 * (s_end + s_start)
+        weights = 0.5 * (s_end - s_start) * length * qw
+        points = p0[None, :] + local_s[:, None] * axis[None, :]
+        cell_geom = _cell_geometry(msh, cell)
+        X = msh.geometry.cmap.pull_back(points, cell_geom)
+        tab = be.tabulate(0, X)[0]
+        J = np.column_stack(
+            (
+                cell_geom[1] - cell_geom[0],
+                cell_geom[2] - cell_geom[0],
+                cell_geom[3] - cell_geom[0],
+            )
+        )
+        Jb = np.repeat(J.reshape(1, 3, 3), quadrature_order, axis=0)
+        detJ = np.full(quadrature_order, np.linalg.det(J), dtype=float)
+        K = np.repeat(np.linalg.inv(J).reshape(1, 3, 3), quadrature_order, axis=0)
+        phi = be.push_forward(tab, Jb, detJ, K)
+        local = np.sum(
+            np.asarray(phi @ tangent, dtype=float) * weights[:, None],
+            axis=0,
+        )
+        if V.element.needs_dof_transformations:
+            local_t = local.copy()
+            V.element.T_apply(local_t, permutations[cell : cell + 1], 1)
+            local = local_t
+        local_dofs = dofmap.cell_dofs(cell)
+        global_dofs = index_map.local_to_global(local_dofs).astype(PETSc.IntType)
+        source_vec.setValues(global_dofs, local, addv=PETSc.InsertMode.ADD_VALUES)
+        local_l1 = float(np.sum(np.abs(local)))
+        cell_l1_contributions[cell] = cell_l1_contributions.get(cell, 0.0) + local_l1
+        for dof, value in zip(global_dofs, local):
+            key = int(dof)
+            dof_l1_contributions[key] = dof_l1_contributions.get(key, 0.0) + abs(
+                float(value)
+            )
+        added += quadrature_order
+        hit_cell_ids.extend([cell] * quadrature_order)
+        all_svals.extend(float(value) for value in local_s)
+        all_weights.extend(float(value) for value in weights)
+        interval_lengths.append((s_end - s_start) * length)
+    source_vec.assemble()
+    npts = int(added)
+    local_diagnostics = _summarize_manual_line_source_local_diagnostics(
+        npts=npts,
+        added=added,
+        missed=0,
+        hit_cell_ids=hit_cell_ids,
+        svals=all_svals,
+        cell_l1_contributions=cell_l1_contributions,
+        dof_l1_contributions=dof_l1_contributions,
+    )
+    integration_diagnostics = {
+        "integration_mode": "exact_tetra_intervals",
+        "formal_acceptance_eligible": True,
+        "segment_count": int(len(intervals)),
+        "segment_total_length": float(sum(interval_lengths)),
+        "segment_min_length": float(min(interval_lengths)),
+        "segment_max_length": float(max(interval_lengths)),
+        "segment_mean_length": float(sum(interval_lengths) / len(interval_lengths)),
+        "quadrature_points_per_segment_min": quadrature_order,
+        "quadrature_points_per_segment_max": quadrature_order,
+        "quadrature_points_per_segment_mean": float(quadrature_order),
+        "quadrature_points": npts,
+        "interval_gate": interval_gate,
+    }
+    integration_diagnostics["line_orientation"] = _manual_line_orientation_diagnostics(
+        config,
+        weights=np.asarray(all_weights, dtype=float),
+        svals=np.asarray(all_svals, dtype=float),
+    )
+    local_diagnostics.update(integration_diagnostics)
+    log(
+        f"[source] mode=manual_line; integration=exact_tetra_intervals; "
+        f"intervals={len(intervals)}; quadrature points={npts}; "
+        f"coverage={interval_gate['union_coverage_fraction']:.16g}; "
+        "assembled direct Nedelec line integral int_Gamma t.v dl",
+        comm=msh.comm,
+    )
+    return {
+        "mode": "manual_line",
+        "coeff": None,
+        "vector": source_vec,
+        "local_projection_diagnostics": local_diagnostics,
+    }
+
+
+def _build_manual_line_source_collision_diagnostic(
+    msh, spaces: dict[str, Any], config: PipelineConfig
+):
+    """Retain the former collision-sampling assembly for explicit diagnostics only."""
 
     import numpy as np
     from dolfinx import fem
@@ -2788,13 +3160,22 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
         dof_l1_contributions=dof_l1_contributions,
     )
     local_diagnostics.update(integration_diagnostics)
+    local_diagnostics["formal_acceptance_eligible"] = False
+    local_diagnostics["integration_mode"] = (
+        f"collision_sampling_diagnostic/{integration_diagnostics['integration_mode']}"
+    )
     log(
-        f"[source] mode=manual_line; integration={integration_diagnostics['integration_mode']}; "
+        f"[source] mode=manual_line_collision_diagnostic; integration={integration_diagnostics['integration_mode']}; "
         f"quadrature points={npts}; added={added}; missed={missed}; "
         "assembled direct Nedelec line integral int_Gamma t.v dl",
         comm=msh.comm,
     )
-    return {"mode": "manual_line", "coeff": None, "vector": source_vec, "local_projection_diagnostics": local_diagnostics}
+    return {
+        "mode": "manual_line_collision_diagnostic",
+        "coeff": None,
+        "vector": source_vec,
+        "local_projection_diagnostics": local_diagnostics,
+    }
 
 
 def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=None):
@@ -2807,6 +3188,17 @@ def build_source(msh, spaces: dict[str, Any], config: PipelineConfig, cell_tags=
 
     requested = config.source_mode.lower()
     ridge_ok = _dolfinx_supports_ridge_integral()
+    if requested == "manual_line_collision_diagnostic":
+        source = _build_manual_line_source_collision_diagnostic(msh, spaces, config)
+        source["vector"], source["projection_diagnostics"] = _enforce_source_charge_conservation(
+            msh,
+            spaces,
+            source["vector"],
+            config,
+            apply_projection=str(config.source_projection_mode).strip().lower()
+            == "charge_conserving",
+        )
+        return source
     if requested in {"auto", "line", "manual_line"}:
         source = _build_manual_line_source(msh, spaces, config)
         source["vector"], source["projection_diagnostics"] = _enforce_source_charge_conservation(
@@ -3152,6 +3544,23 @@ def _source_boundary_elimination_gate_diagnostics(source_info) -> dict[str, Any]
     }
 
 
+def _source_integration_gate_diagnostics(source_info) -> dict[str, Any]:
+    local = (
+        source_info.get("local_projection_diagnostics")
+        if isinstance(source_info, dict)
+        else None
+    )
+    eligible = bool(
+        isinstance(local, dict) and local.get("formal_acceptance_eligible", False)
+    )
+    return {
+        "passed": eligible,
+        "failed_metrics": [] if eligible else ["formal_acceptance_eligible"],
+        "metrics": {"formal_acceptance_eligible": eligible},
+        "thresholds": {},
+    }
+
+
 def _source_preflight_gate_diagnostics(source_info) -> dict[str, Any]:
     gates = {
         "source_projection": _source_projection_gate_diagnostics(source_info),
@@ -3160,6 +3569,13 @@ def _source_preflight_gate_diagnostics(source_info) -> dict[str, Any]:
         ),
     }
     order = ["source_projection", "source_boundary_elimination"]
+    if (
+        isinstance(source_info, dict)
+        and str(source_info.get("mode", "")).strip().lower()
+        == "manual_line_collision_diagnostic"
+    ):
+        gates["source_integration"] = _source_integration_gate_diagnostics(source_info)
+        order.append("source_integration")
     failed_gates = [name for name in order if not gates[name]["passed"]]
     return {
         "passed": not failed_gates,
@@ -8251,6 +8667,21 @@ def write_source_only_diagnostics(
             f"missed={int(source_local_projection.get('missed_points', 0))}; "
             f"unique_cells={int(source_local_projection.get('unique_hit_cells', 0))}"
         )
+        interval_gate = source_local_projection.get("interval_gate")
+        if isinstance(interval_gate, dict):
+            lines.append(
+                "source interval gate: "
+                f"{'PASS' if interval_gate.get('passed') else 'FAIL'}; "
+                f"serial={bool(interval_gate.get('serial', False))}; "
+                f"affine={bool(interval_gate.get('affine_tetrahedra', False))}; "
+                f"coverage={float(interval_gate.get('union_coverage_fraction', math.nan)):.16g}; "
+                f"gap={float(interval_gate.get('gap_length', math.nan)):.6g} m; "
+                f"overlap={float(interval_gate.get('overlap_length', math.nan)):.6g} m; "
+                f"endpoints={bool(interval_gate.get('start_endpoint_covered', False))}/"
+                f"{bool(interval_gate.get('end_endpoint_covered', False))}; "
+                f"candidates={int(interval_gate.get('candidate_positive_interval_count', 0))}; "
+                f"atoms={int(interval_gate.get('atomic_interval_count', 0))}"
+            )
     if source_line_orientation is not None:
         lines.append(
             "source line orientation: "
@@ -8708,6 +9139,21 @@ def write_report(
                 f"{float(source_local_projection.get('quadrature_points_per_segment_min', 0.0)):.6g}/"
                 f"{float(source_local_projection.get('quadrature_points_per_segment_mean', 0.0)):.6g}/"
                 f"{float(source_local_projection.get('quadrature_points_per_segment_max', 0.0)):.6g}"
+            )
+        interval_gate = source_local_projection.get("interval_gate")
+        if isinstance(interval_gate, dict):
+            lines.append(
+                "  source interval gate: "
+                f"{'PASS' if interval_gate.get('passed') else 'FAIL'}; "
+                f"serial={bool(interval_gate.get('serial', False))}; "
+                f"affine={bool(interval_gate.get('affine_tetrahedra', False))}; "
+                f"coverage={float(interval_gate.get('union_coverage_fraction', math.nan)):.16g}; "
+                f"gap={float(interval_gate.get('gap_length', math.nan)):.6g} m; "
+                f"overlap={float(interval_gate.get('overlap_length', math.nan)):.6g} m; "
+                f"endpoints={bool(interval_gate.get('start_endpoint_covered', False))}/"
+                f"{bool(interval_gate.get('end_endpoint_covered', False))}; "
+                f"candidates={int(interval_gate.get('candidate_positive_interval_count', 0))}; "
+                f"atoms={int(interval_gate.get('atomic_interval_count', 0))}"
             )
     source_line_orientation = _source_line_orientation_diagnostics_from_info(source_info)
     if source_line_orientation is not None:
@@ -10444,7 +10890,17 @@ def _main_locked(argv: list[str]) -> int:
     parser.add_argument("--memory-safety-fraction", type=float, default=0.95, help="Fraction of memory-limit-gb allowed for the solver estimate.")
     parser.add_argument("--check-env-only", action="store_true")
     parser.add_argument("--no-install", action="store_true", help="Do not pip install missing non-core packages.")
-    parser.add_argument("--source-mode", choices=["auto", "line", "manual_line", "regularized"], default="auto")
+    parser.add_argument(
+        "--source-mode",
+        choices=[
+            "auto",
+            "line",
+            "manual_line",
+            "manual_line_collision_diagnostic",
+            "regularized",
+        ],
+        default="auto",
+    )
     parser.add_argument(
         "--source-projection-mode",
         choices=["charge_conserving", "raw"],

@@ -185,7 +185,7 @@ def test_write_report_records_model_runtime(tmp_path):
     assert "postprocess/report: 0.500 s" in text
 
 
-def test_write_report_records_manual_line_mesh_segment_integration(tmp_path):
+def test_write_report_records_manual_line_collision_diagnostic_integration(tmp_path):
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(workdir=tmp_path, t_min=1.0e-6, t_max=2.0e-6, time_growth=2.0)
     times = np.asarray([1.0e-6])
@@ -198,9 +198,10 @@ def test_write_report_records_manual_line_mesh_segment_integration(tmp_path):
     }
     ref_result = {"times": times, "data": data, "components": ["Ex", "Ey", "dBzdt"]}
     source_info = {
-        "mode": "manual_line",
+        "mode": "manual_line_collision_diagnostic",
         "local_projection_diagnostics": {
-            "integration_mode": "mesh_segments",
+            "integration_mode": "collision_sampling_diagnostic/mesh_segments",
+            "formal_acceptance_eligible": False,
             "segment_count": 200,
             "segment_total_length": 1000.0,
             "quadrature_points_per_segment_min": 26,
@@ -225,8 +226,65 @@ def test_write_report_records_manual_line_mesh_segment_integration(tmp_path):
     )
 
     text = config.output_report().read_text(encoding="utf-8")
-    assert "source line integration: mode=mesh_segments; segments=200; segment_length_total=1000 m" in text
+    assert "source line integration: mode=collision_sampling_diagnostic/mesh_segments; segments=200; segment_length_total=1000 m" in text
     assert "quadrature_per_segment[min/mean/max]=26/26/26" in text
+
+
+def test_write_report_records_exact_tetra_interval_gate(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(workdir=tmp_path, t_min=1.0e-6, t_max=2.0e-6, time_growth=2.0)
+    times = np.asarray([1.0e-6])
+    data = np.asarray([[1.0, 0.0, 2.0]], dtype=float)
+    fem_result = {
+        "times": times,
+        "data": data,
+        "components": ["Ex", "Ey", "dBzdt"],
+        "solver_log": [],
+    }
+    source_info = {
+        "mode": "manual_line",
+        "local_projection_diagnostics": {
+            "integration_mode": "exact_tetra_intervals",
+            "formal_acceptance_eligible": True,
+            "segment_count": 86,
+            "segment_total_length": 1000.0,
+            "quadrature_points_per_segment_min": 3,
+            "quadrature_points_per_segment_max": 3,
+            "quadrature_points_per_segment_mean": 3.0,
+            "quadrature_points": 258,
+            "added_points": 258,
+            "missed_points": 0,
+            "unique_hit_cells": 86,
+            "cell_contribution_top_fraction": 0.02,
+            "dof_contribution_top_fraction": 0.02,
+            "interval_gate": {
+                "passed": True,
+                "serial": True,
+                "affine_tetrahedra": True,
+                "union_coverage_fraction": 1.0,
+                "gap_length": 0.0,
+                "overlap_length": 0.0,
+                "start_endpoint_covered": True,
+                "end_endpoint_covered": True,
+                "candidate_positive_interval_count": 86,
+                "atomic_interval_count": 86,
+            },
+        },
+    }
+
+    sp.write_report(
+        config,
+        env={},
+        fem_result=fem_result,
+        ref_result={"times": times, "data": data, "components": ["Ex", "Ey", "dBzdt"]},
+        errors=_error_metrics(),
+        source_info=source_info,
+    )
+
+    text = config.output_report().read_text(encoding="utf-8")
+    assert "source line integration: mode=exact_tetra_intervals; segments=86; segment_length_total=1000 m" in text
+    assert "source interval gate: PASS; serial=True; affine=True; coverage=1" in text
+    assert "gap=0 m; overlap=0 m; endpoints=True/True; candidates=86; atoms=86" in text
 
 
 def test_write_report_records_divergence_cleaning_strength(tmp_path):
