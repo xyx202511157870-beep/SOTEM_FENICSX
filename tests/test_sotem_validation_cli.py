@@ -1433,7 +1433,7 @@ def test_effect_rejects_v1_reference_runs_with_implicit_default_srcpts(
         cli.main(_effect_args(effect_run, runs))
 
 
-def test_reference_rejects_missing_srcpts_input_when_hashed_metadata_is_new_format(
+def test_reference_rejects_missing_srcpts_even_when_all_metadata_hashes_are_recomputed(
     tmp_path, monkeypatch
 ):
     run_dir = _prepare(tmp_path, run_name="tampered-new-reference")
@@ -1446,7 +1446,7 @@ def test_reference_rejects_missing_srcpts_input_when_hashed_metadata_is_new_form
     assert cli.main(
         _command("reference", run_dir, LEI_CASE, extra=("--srcpts", "17"))
     ) == 0
-    _remove_v1_reference_input_srcpts(run_dir)
+    _convert_to_v1_implicit_reference_srcpts(run_dir)
 
     with pytest.raises(ValueError, match="srcpts|metadata|inputs"):
         cli.main(_command("reference", run_dir, LEI_CASE))
