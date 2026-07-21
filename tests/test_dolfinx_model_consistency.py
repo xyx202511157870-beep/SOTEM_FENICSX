@@ -2485,6 +2485,129 @@ def test_formal_run_lock_is_reentrant_releases_after_exception_and_rejects_proce
         pass
 
 
+class _RecordingComm:
+    def __init__(self, *, rank, size, events, root_payload=None):
+        self.rank = int(rank)
+        self.size = int(size)
+        self.events = events
+        self.root_payload = root_payload
+
+    def bcast(self, value, root=0):
+        self.events.append(f"bcast:{root}")
+        if self.rank == root:
+            return value
+        return self.root_payload
+
+    def barrier(self):
+        self.events.append("barrier")
+
+
+class _RecordingContext:
+    def __init__(self, events, label, *, enter_error=None):
+        self.events = events
+        self.label = label
+        self.enter_error = enter_error
+
+    def __enter__(self):
+        self.events.append(f"{self.label}:enter")
+        if self.enter_error is not None:
+            raise self.enter_error
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.events.append(f"{self.label}:exit")
+
+
+def test_coordinated_formal_run_lock_only_root_touches_lock_and_releases_after_barrier(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    events = []
+    comm = _RecordingComm(rank=0, size=8, events=events)
+    monkeypatch.setattr(
+        sp,
+        "_formal_run_lock",
+        lambda path: _RecordingContext(events, f"lock:{path}"),
+    )
+
+    with sp._coordinated_formal_run_lock(tmp_path, comm):
+        events.append("body")
+
+    assert events == [
+        f"lock:{tmp_path}:enter",
+        "bcast:0",
+        "body",
+        "barrier",
+        f"lock:{tmp_path}:exit",
+    ]
+
+
+def test_coordinated_formal_run_lock_peer_never_touches_filesystem_lock(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    events = []
+    comm = _RecordingComm(
+        rank=3,
+        size=8,
+        events=events,
+        root_payload=(True, ""),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_formal_run_lock",
+        lambda _path: pytest.fail("peer rank attempted to acquire filesystem lock"),
+    )
+
+    with sp._coordinated_formal_run_lock(tmp_path, comm):
+        events.append("body")
+
+    assert events == ["bcast:0", "body", "barrier"]
+
+
+def test_coordinated_formal_run_lock_broadcasts_root_acquisition_failure(
+    monkeypatch, tmp_path
+):
+    sp = _load_pipeline_module()
+    message = f"another writer holds the run lock: {tmp_path}"
+    root_events = []
+    root_comm = _RecordingComm(rank=0, size=8, events=root_events)
+    monkeypatch.setattr(
+        sp,
+        "_formal_run_lock",
+        lambda path: _RecordingContext(
+            root_events,
+            f"lock:{path}",
+            enter_error=RuntimeError(message),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="another writer holds the run lock"):
+        with sp._coordinated_formal_run_lock(tmp_path, root_comm):
+            pytest.fail("root entered body after failed lock acquisition")
+
+    assert root_events == [f"lock:{tmp_path}:enter", "bcast:0"]
+
+    peer_events = []
+    peer_comm = _RecordingComm(
+        rank=6,
+        size=8,
+        events=peer_events,
+        root_payload=(False, message),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_formal_run_lock",
+        lambda _path: pytest.fail("peer rank attempted to acquire filesystem lock"),
+    )
+
+    with pytest.raises(RuntimeError, match="another writer holds the run lock"):
+        with sp._coordinated_formal_run_lock(tmp_path, peer_comm):
+            pytest.fail("peer entered body after root lock failure")
+
+    assert peer_events == ["bcast:0"]
+
+
 def test_mesh_source_and_formal_cli_writers_reject_competing_process(tmp_path):
     sp = _load_pipeline_module()
     pipeline_path = Path(__file__).resolve().parents[1] / "dolfinx" / "sotem_pipeline.py"
