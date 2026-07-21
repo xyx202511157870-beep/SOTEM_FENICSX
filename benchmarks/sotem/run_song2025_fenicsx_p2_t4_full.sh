@@ -13,6 +13,8 @@ CONDA=${CONDA:-/home/paidaxin/miniconda3/bin/conda}
 PYTHON=${PYTHON:-/home/paidaxin/miniconda3/envs/fenicsx/bin/python}
 OUTPUT_INTERVAL_SUBSTEPS=${OUTPUT_INTERVAL_SUBSTEPS:-16}
 MIN_STEPS_BEFORE_FIRST_OBSERVATION=${MIN_STEPS_BEFORE_FIRST_OBSERVATION:-16}
+TIME_METHOD=${TIME_METHOD:-theta}
+TIME_THETA=${TIME_THETA:-1}
 export PYTHONPATH="$REPO_ROOT/src:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 OBSERVATION_TIMES=$(
@@ -62,8 +64,8 @@ COMMON_ARGS=(
   --cole-f-min 1e-3
   --cole-f-max 1e4
   --cole-n-freq 81
-  --time-method theta
-  --time-theta 1
+  --time-method "$TIME_METHOD"
+  --time-theta "$TIME_THETA"
   --t-min 1e-6
   --t-max 1
   --min-steps-before-first-observation "$MIN_STEPS_BEFORE_FIRST_OBSERVATION"

@@ -1113,6 +1113,18 @@ def test_song_full_window_runner_refines_turnoff_to_first_observation():
     assert "MIN_STEPS_BEFORE_FIRST_OBSERVATION=${MIN_STEPS_BEFORE_FIRST_OBSERVATION:-16}" in text
 
 
+def test_song_full_window_runner_allows_explicit_time_method_without_changing_default():
+    root = Path(__file__).resolve().parents[1]
+    text = (
+        root / "benchmarks" / "sotem" / "run_song2025_fenicsx_p2_t4_full.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "TIME_METHOD=${TIME_METHOD:-theta}" in text
+    assert "TIME_THETA=${TIME_THETA:-1}" in text
+    assert '--time-method "$TIME_METHOD"' in text
+    assert '--time-theta "$TIME_THETA"' in text
+
+
 def test_reviewed_plan_records_nonconflicting_primary_and_audit_source_quadrature():
     root = Path(__file__).resolve().parents[1]
     plan = (
