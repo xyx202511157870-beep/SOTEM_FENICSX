@@ -683,6 +683,15 @@ def test_bdf2_step_coefficients_reduce_to_constant_step_formula():
     assert coeffs["older"] == pytest.approx(-0.25)
 
 
+def test_bdf2_starts_after_first_output_step():
+    sp = _load_pipeline_module()
+
+    assert not sp._should_use_bdf2_step(time_method="bdf2", step=0, first_output_step=15)
+    assert not sp._should_use_bdf2_step(time_method="bdf2", step=15, first_output_step=15)
+    assert sp._should_use_bdf2_step(time_method="bdf2", step=16, first_output_step=15)
+    assert not sp._should_use_bdf2_step(time_method="theta", step=16, first_output_step=15)
+
+
 def test_model_consistency_reports_bdf2_time_method():
     sp = _load_pipeline_module()
 

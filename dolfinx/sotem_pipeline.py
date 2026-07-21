@@ -5701,6 +5701,12 @@ def _bdf2_step_coefficients(dt: float, previous_dt: float) -> dict[str, float]:
     }
 
 
+def _should_use_bdf2_step(*, time_method: str, step: int, first_output_step: int) -> bool:
+    """Return whether a step is past the backward-Euler startup interval."""
+
+    return str(time_method).strip().lower() == "bdf2" and int(step) > int(first_output_step)
+
+
 def _add_scalar_point_load(vec, msh, S, point, value: float) -> None:
     """Add value*q(point) to a scalar H1 load vector."""
 
@@ -6838,6 +6844,7 @@ def _run_fetd_forward_impl(
     step_times = schedule["step_times"]
     return_times = schedule["return_times"]
     output_step_indices = set(schedule["output_step_indices"])
+    first_output_step = int(schedule["output_step_indices"][0])
     observation_time_by_step = {
         int(step): float(return_times[i]) for i, step in enumerate(schedule["output_step_indices"])
     }
@@ -7012,7 +7019,11 @@ def _run_fetd_forward_impl(
         if dt <= 0.0:
             raise RuntimeError("non-positive dt encountered")
         use_bdf2 = (
-            time_method == "bdf2"
+            _should_use_bdf2_step(
+                time_method=time_method,
+                step=step,
+                first_output_step=first_output_step,
+            )
             and debye is None
             and E_older is not None
             and previous_step_dt is not None
