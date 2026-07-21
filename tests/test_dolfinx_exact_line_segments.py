@@ -108,3 +108,92 @@ def test_atomic_intervals_fail_closed_on_gap_and_missing_endpoints():
     assert result["diagnostics"]["start_endpoint_covered"] is False
     assert result["diagnostics"]["end_endpoint_covered"] is False
     assert result["diagnostics"]["passed"] is False
+
+
+class _GatherComm:
+    def __init__(self, *, rank, payloads):
+        self.rank = int(rank)
+        self.size = len(payloads)
+        self._payloads = payloads
+
+    def allgather(self, _local_payload):
+        return self._payloads
+
+
+def test_collective_atomic_intervals_assign_each_global_atom_to_one_rank():
+    sp = _load_pipeline_module()
+    payloads = [
+        [
+            {
+                "s_start": 0.0,
+                "s_end": 0.5,
+                "cell": 4,
+                "global_cell": 40,
+                "owner_rank": 0,
+            }
+        ],
+        [
+            {
+                "s_start": 0.5,
+                "s_end": 1.0,
+                "cell": 8,
+                "global_cell": 80,
+                "owner_rank": 1,
+            }
+        ],
+    ]
+
+    rank0 = sp._collective_atomic_line_intervals(
+        _GatherComm(rank=0, payloads=payloads), payloads[0]
+    )
+    rank1 = sp._collective_atomic_line_intervals(
+        _GatherComm(rank=1, payloads=payloads), payloads[1]
+    )
+
+    assert [(item["s_start"], item["s_end"]) for item in rank0["intervals"]] == [
+        (0.0, 0.5)
+    ]
+    assert [(item["s_start"], item["s_end"]) for item in rank1["intervals"]] == [
+        (0.5, 1.0)
+    ]
+    assert rank0["diagnostics"] == rank1["diagnostics"]
+    assert rank0["diagnostics"]["distributed_ownership_complete"] is True
+    assert rank0["diagnostics"]["global_atomic_interval_count"] == 2
+    assert rank0["diagnostics"]["union_coverage_fraction"] == pytest.approx(1.0)
+    assert rank0["diagnostics"]["passed"] is True
+
+
+def test_collective_atomic_intervals_choose_global_cell_before_owner_rank():
+    sp = _load_pipeline_module()
+    payloads = [
+        [
+            {
+                "s_start": 0.0,
+                "s_end": 1.0,
+                "cell": 9,
+                "global_cell": 90,
+                "owner_rank": 0,
+            }
+        ],
+        [
+            {
+                "s_start": 0.0,
+                "s_end": 1.0,
+                "cell": 2,
+                "global_cell": 20,
+                "owner_rank": 1,
+            }
+        ],
+    ]
+
+    rank0 = sp._collective_atomic_line_intervals(
+        _GatherComm(rank=0, payloads=payloads), payloads[0]
+    )
+    rank1 = sp._collective_atomic_line_intervals(
+        _GatherComm(rank=1, payloads=payloads), payloads[1]
+    )
+
+    assert rank0["intervals"] == []
+    assert len(rank1["intervals"]) == 1
+    assert rank1["intervals"][0]["global_cell"] == 20
+    assert rank1["intervals"][0]["owner_rank"] == 1

@@ -547,6 +547,55 @@ def test_formal_exact_manual_line_integration_gate_checks_each_interval_invarian
     assert gate["metrics"]["gap_length"] == pytest.approx(100.0)
 
 
+def test_formal_exact_manual_line_gate_accepts_collective_distributed_ownership():
+    sp = _load_pipeline_module()
+    source = _failed_exact_interval_source_info()
+    local = source["local_projection_diagnostics"]
+    local["assembly_complete"] = True
+    interval = local["interval_gate"]
+    interval.update(
+        {
+            "passed": True,
+            "serial": False,
+            "distributed_ownership_complete": True,
+            "union_coverage_fraction": 1.0,
+            "gap_length": 0.0,
+            "overlap_length": 0.0,
+            "interval_total_length": 1000.0,
+        }
+    )
+
+    gate = sp._source_integration_gate_diagnostics(source)
+
+    assert gate["passed"] is True
+    assert gate["metrics"]["serial"] is False
+    assert gate["metrics"]["distributed_ownership_complete"] is True
+
+
+def test_formal_exact_manual_line_gate_rejects_uncoordinated_nonserial_assembly():
+    sp = _load_pipeline_module()
+    source = _failed_exact_interval_source_info()
+    local = source["local_projection_diagnostics"]
+    local["assembly_complete"] = True
+    interval = local["interval_gate"]
+    interval.update(
+        {
+            "passed": True,
+            "serial": False,
+            "distributed_ownership_complete": False,
+            "union_coverage_fraction": 1.0,
+            "gap_length": 0.0,
+            "overlap_length": 0.0,
+            "interval_total_length": 1000.0,
+        }
+    )
+
+    gate = sp._source_integration_gate_diagnostics(source)
+
+    assert gate["passed"] is False
+    assert gate["failed_metrics"] == ["distributed_ownership_complete"]
+
+
 def _source_projection_info(*, raw_relative, correction_relative, after_relative):
     return {
         "projection_diagnostics": {
