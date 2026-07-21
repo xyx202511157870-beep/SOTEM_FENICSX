@@ -6071,6 +6071,41 @@ def _advance_faraday_receiver_hz_bdf2(
     ) / values["lhs"]
 
 
+def _advance_faraday_receiver_hz_state(
+    *,
+    previous_hz: float,
+    older_hz: float | None,
+    dbzdt_new: float,
+    dt: float,
+    step_method: str,
+    bdf2_coefficients: dict[str, float] | None,
+    mu: float = 1.2566370614359173e-6,
+) -> tuple[float, float]:
+    """Advance receiver Hz and return the history state for the next step."""
+
+    method = str(step_method).strip().lower()
+    if method == "backward_euler":
+        updated = _advance_faraday_receiver_hz(
+            previous_hz=previous_hz,
+            dbzdt_new=dbzdt_new,
+            dt=dt,
+            mu=mu,
+        )
+    elif method == "bdf2":
+        if older_hz is None or bdf2_coefficients is None:
+            raise ValueError("BDF2 Faraday update requires older Hz and coefficients")
+        updated = _advance_faraday_receiver_hz_bdf2(
+            previous_hz=previous_hz,
+            older_hz=older_hz,
+            dbzdt_new=dbzdt_new,
+            coefficients=bdf2_coefficients,
+            mu=mu,
+        )
+    else:
+        raise ValueError("Faraday step_method must be 'backward_euler' or 'bdf2'")
+    return updated, float(previous_hz)
+
+
 def _biot_receiver_dbdt_from_h(h_new, h_old, *, dt: float, mu: float = 1.2566370614359173e-6):
     import numpy as np
 
@@ -6863,6 +6898,7 @@ def _run_fetd_forward_impl(
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     H_old_receiver = None
     faraday_receiver_hz = None
+    faraday_receiver_hz_older = None
     faraday_initialization = None
     if magnetic_receiver_mode == "biot_current":
         H_old_receiver = _biot_savart_total_h_at_receiver(
@@ -7122,10 +7158,13 @@ def _run_fetd_forward_impl(
             faraday_step_record = evaluate_receivers(E_new, faraday_step_dbdt, msh, config)
             faraday_step_record["dBzdt_curl"] = float(faraday_step_record.get("dBzdt", np.nan))
             faraday_step_record["dBzdt_biot_rate"] = float("nan")
-            faraday_receiver_hz = _advance_faraday_receiver_hz(
+            faraday_receiver_hz, faraday_receiver_hz_older = _advance_faraday_receiver_hz_state(
                 previous_hz=float(faraday_receiver_hz),
+                older_hz=faraday_receiver_hz_older,
                 dbzdt_new=float(faraday_step_record["dBzdt"]),
                 dt=dt,
+                step_method="bdf2" if use_bdf2 else "backward_euler",
+                bdf2_coefficients=bdf2_coeffs,
             )
             faraday_step_record["Hz"] = float(faraday_receiver_hz)
 

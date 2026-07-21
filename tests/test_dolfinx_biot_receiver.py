@@ -291,6 +291,51 @@ def test_faraday_receiver_hz_update_uses_bdf2_coefficients():
     assert updated == pytest.approx((3.0 + 2.0 * 2.0 - 0.5 * 1.0) / 1.5)
 
 
+def test_bdf2_faraday_history_advances_initial_then_previous_state():
+    sp = _load_pipeline_module()
+    mu = 2.0e-6
+    initial_hz = 1.0
+    first_hz, older_hz = sp._advance_faraday_receiver_hz_state(
+        previous_hz=initial_hz,
+        older_hz=None,
+        dbzdt_new=2.0e-6,
+        dt=1.0,
+        step_method="backward_euler",
+        bdf2_coefficients=None,
+        mu=mu,
+    )
+    coefficients = sp._bdf2_step_coefficients(dt=1.0, previous_dt=1.0)
+
+    second_hz, next_older_hz = sp._advance_faraday_receiver_hz_state(
+        previous_hz=first_hz,
+        older_hz=older_hz,
+        dbzdt_new=4.0e-6,
+        dt=1.0,
+        step_method="bdf2",
+        bdf2_coefficients=coefficients,
+        mu=mu,
+    )
+
+    assert first_hz == pytest.approx(2.0)
+    assert older_hz == pytest.approx(initial_hz)
+    assert second_hz == pytest.approx((2.0 + 2.0 * first_hz - 0.5 * initial_hz) / 1.5)
+    assert next_older_hz == pytest.approx(first_hz)
+
+
+def test_bdf2_faraday_history_rejects_missing_older_state():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="requires older Hz and coefficients"):
+        sp._advance_faraday_receiver_hz_state(
+            previous_hz=1.0,
+            older_hz=None,
+            dbzdt_new=2.0e-6,
+            dt=1.0,
+            step_method="bdf2",
+            bdf2_coefficients=sp._bdf2_step_coefficients(dt=1.0, previous_dt=1.0),
+        )
+
+
 def test_faraday_receiver_hz_preserves_an_initial_constant_offset():
     sp = _load_pipeline_module()
 
