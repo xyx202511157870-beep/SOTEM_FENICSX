@@ -6039,6 +6039,38 @@ def _advance_faraday_receiver_hz(
     return float(previous_hz) + dt_value * float(dbzdt_new) / mu_value
 
 
+def _advance_faraday_receiver_hz_bdf2(
+    *,
+    previous_hz: float,
+    older_hz: float,
+    dbzdt_new: float,
+    coefficients: dict[str, float],
+    mu: float = 1.2566370614359173e-6,
+) -> float:
+    """Variable-step BDF2 receiver Hz update from dBz/dt = -curl(E)."""
+
+    mu_value = float(mu)
+    values = {
+        "previous_hz": float(previous_hz),
+        "older_hz": float(older_hz),
+        "dbzdt_new": float(dbzdt_new),
+        "lhs": float(coefficients["lhs"]),
+        "old": float(coefficients["old"]),
+        "older": float(coefficients["older"]),
+    }
+    if not math.isfinite(mu_value) or mu_value <= 0.0:
+        raise ValueError("mu must be positive")
+    if not all(math.isfinite(value) for value in values.values()):
+        raise ValueError("BDF2 Faraday state and coefficients must be finite")
+    if values["lhs"] <= 0.0:
+        raise ValueError("BDF2 Faraday lhs coefficient must be positive")
+    return (
+        values["dbzdt_new"] / mu_value
+        + values["old"] * values["previous_hz"]
+        + values["older"] * values["older_hz"]
+    ) / values["lhs"]
+
+
 def _biot_receiver_dbdt_from_h(h_new, h_old, *, dt: float, mu: float = 1.2566370614359173e-6):
     import numpy as np
 

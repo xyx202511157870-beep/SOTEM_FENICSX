@@ -276,6 +276,21 @@ def test_faraday_receiver_hz_update_uses_backward_euler_dbdt():
     assert updated == 2.5
 
 
+def test_faraday_receiver_hz_update_uses_bdf2_coefficients():
+    sp = _load_pipeline_module()
+    coefficients = sp._bdf2_step_coefficients(dt=1.0, previous_dt=1.0)
+
+    updated = sp._advance_faraday_receiver_hz_bdf2(
+        previous_hz=2.0,
+        older_hz=1.0,
+        dbzdt_new=6.0e-6,
+        coefficients=coefficients,
+        mu=2.0e-6,
+    )
+
+    assert updated == pytest.approx((3.0 + 2.0 * 2.0 - 0.5 * 1.0) / 1.5)
+
+
 def test_faraday_receiver_hz_preserves_an_initial_constant_offset():
     sp = _load_pipeline_module()
 
