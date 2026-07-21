@@ -2681,6 +2681,55 @@ def test_coordinated_formal_run_lock_broadcasts_root_acquisition_failure(
     assert peer_events == ["bcast:0"]
 
 
+def test_collective_root_call_runs_only_on_root_and_barriers_before_return():
+    sp = _load_pipeline_module()
+    root_events = []
+    root_comm = _RecordingComm(rank=0, size=8, events=root_events)
+
+    result = sp._collective_root_call(
+        root_comm,
+        lambda: root_events.append("action") or "root-result",
+    )
+
+    assert result == "root-result"
+    assert root_events == ["action", "bcast:0", "barrier"]
+
+    peer_events = []
+    peer_comm = _RecordingComm(
+        rank=5,
+        size=8,
+        events=peer_events,
+        root_payload=(True, ""),
+    )
+    result = sp._collective_root_call(
+        peer_comm,
+        lambda: pytest.fail("peer rank executed root action"),
+    )
+
+    assert result is None
+    assert peer_events == ["bcast:0", "barrier"]
+
+
+def test_collective_root_call_propagates_root_failure_to_peer():
+    sp = _load_pipeline_module()
+    message = "synthetic root-stage failure"
+    peer_events = []
+    peer_comm = _RecordingComm(
+        rank=2,
+        size=8,
+        events=peer_events,
+        root_payload=(False, message),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        sp._collective_root_call(
+            peer_comm,
+            lambda: pytest.fail("peer rank executed failed root action"),
+        )
+
+    assert peer_events == ["bcast:0"]
+
+
 def test_gather_receiver_sample_candidates_combines_nonempty_ranks_in_rank_order():
     sp = _load_pipeline_module()
     local = (
