@@ -1484,17 +1484,19 @@ def _dolfinx_companion_mesh_data(points, cell_blocks, cell_data, field_data) -> 
     }
 
 
-def _write_dolfinx_companion_mesh(config: PipelineConfig) -> Path:
+def _write_dolfinx_companion_mesh_from_paths(
+    source_path: Path,
+    companion_path: Path,
+) -> Path:
     import meshio
 
-    source_mesh = meshio.read(config.mesh_path())
+    source_mesh = meshio.read(source_path)
     compact = _dolfinx_companion_mesh_data(
         source_mesh.points,
         source_mesh.cells,
         source_mesh.cell_data,
         source_mesh.field_data,
     )
-    companion_path = config.dolfinx_mesh_path()
     meshio.write(
         companion_path,
         meshio.Mesh(**compact),
@@ -1502,6 +1504,13 @@ def _write_dolfinx_companion_mesh(config: PipelineConfig) -> Path:
         binary=True,
     )
     return companion_path
+
+
+def _write_dolfinx_companion_mesh(config: PipelineConfig) -> Path:
+    return _write_dolfinx_companion_mesh_from_paths(
+        config.mesh_path(),
+        config.dolfinx_mesh_path(),
+    )
 
 
 def _mesh_contract_identity(config: PipelineConfig) -> dict[str, Any]:
@@ -2007,9 +2016,12 @@ def _write_small_gmsh_terrain_leakage_mesh(mesh_path, *, mesh_size: float = 0.5)
     finally:
         gmsh.finalize()
 
+    companion_path = path.with_name(path.stem + ".dolfinx" + path.suffix)
+    _write_dolfinx_companion_mesh_from_paths(path, companion_path)
     elevations = list(top.values())
     return {
         "mesh_path": str(path),
+        "dolfinx_mesh_path": str(companion_path),
         "node_count": int(len(node_tags)),
         "cell_count": int(element_count),
         "terrain_elevation_min": float(min(elevations)),
