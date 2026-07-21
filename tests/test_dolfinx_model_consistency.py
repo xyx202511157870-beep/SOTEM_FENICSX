@@ -24,6 +24,30 @@ def _load_pipeline_module():
     return module
 
 
+def test_direct_pipeline_execution_bootstraps_checkout_src(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    module_path = root / "dolfinx" / "sotem_pipeline.py"
+    expected_package = (root / "src" / "atem3d").resolve()
+    code = (
+        "import runpy\n"
+        "from pathlib import Path\n"
+        f"runpy.run_path({str(module_path)!r})\n"
+        "import atem3d.sotem_acceptance as acceptance\n"
+        "print(Path(acceptance.__file__).resolve())\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert Path(completed.stdout.strip()).is_relative_to(expected_package)
+
+
 def test_default_model_consistency_reports_empymod_matching_depths_and_resistivity():
     sp = _load_pipeline_module()
 

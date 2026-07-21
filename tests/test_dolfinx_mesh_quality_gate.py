@@ -339,6 +339,37 @@ def test_physical_tag_counts_require_air_earth_outer_and_interface():
         )
 
 
+def test_physical_tag_counts_accept_empty_interior_rank_via_global_sum():
+    sp = _load_pipeline_module()
+
+    class Tags:
+        def __init__(self, values):
+            self.values = values
+
+        def find(self, tag):
+            return np.arange(self.values.get(tag, 0), dtype=np.int32)
+
+    class Comm:
+        def __init__(self):
+            self.global_counts = iter((50, 70, 11, 13))
+
+        def allreduce(self, _local_count):
+            return next(self.global_counts)
+
+    counts = sp._physical_tag_counts(
+        Tags({sp.PHYS_AIR: 5, sp.PHYS_EARTH: 7}),
+        Tags({sp.PHYS_OUTER: 0, sp.PHYS_SURFACE: 0}),
+        comm=Comm(),
+    )
+
+    assert counts == {
+        "air_cells": 50,
+        "earth_cells": 70,
+        "outer_boundary_facets": 11,
+        "air_earth_interface_facets": 13,
+    }
+
+
 def test_source_only_artifacts_include_mesh_quality_and_preflight(tmp_path):
     sp = _load_pipeline_module()
     quality = {

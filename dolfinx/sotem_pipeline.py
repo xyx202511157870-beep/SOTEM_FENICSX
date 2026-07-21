@@ -28,6 +28,15 @@ import time
 from typing import Any
 
 
+# Direct execution sets sys.path[0] to ``dolfinx/`` rather than the repository
+# root.  Put this checkout's src-layout package first so late runtime imports
+# resolve to the code being validated, even when the package is not installed.
+_CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_CHECKOUT_SRC = _CHECKOUT_ROOT / "src"
+if str(_CHECKOUT_SRC) not in sys.path:
+    sys.path.insert(0, str(_CHECKOUT_SRC))
+
+
 CORE_MODULES = ("dolfinx", "ufl", "basix", "mpi4py", "petsc4py")
 PIP_MODULES = {
     "gmsh": "gmsh",
@@ -2365,21 +2374,55 @@ def _quality_stat(values) -> dict[str, float | int]:
 
 
 def _summarize_tetra_cell_quality(msh, cells, *, selection_definition: str) -> dict[str, Any]:
+    import numpy as np
+
     unique_cells = sorted({int(cell) for cell in cells})
-    if not unique_cells:
-        raise RuntimeError(f"mesh-quality selection is empty: {selection_definition}")
-    rows = []
-    for cell in unique_cells:
+    index_map = msh.topology.index_map(msh.topology.dim)
+    global_cells = (
+        np.asarray(index_map.local_to_global(np.asarray(unique_cells, dtype=np.int32)), dtype=np.int64)
+        if unique_cells
+        else np.empty(0, dtype=np.int64)
+    )
+    local_rows = []
+    for cell, global_cell_value in zip(unique_cells, global_cells):
         try:
-            rows.append(_tetra_quality_metrics(_cell_geometry(msh, cell)))
+            metrics = _tetra_quality_metrics(_cell_geometry(msh, cell))
         except ValueError as exc:
             raise RuntimeError(
                 f"invalid tetrahedron in {selection_definition}: local cell {cell}: {exc}"
             ) from exc
+        global_cell = int(global_cell_value)
+        local_rows.append(
+            {
+                "owner_rank": int(msh.comm.rank),
+                "local_cell_id": int(cell),
+                "global_cell_id": global_cell,
+                "metrics": metrics,
+            }
+        )
+    gathered = msh.comm.allgather(local_rows)
+    distributed_rows = [row for rank_rows in gathered for row in rank_rows]
+    by_global_cell = {}
+    for row in distributed_rows:
+        global_cell = int(row["global_cell_id"])
+        by_global_cell.setdefault(global_cell, row)
+    selected_rows = [by_global_cell[key] for key in sorted(by_global_cell)]
+    if not selected_rows:
+        raise RuntimeError(f"mesh-quality selection is empty: {selection_definition}")
+    rows = [row["metrics"] for row in selected_rows]
     return {
         "selection_definition": selection_definition,
-        "selection_count": int(len(unique_cells)),
+        "selection_count": int(len(selected_rows)),
         "local_cell_ids": unique_cells,
+        "global_cell_ids": [int(row["global_cell_id"]) for row in selected_rows],
+        "distributed_cells": [
+            {
+                "owner_rank": int(row["owner_rank"]),
+                "local_cell_id": int(row["local_cell_id"]),
+                "global_cell_id": int(row["global_cell_id"]),
+            }
+            for row in selected_rows
+        ],
         "quality_3r_over_R": _quality_stat([row["quality_3r_over_R"] for row in rows]),
         "aspect_R_over_3r": _quality_stat([row["aspect_R_over_3r"] for row in rows]),
         "volume_m3": _quality_stat([row["volume"] for row in rows]),
@@ -2483,18 +2526,44 @@ def diagnose_local_mesh_quality(msh, config: PipelineConfig, source_info) -> dic
     import numpy as np
 
     local = _source_local_projection_diagnostics_from_info(source_info)
-    source_cells = local.get("unique_hit_cell_ids", ()) if isinstance(local, dict) else ()
-    if not source_cells:
+    source_cells = (
+        source_info.get("quality_local_cell_ids", ())
+        if isinstance(source_info, dict)
+        else ()
+    )
+    if not source_cells and int(msh.comm.size) == 1 and isinstance(local, dict):
+        source_cells = local.get("unique_hit_cell_ids", ())
+    if _collective_entity_count(msh.comm, len(source_cells)) == 0:
         raise RuntimeError("source local diagnostics do not identify actual quadrature hit cells")
 
     receiver_point = np.asarray(config.receiver, dtype=float)
-    receiver_cells = [int(cell) for cell in _find_cells_for_point(msh, receiver_point)]
+    owned_cells = int(msh.topology.index_map(msh.topology.dim).size_local)
+    receiver_cells = [
+        int(cell)
+        for cell in _find_cells_for_point(msh, receiver_point)
+        if int(cell) < owned_cells
+    ]
+    global_receiver_collision_count = _collective_entity_count(
+        msh.comm, len(receiver_cells)
+    )
     receiver_mode = "colliding"
-    if not receiver_cells:
+    if global_receiver_collision_count == 0:
         centers = _cell_centers(msh)
-        if centers.shape[0] == 0:
+        distances = np.linalg.norm(centers - receiver_point, axis=1)
+        local_candidate = (
+            (
+                float(np.min(distances)),
+                int(msh.comm.rank),
+                int(np.argmin(distances)),
+            )
+            if centers.shape[0] > 0
+            else (math.inf, int(msh.comm.rank), -1)
+        )
+        candidates = msh.comm.allgather(local_candidate)
+        winner = min(candidates)
+        if not math.isfinite(float(winner[0])) or int(winner[2]) < 0:
             raise RuntimeError("cannot select a receiver quality cell from an empty mesh")
-        receiver_cells = [int(np.argmin(np.linalg.norm(centers - receiver_point, axis=1)))]
+        receiver_cells = [int(winner[2])] if int(winner[1]) == int(msh.comm.rank) else []
         receiver_mode = "nearest_center"
     interface_cells = _interface_source_receiver_patch_cells(msh, config)
     summary = {
@@ -2507,7 +2576,11 @@ def diagnose_local_mesh_quality(msh, config: PipelineConfig, source_info) -> dic
         },
         "receiver": {
             "point": [float(value) for value in receiver_point],
-            "colliding_cell_count": int(len(receiver_cells)) if receiver_mode == "colliding" else 0,
+            "colliding_cell_count": (
+                int(global_receiver_collision_count)
+                if receiver_mode == "colliding"
+                else 0
+            ),
             "selection_mode": receiver_mode,
             "selected_local_cell_ids": receiver_cells,
         },
@@ -3218,6 +3291,7 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
             "mode": "manual_line",
             "coeff": None,
             "vector": source_vec,
+            "quality_local_cell_ids": [],
             "local_projection_diagnostics": local_diagnostics,
         }
     for interval in intervals:
@@ -3351,6 +3425,9 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
         "mode": "manual_line",
         "coeff": None,
         "vector": source_vec,
+        "quality_local_cell_ids": sorted(
+            {int(interval["cell"]) for interval in intervals}
+        ),
         "local_projection_diagnostics": local_diagnostics,
     }
 
@@ -3629,6 +3706,38 @@ def _build_regularized_current_density(msh, spaces: dict[str, Any], config: Pipe
     return source_coeff
 
 
+def _collective_entity_count(comm, local_count: int) -> int:
+    """Return an entity count over all ranks, including empty interior ranks."""
+
+    return int(comm.allreduce(int(local_count)))
+
+
+def _collective_boundary_dof_closure(comm, index_map, local_dofs):
+    """Add every local ghost copy of boundary dofs found on another rank.
+
+    DOLFINx 0.8 can spend many minutes in the default ``remote=True`` path for
+    high-order Nedelec spaces.  A local topological lookup followed by one
+    global-id exchange preserves the remote closure without that slow path.
+    """
+
+    import numpy as np
+
+    local = np.unique(np.asarray(local_dofs, dtype=np.int32))
+    if int(comm.size) == 1:
+        return local
+
+    local_global = np.asarray(index_map.local_to_global(local))
+    gathered = comm.allgather(local_global)
+    nonempty = [np.asarray(values) for values in gathered if len(values)]
+    if not nonempty:
+        return np.empty(0, dtype=np.int32)
+    boundary_global = np.unique(np.concatenate(nonempty))
+    local_size = int(index_map.size_local) + int(index_map.num_ghosts)
+    all_local = np.arange(local_size, dtype=np.int32)
+    all_global = np.asarray(index_map.local_to_global(all_local))
+    return np.flatnonzero(np.isin(all_global, boundary_global)).astype(np.int32)
+
+
 def _make_zero_tangential_bc(msh, spaces: dict[str, Any], facet_tags, config: PipelineConfig):
     import numpy as np
     from dolfinx import fem
@@ -3638,14 +3747,50 @@ def _make_zero_tangential_bc(msh, spaces: dict[str, Any], facet_tags, config: Pi
     if boundary_mode in {"natural", "robin"}:
         log(f"[bc] {boundary_mode} outer boundary: no strong tangential E constraint applied", comm=msh.comm)
         return None, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+    stage_started = time.perf_counter()
     facets = facet_tags.find(PHYS_OUTER)
-    if len(facets) == 0:
+    global_facet_count = _collective_entity_count(msh.comm, len(facets))
+    log(
+        f"[bc:timing] located tagged outer facets(local)={len(facets)}, "
+        f"global_sum={global_facet_count} "
+        f"in {time.perf_counter() - stage_started:.3f} s",
+        comm=msh.comm,
+    )
+    if global_facet_count == 0:
         raise RuntimeError("facet tags must include outer boundary=201")
-    dofs = fem.locate_dofs_topological(V, msh.topology.dim - 1, facets)
+    stage_started = time.perf_counter()
+    local_dofs = fem.locate_dofs_topological(
+        V,
+        msh.topology.dim - 1,
+        facets,
+        remote=False,
+    )
+    log(
+        f"[bc:timing] located topological boundary dofs without remote closure(local)={len(local_dofs)} "
+        f"in {time.perf_counter() - stage_started:.3f} s",
+        comm=msh.comm,
+    )
+    stage_started = time.perf_counter()
+    dofs = _collective_boundary_dof_closure(
+        msh.comm,
+        V.dofmap.index_map,
+        local_dofs,
+    )
+    log(
+        f"[bc:timing] completed collective boundary dof closure(local)={len(dofs)} "
+        f"in {time.perf_counter() - stage_started:.3f} s",
+        comm=msh.comm,
+    )
     dofs = np.unique(dofs.astype(np.int32))
+    stage_started = time.perf_counter()
     zero = fem.Function(V)
     bc = fem.dirichletbc(zero, dofs)
     global_dofs = V.dofmap.index_map.local_to_global(dofs).astype(np.int32)
+    log(
+        f"[bc:timing] constructed boundary function, BC, and global dof map "
+        f"in {time.perf_counter() - stage_started:.3f} s",
+        comm=msh.comm,
+    )
     log(f"[bc] E x n = 0 on outer boundary facets={len(facets)}, dofs(local)={len(dofs)}", comm=msh.comm)
     return bc, dofs, global_dofs
 
@@ -3687,9 +3832,10 @@ def _zero_rows_columns(A, global_dofs, diag: float = 1.0) -> None:
 def _zero_rhs_entries(vec, global_dofs) -> None:
     import numpy as np
 
-    if len(global_dofs) == 0:
-        return
-    vec.setValues(global_dofs, np.zeros(len(global_dofs), dtype=float))
+    if len(global_dofs) > 0:
+        vec.setValues(global_dofs, np.zeros(len(global_dofs), dtype=float))
+    # PETSc Vec assembly is collective.  Interior MPI ranks can have no local
+    # boundary dofs but must still participate with boundary-owning ranks.
     vec.assemble()
 
 
@@ -4252,10 +4398,16 @@ def _validate_source_after_boundary_elimination(
             msh.topology.dim - 1,
             lambda x: np.ones(x.shape[1], dtype=bool),
         )
-        boundary_scalar_dofs = np.unique(
-            fem.locate_dofs_topological(
-                S, msh.topology.dim - 1, boundary_facets
-            ).astype(np.int32)
+        local_boundary_scalar_dofs = fem.locate_dofs_topological(
+            S,
+            msh.topology.dim - 1,
+            boundary_facets,
+            remote=False,
+        )
+        boundary_scalar_dofs = _collective_boundary_dof_closure(
+            msh.comm,
+            S.dofmap.index_map,
+            local_boundary_scalar_dofs,
         )
         constant_constraint_dofs = np.empty(0, dtype=np.int32)
         constraint_space = "S0"
@@ -6083,11 +6235,13 @@ def _tetrahedron_quadrature_geometry(msh, *, degree: int = 4):
     import numpy as np
 
     tdim = msh.topology.dim
-    msh.topology.create_connectivity(tdim, 0)
-    cell_to_vertex = msh.topology.connectivity(tdim, 0)
     n_cells = msh.topology.index_map(tdim).size_local
+    geometry_dofmap = np.asarray(msh.geometry.dofmap)
     vertices = np.stack(
-        [np.asarray(msh.geometry.x[cell_to_vertex.links(cell)], dtype=float) for cell in range(n_cells)]
+        [
+            np.asarray(msh.geometry.x[geometry_dofmap[cell]], dtype=float)
+            for cell in range(n_cells)
+        ]
     )
     if vertices.shape != (n_cells, 4, 3):
         raise ValueError("Biot-Savart tetrahedron quadrature requires four vertices per cell")
@@ -6108,6 +6262,37 @@ def _tetrahedron_quadrature_geometry(msh, *, degree: int = 4):
     cells = np.repeat(np.arange(n_cells, dtype=np.int32), qpoints.shape[0])
     weights = (determinants[:, None] * qweights[None, :]).reshape(-1)
     return physical_points.reshape(-1, 3), cells, weights
+
+
+def _collective_vector_sum(comm, local_values):
+    """Sum a small real vector over ranks and return it on every rank."""
+
+    import numpy as np
+
+    local = np.asarray(local_values, dtype=float)
+    if int(comm.size) == 1:
+        return local.copy()
+    return np.asarray(comm.allreduce(local), dtype=float)
+
+
+def _dg0_values_at_cells(function, cells):
+    """Evaluate a scalar DG0 function using its cell-to-dof map."""
+
+    import numpy as np
+
+    cell_array = np.asarray(cells, dtype=np.int32)
+    dofmap = function.function_space.dofmap
+    if int(dofmap.bs) != 1:
+        raise ValueError("scalar DG0 cell lookup requires block size 1")
+    unique_cells, inverse = np.unique(cell_array, return_inverse=True)
+    dofs = []
+    for cell in unique_cells:
+        cell_dofs = np.asarray(dofmap.cell_dofs(int(cell)), dtype=np.int32)
+        if cell_dofs.size != 1:
+            raise ValueError("scalar DG0 must have exactly one dof per cell")
+        dofs.append(int(cell_dofs[0]))
+    unique_values = np.asarray(function.x.array, dtype=float)[np.asarray(dofs, dtype=np.int32)]
+    return unique_values[inverse]
 
 
 def _biot_savart_cell_current_h_at_receiver(
@@ -6138,10 +6323,11 @@ def _biot_savart_cell_current_h_at_receiver(
         sigma_source = materials.get("sigma_infinity_physical", materials["sigma_infinity"])
     else:
         sigma_source = materials.get("sigma_physical", materials["sigma"])
-    sigma = np.asarray(sigma_source.x.array, dtype=float)[cells]
+    sigma = _dg0_values_at_cells(sigma_source, cells)
     if use_debye_current:
         delta_values = [
-            np.asarray(delta_fn.x.array, dtype=float)[cells] for delta_fn in debye["delta_functions"]
+            _dg0_values_at_cells(delta_fn, cells)
+            for delta_fn in debye["delta_functions"]
         ]
         memory_values = [
             np.asarray(memory.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
@@ -6164,7 +6350,8 @@ def _biot_savart_cell_current_h_at_receiver(
                 axis=0,
             )
         h_values.append(h)
-    return np.mean(np.vstack(h_values), axis=0)
+    local_mean = np.mean(np.vstack(h_values), axis=0)
+    return _collective_vector_sum(msh.comm, local_mean)
 
 
 def _biot_savart_line_h_at_receiver(config: PipelineConfig, *, current: float, n_quad: int = 201):
@@ -9504,13 +9691,18 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _physical_tag_counts(cell_tags, facet_tags) -> dict[str, int]:
+def _physical_tag_counts(cell_tags, facet_tags, *, comm=None) -> dict[str, int]:
     counts = {
         "air_cells": int(len(cell_tags.find(PHYS_AIR))),
         "earth_cells": int(len(cell_tags.find(PHYS_EARTH))),
         "outer_boundary_facets": int(len(facet_tags.find(PHYS_OUTER))),
         "air_earth_interface_facets": int(len(facet_tags.find(PHYS_SURFACE))),
     }
+    if comm is not None:
+        counts = {
+            name: _collective_entity_count(comm, count)
+            for name, count in counts.items()
+        }
     missing = [name for name, count in counts.items() if count <= 0]
     if missing:
         raise RuntimeError(
@@ -9563,7 +9755,7 @@ def _pre_forward_diagnostics(
         "mesh_generator_version": MESH_GENERATOR_CONTRACT_VERSION,
         "mesh_sha256": _sha256_path(config.mesh_path()),
         "dolfinx_mesh_sha256": _sha256_path(config.dolfinx_mesh_path()),
-        "physical_tags": _physical_tag_counts(cell_tags, facet_tags),
+        "physical_tags": _physical_tag_counts(cell_tags, facet_tags, comm=msh.comm),
         "mesh_statistics": mesh_stats,
         "memory": memory,
         "global_cells": global_cells,

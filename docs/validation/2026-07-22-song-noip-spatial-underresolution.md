@@ -142,3 +142,65 @@ The regression test reproduces the production time steps.  Replaying the 88
 baseline step signatures predicts 51 cache reuses instead of 17, without
 changing any matrix coefficients, right-hand sides, fields or acceptance
 criteria.
+
+## Receiver-10 m first-observation rerun
+
+The next single-variable run reduced `receiver_mesh_size` from 20 m to 10 m
+and retained the original factor-0 diffusion box.  It completed the 10 us
+observation on one MPI rank with 97,303 tetrahedra and 630,562 global
+Nedelec-order-2 degrees of freedom:
+
+```text
+/home/paidaxin/codex-sotem-song-p2-rx10-first1-06b5437/
+song-noip-rx10-first1
+```
+
+The solve took 47:34.66 wall time.  The formal-component errors against the
+finite-source empymod reference were:
+
+| Component | Receiver-20 m baseline | Receiver-10 m rerun |
+| --- | ---: | ---: |
+| Ex | 2.362747% | 1.731027% |
+| Hz | 0.060523% | 0.040424% |
+| dBz/dt | 1.489341% | 2.140215% |
+
+The Ex and Hz errors improved, whereas dBz/dt changed non-monotonically but
+remained below the unchanged 5% gate.  This is one 10 us smoke observation,
+not evidence for the requested full time window.
+
+## Four-rank MPI equivalence and performance
+
+The first four-rank attempt exposed MPI-only defects rather than a physics
+change: ranks without local boundary facets skipped collective work, PETSc
+vector assembly was not called by empty ranks, diagnostics treated local tag
+counts as global counts, and the Biot-Savart quadrature indexed distributed
+geometry with topology vertex ids.  The last issue corrupted the Faraday
+initial constant while leaving Ex and dBz/dt nearly unchanged.  The corrected
+quadrature uses the geometry dofmap, and all small-vector Biot contributions
+are summed across ranks.
+
+A strict four-rank BDF2 rerun used the same physical model, mesh, 16 internal
+steps and one 10 us observation as the serial receiver-10 m case:
+
+```text
+/home/paidaxin/codex-sotem-song-p2-rx10-first1-mpi4-srcboot/
+song-noip-rx10-first1-mpi4-geomfix-bdf2
+```
+
+The corrected initial `Hz` differs from the serial value by
+`8.25e-13` relatively.  Final serial-versus-four-rank response differences
+are numerical parallel-reduction effects only:
+
+| Component | Serial | Four ranks | Relative difference |
+| --- | ---: | ---: | ---: |
+| Ex | 9.0856304916e-4 | 9.0856216701e-4 | 9.7093e-7 |
+| Ey (diagnostic only) | -2.5238601907e-5 | -2.5239173812e-5 | 2.2660e-5 |
+| Hz | -2.2163665220e-3 | -2.2163665343e-3 | 5.5454e-9 |
+| dBz/dt | 4.3887338181e-6 | 4.3887318274e-6 | 4.5360e-7 |
+
+The four-rank run took 15:47.00 wall time with 399% CPU utilization, compared
+with 47:34.66 serial, for a 3.014x measured speedup.  `/usr/bin/time` reported
+a 2.48 GB maximum resident set and no swapping for the MPI launcher process.
+This establishes a usable four-core path for subsequent local validation, but
+does not change the failed/incomplete status of the 1 s no-IP window or the
+still-pending IP validation.

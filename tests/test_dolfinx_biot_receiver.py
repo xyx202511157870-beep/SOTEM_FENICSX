@@ -158,7 +158,14 @@ def test_cell_current_biot_uses_configured_tetrahedron_quadrature(monkeypatch):
         def index_map(self, _dim):
             return IndexMap()
 
-    mesh = SimpleNamespace(topology=Topology(), geometry=SimpleNamespace(x=vertices))
+    mesh = SimpleNamespace(
+        comm=SimpleNamespace(size=1),
+        topology=Topology(),
+        geometry=SimpleNamespace(
+            x=vertices,
+            dofmap=np.arange(4, dtype=np.int32).reshape(1, 4),
+        ),
+    )
     monkeypatch.setattr(
         sp,
         "_cell_centers_radii_volumes",
@@ -176,7 +183,16 @@ def test_cell_current_biot_uses_configured_tetrahedron_quadrature(monkeypatch):
                 (1.0 + points[:, 0], 2.0 - 0.5 * points[:, 1], points[:, 2])
             )
 
-    sigma = SimpleNamespace(x=SimpleNamespace(array=np.asarray([2.0])))
+    class DofMap:
+        bs = 1
+
+        def cell_dofs(self, cell):
+            return np.asarray([cell], dtype=np.int32)
+
+    sigma = SimpleNamespace(
+        x=SimpleNamespace(array=np.asarray([2.0])),
+        function_space=SimpleNamespace(dofmap=DofMap()),
+    )
     config = sp.PipelineConfig(
         receiver=(2.0, 3.0, 4.0),
         receiver_type="point",
