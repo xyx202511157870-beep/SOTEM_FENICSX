@@ -2608,6 +2608,109 @@ def test_coordinated_formal_run_lock_broadcasts_root_acquisition_failure(
     assert peer_events == ["bcast:0"]
 
 
+def test_gather_receiver_sample_candidates_combines_nonempty_ranks_in_rank_order():
+    sp = _load_pipeline_module()
+    local = (
+        np.asarray([[1.0, 2.0, 3.0]]),
+        np.asarray([[10.0, 20.0, 30.0]]),
+        np.asarray([[0.0, 0.0, -1.0]]),
+    )
+    empty = (
+        np.empty((0, 3)),
+        np.empty((0, 3)),
+        np.empty((0, 3)),
+    )
+    remote = (
+        np.asarray([[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]),
+        np.asarray([[40.0, 50.0, 60.0], [70.0, 80.0, 90.0]]),
+        np.asarray([[1.0, 0.0, -2.0], [2.0, 0.0, -3.0]]),
+    )
+    comm = SimpleNamespace(size=3, allgather=lambda _payload: [local, empty, remote])
+
+    electric, magnetic_rate, centers = sp._gather_receiver_sample_candidates(
+        comm,
+        *local,
+    )
+
+    np.testing.assert_array_equal(
+        electric,
+        np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]),
+    )
+    np.testing.assert_array_equal(
+        magnetic_rate,
+        np.asarray([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0], [70.0, 80.0, 90.0]]),
+    )
+    np.testing.assert_array_equal(
+        centers,
+        np.asarray([[0.0, 0.0, -1.0], [1.0, 0.0, -2.0], [2.0, 0.0, -3.0]]),
+    )
+
+
+def test_gather_receiver_sample_candidates_serial_path_does_not_call_allgather():
+    sp = _load_pipeline_module()
+    electric = np.asarray([[1.0, 2.0, 3.0]])
+    magnetic_rate = np.asarray([[4.0, 5.0, 6.0]])
+    comm = SimpleNamespace(
+        size=1,
+        allgather=lambda _payload: pytest.fail("serial receiver path called allgather"),
+    )
+
+    gathered = sp._gather_receiver_sample_candidates(
+        comm,
+        electric,
+        magnetic_rate,
+        None,
+    )
+
+    np.testing.assert_array_equal(gathered[0], electric)
+    np.testing.assert_array_equal(gathered[1], magnetic_rate)
+    assert gathered[2] is None
+
+
+def test_receiver_excludes_ghost_cells_before_candidate_collapse(monkeypatch):
+    sp = _load_pipeline_module()
+    evaluated_cells = []
+
+    class FakeField:
+        def __init__(self, scale):
+            self.scale = float(scale)
+
+        def eval(self, _points, cells):
+            cell_array = np.asarray(cells, dtype=int)
+            evaluated_cells.append(cell_array.tolist())
+            return np.column_stack(
+                [
+                    self.scale * (cell_array + 1),
+                    self.scale * (cell_array + 2),
+                    self.scale * (cell_array + 3),
+                ]
+            )
+
+    index_map = SimpleNamespace(size_local=2)
+    msh = SimpleNamespace(
+        comm=SimpleNamespace(size=1, rank=0),
+        topology=SimpleNamespace(dim=3, index_map=lambda _dim: index_map),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_find_cells_for_point",
+        lambda _msh, _point: np.asarray([0, 2], dtype=np.int32),
+    )
+
+    record = sp.evaluate_receivers(
+        FakeField(1.0),
+        FakeField(10.0),
+        msh,
+        sp.PipelineConfig(receiver_evaluation_mode="median"),
+    )
+
+    assert evaluated_cells == [[0], [0]]
+    assert record["Ex"] == pytest.approx(1.0)
+    assert record["Ey"] == pytest.approx(2.0)
+    assert record["dBzdt"] == pytest.approx(30.0)
+    assert record["candidate_count_max"] == 1
+
+
 def test_mesh_source_and_formal_cli_writers_reject_competing_process(tmp_path):
     sp = _load_pipeline_module()
     pipeline_path = Path(__file__).resolve().parents[1] / "dolfinx" / "sotem_pipeline.py"
