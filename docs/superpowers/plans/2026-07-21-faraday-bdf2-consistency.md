@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Advance receiver `Hz` with the same variable-step BDF2 formula used by the electric-field solve so no-IP BDF2 validation is discretely consistent.
+**Goal:** Advance receiver `Hz` with the same variable-step BDF2 formula used by the electric-field solve, after a backward-Euler warmup through the first observation, so no-IP BDF2 validation is both discretely consistent and startup-stable.
 
-**Architecture:** Add one pure BDF2 Faraday recurrence beside the existing backward-Euler helper, then retain one older receiver state in the existing FETD loop.  The startup step and all backward-Euler/Cole--Cole paths remain unchanged; BDF2 resume remains rejected by the existing configuration gate.
+**Architecture:** Add one pure BDF2 Faraday recurrence beside the existing backward-Euler helper, retain one older receiver state in the existing FETD loop, and isolate the backward-Euler-to-BDF2 switch in a pure selector.  A BDF2-requested run uses backward Euler through its first reported observation and switches both electric and Faraday states on the next internal step.  All backward-Euler/Cole--Cole paths remain unchanged; BDF2 resume remains rejected by the existing configuration gate.
 
 **Tech Stack:** Python, NumPy, pytest, DOLFINx/PETSc in WSL, empymod validation artifacts.
 
@@ -227,3 +227,111 @@ At each checkpoint, load `forward_partial.npz` and the existing independent empy
 - [ ] **Step 5: Apply the no-IP gate**
 
 Only a complete 51-time artifact with all three formal components below 5%, converged solvers, valid provenance, and no non-finite values passes.  If it passes, run the prepared current-version SimPEG `S0T2B0` no-IP case.  If it fails, preserve the evidence and return to spatial/time convergence diagnosis; do not launch IP.
+
+### Task 4: Replace the disproved single-step BDF2 startup
+
+**Files:**
+- Modify: `tests/test_dolfinx_model_consistency.py`
+- Modify: `dolfinx/sotem_pipeline.py`
+- Verify: `docs/superpowers/specs/2026-07-21-faraday-bdf2-consistency-design.md`
+
+- [ ] **Step 1: Write the failing startup-boundary test**
+
+```python
+def test_bdf2_starts_after_first_output_step():
+    sp = _load_pipeline_module()
+
+    assert not sp._should_use_bdf2_step(
+        time_method="bdf2", step=0, first_output_step=15
+    )
+    assert not sp._should_use_bdf2_step(
+        time_method="bdf2", step=15, first_output_step=15
+    )
+    assert sp._should_use_bdf2_step(
+        time_method="bdf2", step=16, first_output_step=15
+    )
+    assert not sp._should_use_bdf2_step(
+        time_method="theta", step=16, first_output_step=15
+    )
+```
+
+- [ ] **Step 2: Run the test and verify RED**
+
+Run in WSL:
+
+```bash
+cd /home/paidaxin/codex-worktree-live-lei
+PYTHONPATH="$PWD/src:$PWD" /home/paidaxin/miniconda3/envs/fenicsx/bin/python \
+  -m pytest tests/test_dolfinx_model_consistency.py::test_bdf2_starts_after_first_output_step -q
+```
+
+Expected: FAIL with `AttributeError` for the missing selector.
+
+- [ ] **Step 3: Implement the pure selector and wire the loop**
+
+Add beside the time-step coefficient helpers:
+
+```python
+def _should_use_bdf2_step(
+    *, time_method: str, step: int, first_output_step: int
+) -> bool:
+    """Return whether a step is past the backward-Euler startup interval."""
+
+    return (
+        str(time_method).strip().lower() == "bdf2"
+        and int(step) > int(first_output_step)
+    )
+```
+
+Before the loop, derive:
+
+```python
+first_output_step = int(schedule["output_step_indices"][0])
+```
+
+Replace the current BDF2 selection predicate with:
+
+```python
+use_bdf2 = (
+    _should_use_bdf2_step(
+        time_method=time_method,
+        step=step,
+        first_output_step=first_output_step,
+    )
+    and E_older is not None
+    and previous_step_dt is not None
+)
+```
+
+This keeps both histories advancing during the warmup and prevents any BDF2
+step until the first reported observation has been produced.
+
+- [ ] **Step 4: Verify GREEN and focused regressions**
+
+Run in WSL:
+
+```bash
+cd /home/paidaxin/codex-worktree-live-lei
+PYTHONPATH="$PWD/src:$PWD" /home/paidaxin/miniconda3/envs/fenicsx/bin/python \
+  -m pytest tests/test_dolfinx_model_consistency.py \
+  tests/test_dolfinx_biot_receiver.py \
+  tests/test_dolfinx_partial_forward.py \
+  tests/test_dolfinx_transient_operator_cache.py -q
+```
+
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit the startup fix**
+
+```bash
+git add tests/test_dolfinx_model_consistency.py dolfinx/sotem_pipeline.py
+git commit -m "fix: damp BDF2 through first observation"
+```
+
+- [ ] **Step 6: Rerun only through the first observation before committing to a full solve**
+
+Launch the unchanged no-IP P2/T4 case in a fresh external run root with
+`TIME_METHOD=bdf2`.  Stop and preserve evidence if the first-observation
+formal errors do not return to the established backward-Euler neighborhood
+(`Ex` about 2.36%, `Hz` about 0.06%, `dBzdt` about 1.49%).  Continue the full
+51-time solve only if this startup gate succeeds.  Do not launch IP.

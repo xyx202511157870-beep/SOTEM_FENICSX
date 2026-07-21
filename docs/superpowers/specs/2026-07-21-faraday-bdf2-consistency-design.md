@@ -13,14 +13,26 @@ magnetic state updates discretely inconsistent.
 ## Decision
 
 Use the existing variable-step BDF2 coefficients for both the electric-field
-equation and the receiver Faraday state.  Keep the first step as the existing
-backward-Euler startup step.  Keep all backward-Euler and Cole--Cole behavior
-unchanged; Cole--Cole remains restricted to backward Euler.
+equation and the receiver Faraday state.  Use backward Euler through the first
+reported observation, then switch both states to BDF2 on the following
+internal step.  Keep all backward-Euler and Cole--Cole behavior unchanged;
+Cole--Cole remains restricted to backward Euler.
+
+This longer startup replaces the original single-step startup after runtime
+validation disproved that assumption.  On the unchanged Song no-IP P2/T4
+case, backward Euler gave first-observation relative errors of 2.36% in `Ex`,
+0.06% in `Hz`, and 1.49% in `dBzdt`; BDF2 after only one backward-Euler step
+gave 78.72%, 0.61%, and 52.23%, respectively.  The magnetic initial field
+remained accurate, while the electric and derivative responses overshot.
+This identifies startup damping, not the Faraday recurrence or `H0`, as the
+remaining first-observation defect.
 
 Alternatives rejected for this validation cycle:
 
-- Increasing backward Euler from T4 to T16 is scientifically valid but costs
-  roughly four times as many solves and remains first order.
+- Increasing backward Euler from T4 to T16 for the whole time window is
+  scientifically valid but costs roughly four times as many solves and remains
+  first order.  The selected warmup pays this damping cost only before the
+  first reported observation.
 - Crank--Nicolson would also require a matching trapezoidal Faraday update and
   is more exposed to step-off startup oscillations.  It is not the selected
   production validation path.
@@ -40,16 +52,20 @@ where the helper returns `lhs=alpha0`, `old=beta1`, and `older=beta2`
 H_n = (dBdt_n / mu + old * H_(n-1) + older * H_(n-2)) / lhs
 ```
 
-The forward loop retains the previous two receiver `Hz` states whenever
-`time_method=bdf2`.  Step zero uses the existing backward-Euler update; after
-that step the initial `H0` becomes the older state.  BDF2 checkpoint resume
-remains prohibited by the existing model-consistency gate, so no checkpoint
-schema change is required.
+The forward loop retains the previous two electric and receiver `Hz` states
+whenever `time_method=bdf2`.  Let `first_output_step` be the first entry of
+`schedule["output_step_indices"]`.  Steps satisfying
+`step <= first_output_step` use backward Euler.  BDF2 begins only when
+`step > first_output_step` and complete older-state/time-step history exists.
+For the current schedule, steps 0--15 are backward Euler and step 16 is the
+first BDF2 step.  BDF2 checkpoint resume remains prohibited by the existing
+model-consistency gate, so no checkpoint schema change is required.
 
 ## Failure handling and provenance
 
 - Reject non-finite/non-positive permeability and incomplete BDF2 state.
-- Do not fall back silently from BDF2 to backward Euler after startup.
+- Do not fall back silently from BDF2 to backward Euler after the scheduled
+  warmup.
 - Continue logging the actual per-step time method and coefficients through
   the existing solver metadata.
 - Preserve the failed BE/T4 artifacts and do not alter error thresholds,
@@ -57,8 +73,9 @@ schema change is required.
 
 ## Verification
 
-1. Add a unit test that requests a BDF2 Faraday update and currently fails
-   because the helper/API does not exist.
+1. Add a unit test for the startup selector: BDF2 is disabled through the
+   first output step, enabled on the following step, and never enabled for a
+   theta run.
 2. Verify the constant-step BDF2 recurrence against its closed-form value.
 3. Verify invalid or incomplete BDF2 history is rejected.
 4. Run the focused Faraday, model-consistency, partial-forward, and operator
