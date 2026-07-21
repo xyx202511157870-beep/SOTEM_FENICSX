@@ -2247,14 +2247,13 @@ def _cell_centers(msh):
     import numpy as np
 
     tdim = msh.topology.dim
-    msh.topology.create_connectivity(tdim, 0)
-    c_to_v = msh.topology.connectivity(tdim, 0)
     geometry = msh.geometry.x
+    geometry_dofmap = msh.geometry.dofmap
     n_local = msh.topology.index_map(tdim).size_local
     centers = np.zeros((n_local, 3), dtype=float)
     for cell in range(n_local):
-        vertices = c_to_v.links(cell)
-        centers[cell] = geometry[vertices].mean(axis=0)
+        geometry_dofs = np.asarray(geometry_dofmap[cell], dtype=int)
+        centers[cell] = geometry[geometry_dofs].mean(axis=0)
     return centers
 
 
@@ -2262,16 +2261,15 @@ def _cell_centers_radii_volumes(msh):
     import numpy as np
 
     tdim = msh.topology.dim
-    msh.topology.create_connectivity(tdim, 0)
-    c_to_v = msh.topology.connectivity(tdim, 0)
     geometry = msh.geometry.x
+    geometry_dofmap = msh.geometry.dofmap
     n_local = msh.topology.index_map(tdim).size_local
     centers = np.zeros((n_local, 3), dtype=float)
     radii = np.zeros(n_local, dtype=float)
     volumes = np.zeros(n_local, dtype=float)
     for cell in range(n_local):
-        vertices = c_to_v.links(cell)
-        coords = geometry[vertices]
+        geometry_dofs = np.asarray(geometry_dofmap[cell], dtype=int)
+        coords = geometry[geometry_dofs]
         center = coords.mean(axis=0)
         centers[cell] = center
         radii[cell] = float(np.max(np.linalg.norm(coords - center, axis=1)))
@@ -2282,10 +2280,10 @@ def _cell_centers_radii_volumes(msh):
 
 
 def _cell_geometry(msh, cell: int):
-    tdim = msh.topology.dim
-    msh.topology.create_connectivity(tdim, 0)
-    vertices = msh.topology.connectivity(tdim, 0).links(cell)
-    return msh.geometry.x[vertices]
+    import numpy as np
+
+    geometry_dofs = np.asarray(msh.geometry.dofmap[int(cell)], dtype=int)
+    return msh.geometry.x[geometry_dofs]
 
 
 def _tetra_quality_metrics(vertices) -> dict[str, float]:
