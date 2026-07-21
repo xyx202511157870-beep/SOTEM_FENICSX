@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -99,6 +100,30 @@ def test_total_biot_h_components_keep_conductive_and_wire_fields_separate(monkey
         "source_current": 10.0,
         "magnetic_recovery_quadrature_degree": 8,
     }
+
+
+def test_faraday_initialization_is_persisted_as_a_structured_artifact(tmp_path):
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        workdir=tmp_path,
+        magnetic_receiver_mode="faraday_integrated",
+        magnetic_recovery_quadrature_degree=8,
+        magnetic_recovery_quadrature_audit_degrees=(2, 4, 6, 8, 10),
+    )
+    metadata = {
+        "method": "biot_savart_total_current",
+        "initial_hz": -0.25,
+        "quadrature_audit": [{"magnetic_recovery_quadrature_degree": 8, "initial_hz": -0.25}],
+    }
+
+    path = sp._write_faraday_initialization_artifact(config, metadata)
+
+    assert path == tmp_path / "magnetic_initialization.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "atem3d.faraday_magnetic_initialization.v1"
+    assert payload["magnetic_receiver_mode"] == "faraday_integrated"
+    assert payload["forward_config_fingerprint"] == sp._forward_config_fingerprint(config)
+    assert payload["initialization"] == metadata
 
 
 def test_cell_current_biot_uses_configured_tetrahedron_quadrature(monkeypatch):

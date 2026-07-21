@@ -5998,6 +5998,23 @@ def _faraday_initialization_diagnostics(
     }
 
 
+def _write_faraday_initialization_artifact(
+    config: PipelineConfig,
+    metadata: dict[str, Any],
+) -> Path:
+    """Atomically persist the absolute magnetic anchor and its quadrature audit."""
+
+    path = Path(config.workdir) / "magnetic_initialization.json"
+    payload = {
+        "schema": "atem3d.faraday_magnetic_initialization.v1",
+        "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
+        "forward_config_fingerprint": _forward_config_fingerprint(config),
+        "initialization": metadata,
+    }
+    _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True))
+    return path
+
+
 def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> None:
     """Use Biot-Savart for H while preserving instantaneous Faraday dB/dt."""
 
@@ -6865,6 +6882,8 @@ def _run_fetd_forward_impl(
             )
             audit_metadata["magnetic_recovery_quadrature_degree"] = int(audit_degree)
             faraday_initialization["quadrature_audit"].append(audit_metadata)
+        if msh.comm.rank == 0:
+            _write_faraday_initialization_artifact(config, faraday_initialization)
         faraday_receiver_hz = float(faraday_initialization["initial_hz"])
 
     rows = []
