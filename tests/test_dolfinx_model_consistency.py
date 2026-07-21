@@ -1523,7 +1523,16 @@ def test_invalid_explicit_observation_times_cannot_reach_mesh_only(monkeypatch, 
     monkeypatch.setitem(
         sys.modules,
         "mpi4py",
-        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=1))),
+        SimpleNamespace(
+            MPI=SimpleNamespace(
+                COMM_WORLD=SimpleNamespace(
+                    size=1,
+                    rank=0,
+                    bcast=lambda value, root=0: value,
+                    barrier=lambda: None,
+                )
+            )
+        ),
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -1542,7 +1551,17 @@ def test_invalid_explicit_observation_times_cannot_reach_mesh_only(monkeypatch, 
     assert calls == {"environment": 0, "mesh": 0}
 
 
-def test_main_rejects_mpi_forward_before_mesh_generation(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "checkpoint_args",
+    [
+        ("--checkpoint-forward",),
+        ("--resume-forward",),
+        ("--stop-after-outputs", "1"),
+    ],
+)
+def test_main_rejects_mpi_checkpoint_modes_before_mesh_generation(
+    monkeypatch, tmp_path, checkpoint_args
+):
     sp = _load_pipeline_module()
     calls = {"mesh": 0}
     monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
@@ -1554,13 +1573,58 @@ def test_main_rejects_mpi_forward_before_mesh_generation(monkeypatch, tmp_path):
     monkeypatch.setitem(
         sys.modules,
         "mpi4py",
-        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=2))),
+        SimpleNamespace(
+            MPI=SimpleNamespace(
+                COMM_WORLD=SimpleNamespace(
+                    size=2,
+                    rank=0,
+                    bcast=lambda value, root=0: value,
+                    barrier=lambda: None,
+                )
+            )
+        ),
     )
 
-    with pytest.raises(SystemExit, match="requires serial execution"):
-        sp.main(["--workdir", str(tmp_path), "--mesh-only", "--no-install"])
+    with pytest.raises(SystemExit, match="MPI.*checkpoint"):
+        sp.main(
+            [
+                "--workdir",
+                str(tmp_path),
+                "--mesh-only",
+                *checkpoint_args,
+                "--no-install",
+            ]
+        )
 
     assert calls["mesh"] == 0
+
+
+def test_main_allows_no_checkpoint_mpi_mesh_only(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    calls = {"mesh": 0}
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        sp,
+        "generate_verification_mesh",
+        lambda _config: calls.__setitem__("mesh", calls["mesh"] + 1),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "mpi4py",
+        SimpleNamespace(
+            MPI=SimpleNamespace(
+                COMM_WORLD=SimpleNamespace(
+                    size=2,
+                    rank=0,
+                    bcast=lambda value, root=0: value,
+                    barrier=lambda: None,
+                )
+            )
+        ),
+    )
+
+    assert sp.main(["--workdir", str(tmp_path), "--mesh-only", "--no-install"]) == 0
+    assert calls["mesh"] == 1
 
 
 def test_malformed_observation_times_csv_is_reported_by_argparse(capsys):
@@ -2020,7 +2084,16 @@ def _patch_formal_forward_seams(monkeypatch, sp, events, *, audit_scale):
     monkeypatch.setitem(
         sys.modules,
         "mpi4py",
-        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=1))),
+        SimpleNamespace(
+            MPI=SimpleNamespace(
+                COMM_WORLD=SimpleNamespace(
+                    size=1,
+                    rank=0,
+                    bcast=lambda value, root=0: value,
+                    barrier=lambda: None,
+                )
+            )
+        ),
     )
     monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
     monkeypatch.setattr(sp, "generate_verification_mesh", lambda _config: events.append("mesh"))
