@@ -84,9 +84,9 @@ Radius and depth are advanced independently so the 1000 m/500 m asymmetric
 inner box cannot leave a shallow-depth gap.
 
 For a 100 ohm-m earth at 1 s, the required 2L coverage is approximately
-25.23 km.  The formal domain therefore increases from 25 km to 30 km in x, y
-and earth depth.  Domain convergence later compares 30 km and 40 km; this
-domain change is not mixed into the short-window factor test.
+25.23 km.  The formal domain therefore increases from 25 km to 30 km in x, y,
+earth depth and air height.  Domain convergence later compares 30 km and 40 km;
+this domain change is not mixed into the short-window factor test.
 
 ## Gmsh composition
 
@@ -110,7 +110,7 @@ target size and transition thickness.  The late-diffusion audit reports:
 
 - effective terminal time and Lmax;
 - required and achieved radius/depth;
-- domain radius/depth;
+- domain horizontal radius, earth depth and air height;
 - number of levels and growth ratio;
 - target cells per Lmax at the outer active level;
 - coverage and domain pass/fail flags.
