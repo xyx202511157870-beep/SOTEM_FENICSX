@@ -53,6 +53,11 @@ before the single-mesh algorithm is validated, so it is out of scope.
 
 ## Configuration and level generation
 
+`diffusion_refinement_mode` is explicit.  Its default is `single_box`, which
+preserves existing diagnostic runs and the active short-window hypothesis
+test.  The formal Song launcher selects `graded`.  No existing factor-positive
+run silently changes mesh topology.
+
 The existing `diffusion_refinement_factor` continues to define the required
 outer coverage relative to
 
@@ -60,12 +65,14 @@ outer coverage relative to
 Lmax = sqrt(2 * rho_max * effective_t_max / mu_earth)
 ```
 
-For formal validation the factor is 2.0.  A pure level generator receives:
+For formal validation the factor is 2.0.  The new
+`diffusion_refinement_growth` defaults to 2.0 and must be greater than 1 in
+graded mode.  A pure level generator receives:
 
 - inner radius: 1000 m;
 - inner depth: 500 m;
 - inner target size: `diffusion_refinement_mesh_size` (80 m in Song);
-- growth ratio: 2.0;
+- growth ratio: `diffusion_refinement_growth`;
 - required radius/depth: `factor * Lmax`;
 - maximum target size: the existing 2500 m far-field size;
 - air top: 200 m for every diffusion level.
