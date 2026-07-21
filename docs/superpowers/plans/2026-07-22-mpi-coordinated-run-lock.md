@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let all ranks of one FEniCSx MPI job enter a single formally locked work directory while preserving cross-process writer exclusion.
+**Goal:** Let all ranks of one no-checkpoint FEniCSx MPI job enter a single formally locked work directory and produce globally consistent point-receiver values while preserving cross-process writer exclusion.
 
-**Architecture:** Add a communicator-aware context manager in `dolfinx/sotem_pipeline.py`. Rank 0 owns the existing dependency-free lock, broadcasts acquisition status, all ranks synchronize before rank 0 releases it, and the CLI uses this context around `_main_locked`. Distributed checkpointing remains disabled and out of scope for this stage.
+**Architecture:** Add a communicator-aware context manager in `dolfinx/sotem_pipeline.py`. Rank 0 owns the existing dependency-free lock, broadcasts acquisition status, all ranks synchronize before rank 0 releases it, and the CLI uses this context around `_main_locked`. Receiver candidates are evaluated on owned cells and gathered across ranks before the existing collapse rule is applied. Root-only operations are coordinated, while all MPI checkpoint modes fail closed.
 
 **Tech Stack:** Python context managers, mpi4py communicator interface, pytest, MPICH, FEniCSx/DOLFINx, PETSc/HYPRE.
 
@@ -114,7 +114,46 @@ git add dolfinx/sotem_pipeline.py tests/test_dolfinx_model_consistency.py
 git commit -m "fix: coordinate formal run lock across MPI ranks"
 ```
 
-### Task 3: Prove real MPI entry and benchmark numerical reproducibility
+### Task 3: Make point receivers and root-only stages MPI-safe
+
+**Files:**
+- Modify: `dolfinx/sotem_pipeline.py:4720-5050`
+- Modify: `dolfinx/sotem_pipeline.py:12070-12170`
+- Modify: `tests/test_dolfinx_model_consistency.py`
+- Test: `tests/test_dolfinx_model_consistency.py`
+
+- [ ] **Step 1: Write failing receiver aggregation tests**
+
+Add tests for a pure `_gather_receiver_sample_candidates` helper using fake communicators. Require deterministic rank-order concatenation, empty-rank tolerance, and a serial pass-through. Add a focused `evaluate_receivers` test proving cells whose local index is not below `index_map.size_local` are excluded as ghosts.
+
+- [ ] **Step 2: Verify receiver tests fail for the missing helper**
+
+Run the focused tests with `-k 'gather_receiver_sample_candidates or receiver_excludes_ghost_cells'`. Expected: FAIL because the collective helper and owned-cell filter are absent.
+
+- [ ] **Step 3: Implement collective receiver aggregation**
+
+Filter local collision cells to owned cells. Evaluate local field values, use `comm.allgather` for the tiny per-sample payload, concatenate non-empty rank payloads, and feed the existing aggregation functions. Preserve serial ordering and globally empty hard failure.
+
+- [ ] **Step 4: Replace the blanket serial guard with checkpoint guards**
+
+For communicator size greater than one, reject `checkpoint_forward`, `resume_forward`, and positive `stop_after_outputs` before mesh generation. Permit the no-checkpoint path.
+
+- [ ] **Step 5: Coordinate root-only operations**
+
+Generate/reuse the mesh on rank 0, propagate failure to peers, then barrier before `load_mesh`. Publish the reference-source quadrature audit only on rank 0. Keep final formal artifact publication root-only.
+
+- [ ] **Step 6: Run focused and existing MPI-guard tests**
+
+Run the receiver tests and all tests matching `formal_run_lock`, `competing_process`, `writer_lock`, or `mpi_forward`. Expected: PASS.
+
+- [ ] **Step 7: Commit the implementation**
+
+```bash
+git add dolfinx/sotem_pipeline.py tests/test_dolfinx_model_consistency.py
+git commit -m "feat: enable no-checkpoint MPI FEniCSx runs"
+```
+
+### Task 4: Prove real MPI entry and benchmark numerical reproducibility
 
 **Files:**
 - Runtime artifact only: `/home/paidaxin/codex-sotem-song-p2-mpi8-bench2-<commit>/song-noip-first2`
@@ -153,7 +192,7 @@ Read `/usr/bin/time -v` evidence from each `run.log`. Report wall-clock speedup 
 
 Expected: PASS.
 
-### Task 4: Design distributed BDF2 checkpointing after MPI benchmark passes
+### Task 5: Design distributed BDF2 checkpointing after MPI benchmark passes
 
 **Files:**
 - Create: `docs/superpowers/specs/2026-07-22-mpi-bdf2-checkpoint-design.md`
