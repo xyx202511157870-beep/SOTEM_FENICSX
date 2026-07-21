@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+from contextlib import contextmanager
 import csv
 from dataclasses import dataclass, field, fields as dataclass_fields, replace
 import hashlib
@@ -288,6 +289,73 @@ def _load_checkout_shared_module(module_name: str):
 
 def _formal_run_lock(workdir: str | Path):
     return _load_checkout_shared_module("run_lock").run_lock(workdir)
+
+
+@contextmanager
+def _coordinated_formal_run_lock(workdir: str | Path, comm):
+    """Hold one filesystem writer lock collectively across an MPI job."""
+
+    root = 0
+    lock_context = None
+    root_error = None
+    status = None
+    if int(comm.rank) == root:
+        lock_context = _formal_run_lock(workdir)
+        try:
+            lock_context.__enter__()
+        except BaseException as exc:
+            root_error = exc
+            status = (False, str(exc))
+        else:
+            status = (True, "")
+
+    try:
+        status = comm.bcast(status, root=root)
+    except BaseException:
+        if int(comm.rank) == root and root_error is None:
+            lock_context.__exit__(*sys.exc_info())
+        raise
+
+    acquired, message = status
+    if not acquired:
+        if root_error is not None:
+            raise root_error
+        raise RuntimeError(message)
+
+    try:
+        yield
+    finally:
+        body_exception = sys.exc_info()
+        try:
+            comm.barrier()
+        finally:
+            if int(comm.rank) == root:
+                lock_context.__exit__(*body_exception)
+
+
+def _collective_root_call(comm, action):
+    """Run one root-only action and propagate its status to every rank."""
+
+    root = 0
+    result = None
+    root_error = None
+    status = None
+    if int(comm.rank) == root:
+        try:
+            result = action()
+        except BaseException as exc:
+            root_error = exc
+            status = (False, str(exc))
+        else:
+            status = (True, "")
+    status = comm.bcast(status, root=root)
+    succeeded, message = status
+    if not succeeded:
+        if root_error is not None:
+            raise root_error
+        raise RuntimeError(message)
+    comm.barrier()
+    return result
 
 
 def _formal_acceptance_artifact_names() -> tuple[str, ...]:
@@ -4955,6 +5023,38 @@ def _receiver_curl_observation_description(config: PipelineConfig) -> str:
     )
 
 
+def _gather_receiver_sample_candidates(
+    comm,
+    local_electric,
+    local_magnetic_rate,
+    local_centers,
+):
+    """Collect owned receiver-cell candidates in deterministic rank order."""
+
+    import numpy as np
+
+    electric = np.asarray(local_electric, dtype=float)
+    magnetic_rate = np.asarray(local_magnetic_rate, dtype=float)
+    centers = None if local_centers is None else np.asarray(local_centers, dtype=float)
+    if int(comm.size) == 1:
+        return electric, magnetic_rate, centers
+
+    gathered = comm.allgather((electric, magnetic_rate, centers))
+    electric_parts = [np.asarray(item[0], dtype=float) for item in gathered if len(item[0])]
+    magnetic_parts = [np.asarray(item[1], dtype=float) for item in gathered if len(item[1])]
+    if electric_parts:
+        electric = np.vstack(electric_parts)
+        magnetic_rate = np.vstack(magnetic_parts)
+    else:
+        electric = np.empty((0, electric.shape[1]), dtype=float)
+        magnetic_rate = np.empty((0, magnetic_rate.shape[1]), dtype=float)
+
+    if centers is not None:
+        center_parts = [np.asarray(item[2], dtype=float) for item in gathered if len(item[2])]
+        centers = np.vstack(center_parts) if center_parts else np.empty((0, 3), dtype=float)
+    return electric, magnetic_rate, centers
+
+
 def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     """Evaluate Ex, Ey and dBz/dt at the configured receiver point."""
 
@@ -4976,22 +5076,35 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     candidate_counts = []
     needs_geometry_stats = bool(_parse_receiver_diagnostic_types(config)) or mode in {"nearest_center", "shallowest"}
     cell_centers = _cell_centers(msh) if needs_geometry_stats else None
+    owned_cell_count = int(msh.topology.index_map(msh.topology.dim).size_local)
     for sample_point in _receiver_sampling_points(config):
         cells = _find_cells_for_point(msh, sample_point)
-        if len(cells) == 0:
-            continue
-        candidate_counts.append(int(len(cells)))
+        cells = np.asarray(cells, dtype=np.int32)
+        cells = cells[cells < owned_cell_count]
         point = np.repeat(np.asarray(sample_point, dtype=float).reshape(1, 3), len(cells), axis=0)
-        e_vals = np.asarray(E.eval(point, cells), dtype=float).reshape(len(cells), -1)
-        dbdt_vals = np.asarray(dbdt.eval(point, cells), dtype=float).reshape(len(cells), -1)
+        if len(cells):
+            e_vals = np.asarray(E.eval(point, cells), dtype=float).reshape(len(cells), -1)
+            dbdt_vals = np.asarray(dbdt.eval(point, cells), dtype=float).reshape(len(cells), -1)
+        else:
+            e_vals = np.empty((0, 3), dtype=float)
+            dbdt_vals = np.empty((0, 3), dtype=float)
+        centers = cell_centers[np.asarray(cells, dtype=int)] if cell_centers is not None else None
+        e_vals, dbdt_vals, centers = _gather_receiver_sample_candidates(
+            msh.comm,
+            e_vals,
+            dbdt_vals,
+            centers,
+        )
+        if len(e_vals) == 0:
+            continue
+        candidate_counts.append(int(len(e_vals)))
         e_samples.append(e_vals)
         dbdt_samples.append(dbdt_vals)
-        center_samples.append(cell_centers[np.asarray(cells, dtype=int)] if cell_centers is not None else None)
+        center_samples.append(centers)
         point_samples.append(np.asarray(sample_point, dtype=float))
     if not e_samples:
         raise RuntimeError(
-            f"receiver {config.receiver} was not found in a local cell; run in serial "
-            "for point extraction or add MPI point ownership handling."
+            f"receiver {config.receiver} was not found in any owned cell across the communicator."
         )
     e_val = _aggregate_receiver_sample_values(
         e_samples,
@@ -11687,7 +11800,9 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     workdir, is_writer = _writer_cli_preflight(raw_argv)
     if is_writer:
-        with _formal_run_lock(workdir):
+        from mpi4py import MPI
+
+        with _coordinated_formal_run_lock(workdir, MPI.COMM_WORLD):
             return _main_locked(raw_argv)
     return _main_locked(raw_argv)
 
@@ -12017,6 +12132,11 @@ def _main_locked(argv: list[str]) -> int:
     env = check_environment(install_missing=not args.no_install, require_core=not args.postprocess_partial)
     if args.check_env_only:
         return 0
+    from mpi4py import MPI
+
+    comm = MPI.COMM_WORLD
+    if int(comm.size) > 1 and args.postprocess_partial:
+        raise SystemExit("MPI postprocess-partial is not supported; run postprocessing on one rank.")
     if args.postprocess_partial:
         ref_mode = "cole-cole-exact" if config.polarization == "cole-cole" else "noip"
         postprocess_saved_forward(
@@ -12027,13 +12147,18 @@ def _main_locked(argv: list[str]) -> int:
         )
         return 0
 
-    from mpi4py import MPI
-
-    if MPI.COMM_WORLD.size != 1:
-        raise SystemExit("This verification script currently requires serial execution for point receiver extraction.")
+    if int(comm.size) > 1 and (
+        bool(config.checkpoint_forward)
+        or bool(config.resume_forward)
+        or int(config.stop_after_outputs) > 0
+    ):
+        raise SystemExit(
+            "MPI forward checkpoint/resume is not implemented; remove checkpoint options "
+            "or run on one rank."
+        )
 
     t0 = time.perf_counter()
-    generate_verification_mesh(config)
+    _collective_root_call(comm, lambda: generate_verification_mesh(config))
     runtime["mesh_seconds"] = time.perf_counter() - t0
     if args.mesh_only:
         return 0
@@ -12132,7 +12257,8 @@ def _main_locked(argv: list[str]) -> int:
     reference_audit_summary = _require_reference_source_quadrature_audit(
         config, precomputed_ref_result, precomputed_audit_ref_result
     )
-    _write_reference_source_quadrature_audit(config, reference_audit_summary)
+    if int(comm.rank) == 0:
+        _write_reference_source_quadrature_audit(config, reference_audit_summary)
     runtime["reference_seconds"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     if config.formulation == "h":
