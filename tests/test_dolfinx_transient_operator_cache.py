@@ -343,6 +343,36 @@ def test_signature_collapses_only_roundoff_level_linspace_dt_noise():
     assert _signature(sp, dt=2.5e-6 * (1.0 + 1.0e-10)) not in signatures
 
 
+def test_signature_collapses_roundoff_level_bdf2_coefficient_noise():
+    sp = _load_pipeline_module()
+    # Consecutive nominally equal substeps captured from the production
+    # logarithmic Song schedule.  Endpoint subtraction leaves a few ULPs of
+    # noise, which must not force a fresh matrix and AMS hierarchy.
+    dts = np.asarray(
+        [
+            2.5770015768443780e-5,
+            2.5770015768443834e-5,
+            2.5770015768443780e-5,
+            2.5770015768443780e-5,
+        ]
+    )
+
+    signatures = {
+        _signature(
+            sp,
+            dt=float(dts[index]),
+            time_method="bdf2",
+            bdf2_coefficients=sp._bdf2_step_coefficients(
+                float(dts[index]),
+                float(dts[index - 1]),
+            ),
+        )
+        for index in range(1, len(dts))
+    }
+
+    assert len(signatures) == 1
+
+
 def test_same_dt_does_not_reuse_distinct_robin_divergence_bdf2_or_debye_operators():
     sp = _load_pipeline_module()
     baseline = _signature(sp)

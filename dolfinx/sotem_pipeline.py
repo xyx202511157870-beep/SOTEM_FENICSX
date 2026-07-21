@@ -4627,7 +4627,7 @@ def _operator_signature_value(value):
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("transient operator signature values must be finite")
-        return ("float15", format(float(value), ".15g"))
+        return ("float13", format(float(value), ".13g"))
     if isinstance(value, dict):
         return tuple(
             (str(key), _operator_signature_value(item))
@@ -4652,9 +4652,9 @@ def _transient_operator_signature(
 ):
     """Identify the complete LHS operator for one implicit transient step.
 
-    Fifteen significant digits collapse the one-ULP subtraction noise produced
-    by ``linspace`` interval endpoints, while keeping physically distinct time
-    steps separate.
+    Thirteen significant digits collapse the few-ULP subtraction noise after
+    it propagates through variable-step BDF2 coefficients, while keeping
+    physically distinct time steps separate.
     """
 
     return _operator_signature_value(
