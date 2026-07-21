@@ -2837,6 +2837,7 @@ def _atomic_line_cell_intervals(cell_intervals, *, parameter_tolerance=1.0e-12):
                 "s_end": end,
                 "cell": int(item["cell"]),
                 "global_cell": int(item["global_cell"]),
+                "owner_rank": int(item.get("owner_rank", 0)),
             }
         )
     endpoints = _cluster_line_parameters(
@@ -2864,13 +2865,21 @@ def _atomic_line_cell_intervals(cell_intervals, *, parameter_tolerance=1.0e-12):
         if len(candidates) > 1:
             multi_candidate_count += 1
             candidate_overlap_parameter_length += (end - start) * (len(candidates) - 1)
-        owner = min(candidates, key=lambda item: (item["global_cell"], item["cell"]))
+        owner = min(
+            candidates,
+            key=lambda item: (
+                item["global_cell"],
+                item["owner_rank"],
+                item["cell"],
+            ),
+        )
         atoms.append(
             {
                 "s_start": float(start),
                 "s_end": float(end),
                 "cell": int(owner["cell"]),
                 "global_cell": int(owner["global_cell"]),
+                "owner_rank": int(owner["owner_rank"]),
                 "candidate_count": int(len(candidates)),
             }
         )
@@ -2916,8 +2925,48 @@ def _atomic_line_cell_intervals(cell_intervals, *, parameter_tolerance=1.0e-12):
     return {"intervals": atoms, "diagnostics": diagnostics}
 
 
+def _collective_atomic_line_intervals(
+    comm,
+    local_candidates,
+    *,
+    parameter_tolerance=1.0e-12,
+):
+    """Globally partition source-line candidates and return this rank's atoms."""
+
+    gathered = comm.allgather(list(local_candidates))
+    global_candidates = [item for rank_items in gathered for item in rank_items]
+    result = _atomic_line_cell_intervals(
+        global_candidates,
+        parameter_tolerance=parameter_tolerance,
+    )
+    global_intervals = result["intervals"]
+    comm_size = int(comm.size)
+    ownership_complete = bool(
+        len(gathered) == comm_size
+        and all(
+            0 <= int(item.get("owner_rank", -1)) < comm_size
+            for item in global_intervals
+        )
+    )
+    diagnostics = dict(result["diagnostics"])
+    diagnostics.update(
+        {
+            "distributed_ownership_complete": ownership_complete,
+            "global_candidate_positive_interval_count": int(len(global_candidates)),
+            "global_atomic_interval_count": int(len(global_intervals)),
+        }
+    )
+    diagnostics["passed"] = bool(diagnostics["passed"] and ownership_complete)
+    local_intervals = [
+        item
+        for item in global_intervals
+        if int(item["owner_rank"]) == int(comm.rank)
+    ]
+    return {"intervals": local_intervals, "diagnostics": diagnostics}
+
+
 def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
-    """Intersect the complete source line with every serial affine tetrahedron."""
+    """Collectively intersect the complete source line with owned tetrahedra."""
 
     import numpy as np
 
@@ -2940,6 +2989,7 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
             "end_endpoint_covered": False,
             "positive_intervals": False,
             "serial": bool(serial),
+            "distributed_ownership_complete": False,
             "affine_tetrahedra": bool(affine_tetrahedra),
             "parameter_tolerance": parameter_tolerance,
             "source_length": source_length,
@@ -2952,16 +3002,10 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
         return {"intervals": [], "diagnostics": diagnostics}
 
     serial = int(msh.comm.size) == 1
-    if not serial:
-        return failed_result(
-            serial=False,
-            affine_tetrahedra=False,
-            reason="serial_assembly_required",
-        )
     tdim = int(msh.topology.dim)
     if tdim != 3:
         return failed_result(
-            serial=True,
+            serial=serial,
             affine_tetrahedra=False,
             reason="three_dimensional_mesh_required",
         )
@@ -2974,14 +3018,11 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
         and geometry_dofmap.shape[0] >= n_local
         and geometry_dofmap.shape[1] == 4
     )
-    if not affine_tetra:
-        return failed_result(
-            serial=True,
-            affine_tetrahedra=False,
-            reason="affine_tetrahedra_required",
-        )
     candidates = []
+    local_failure_reason = None if affine_tetra else "affine_tetrahedra_required"
     for cell in range(n_local):
+        if local_failure_reason is not None:
+            break
         vertices = np.asarray(msh.geometry.x[geometry_dofmap[cell]], dtype=float)
         try:
             interval = _line_tetra_positive_interval(
@@ -2990,11 +3031,10 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
                 config.source_end,
             )
         except (ValueError, np.linalg.LinAlgError):
-            return failed_result(
-                serial=True,
-                affine_tetrahedra=False,
-                reason=f"invalid_affine_tetrahedron:{cell}",
+            local_failure_reason = (
+                f"invalid_affine_tetrahedron:rank={int(msh.comm.rank)}:cell={cell}"
             )
+            break
         if interval is None:
             continue
         candidates.append(
@@ -3003,9 +3043,31 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
                 "s_end": float(interval[1]),
                 "cell": int(cell),
                 "global_cell": int(global_ids[cell]),
+                "owner_rank": int(msh.comm.rank),
             }
         )
-    result = _atomic_line_cell_intervals(
+    rank_status = msh.comm.allgather(
+        {
+            "affine_tetrahedra": bool(affine_tetra),
+            "failure_reason": local_failure_reason,
+        }
+    )
+    failures = [
+        item["failure_reason"]
+        for item in rank_status
+        if item.get("failure_reason") is not None
+    ]
+    globally_affine = all(
+        bool(item.get("affine_tetrahedra", False)) for item in rank_status
+    )
+    if failures or not globally_affine:
+        return failed_result(
+            serial=serial,
+            affine_tetrahedra=globally_affine,
+            reason=str(failures[0] if failures else "affine_tetrahedra_required"),
+        )
+    result = _collective_atomic_line_intervals(
+        msh.comm,
         candidates,
         parameter_tolerance=parameter_tolerance,
     )
@@ -3013,7 +3075,7 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
     diagnostics.update(
         {
             "serial": serial,
-            "affine_tetrahedra": affine_tetra,
+            "affine_tetrahedra": globally_affine,
             "parameter_tolerance": parameter_tolerance,
             "source_length": source_length,
             "interval_total_length": diagnostics["union_coverage_fraction"] * source_length,
@@ -3023,7 +3085,7 @@ def _exact_source_line_cell_intervals(msh, config: PipelineConfig):
     )
     diagnostics["passed"] = bool(
         diagnostics["passed"]
-        and diagnostics["serial"]
+        and diagnostics["distributed_ownership_complete"]
         and diagnostics["affine_tetrahedra"]
         and abs(diagnostics["interval_total_length"] - source_length)
         <= parameter_tolerance * max(source_length, 1.0)
@@ -3118,7 +3180,7 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     cell_l1_contributions: dict[int, float] = {}
     dof_l1_contributions: dict[int, float] = {}
     interval_lengths = []
-    if not bool(interval_gate.get("passed", False)) or not intervals:
+    if not bool(interval_gate.get("passed", False)):
         source_vec.assemble()
         local_diagnostics = _summarize_manual_line_source_local_diagnostics(
             npts=0,
@@ -3191,37 +3253,81 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
         global_dofs = index_map.local_to_global(local_dofs).astype(PETSc.IntType)
         source_vec.setValues(global_dofs, local, addv=PETSc.InsertMode.ADD_VALUES)
         local_l1 = float(np.sum(np.abs(local)))
-        cell_l1_contributions[cell] = cell_l1_contributions.get(cell, 0.0) + local_l1
+        global_cell = int(interval["global_cell"])
+        cell_l1_contributions[global_cell] = (
+            cell_l1_contributions.get(global_cell, 0.0) + local_l1
+        )
         for dof, value in zip(global_dofs, local):
             key = int(dof)
             dof_l1_contributions[key] = dof_l1_contributions.get(key, 0.0) + abs(
                 float(value)
             )
         added += quadrature_order
-        hit_cell_ids.extend([cell] * quadrature_order)
+        hit_cell_ids.extend([global_cell] * quadrature_order)
         all_svals.extend(float(value) for value in local_s)
         all_weights.extend(float(value) for value in weights)
         interval_lengths.append((s_end - s_start) * length)
     source_vec.assemble()
-    npts = int(added)
+    gathered_diagnostics = msh.comm.allgather(
+        {
+            "hit_cell_ids": hit_cell_ids,
+            "svals": all_svals,
+            "weights": all_weights,
+            "interval_lengths": interval_lengths,
+            "cell_l1_contributions": cell_l1_contributions,
+            "dof_l1_contributions": dof_l1_contributions,
+        }
+    )
+    samples = sorted(
+        (
+            (float(sval), int(cell), float(weight))
+            for item in gathered_diagnostics
+            for sval, cell, weight in zip(
+                item["svals"], item["hit_cell_ids"], item["weights"]
+            )
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    global_svals = [item[0] for item in samples]
+    global_hit_cell_ids = [item[1] for item in samples]
+    global_weights = [item[2] for item in samples]
+    global_interval_lengths = [
+        float(value)
+        for item in gathered_diagnostics
+        for value in item["interval_lengths"]
+    ]
+
+    def merge_contributions(name):
+        merged: dict[int, float] = {}
+        for item in gathered_diagnostics:
+            for key, value in item[name].items():
+                key = int(key)
+                merged[key] = merged.get(key, 0.0) + float(value)
+        return merged
+
+    global_cell_contributions = merge_contributions("cell_l1_contributions")
+    global_dof_contributions = merge_contributions("dof_l1_contributions")
+    npts = int(len(global_svals))
     local_diagnostics = _summarize_manual_line_source_local_diagnostics(
         npts=npts,
-        added=added,
+        added=npts,
         missed=0,
-        hit_cell_ids=hit_cell_ids,
-        svals=all_svals,
-        cell_l1_contributions=cell_l1_contributions,
-        dof_l1_contributions=dof_l1_contributions,
+        hit_cell_ids=global_hit_cell_ids,
+        svals=global_svals,
+        cell_l1_contributions=global_cell_contributions,
+        dof_l1_contributions=global_dof_contributions,
     )
     integration_diagnostics = {
         "integration_mode": "exact_tetra_intervals",
         "formal_acceptance_eligible": True,
         "assembly_complete": True,
-        "segment_count": int(len(intervals)),
-        "segment_total_length": float(sum(interval_lengths)),
-        "segment_min_length": float(min(interval_lengths)),
-        "segment_max_length": float(max(interval_lengths)),
-        "segment_mean_length": float(sum(interval_lengths) / len(interval_lengths)),
+        "segment_count": int(len(global_interval_lengths)),
+        "segment_total_length": float(sum(global_interval_lengths)),
+        "segment_min_length": float(min(global_interval_lengths)),
+        "segment_max_length": float(max(global_interval_lengths)),
+        "segment_mean_length": float(
+            sum(global_interval_lengths) / len(global_interval_lengths)
+        ),
         "quadrature_points_per_segment_min": quadrature_order,
         "quadrature_points_per_segment_max": quadrature_order,
         "quadrature_points_per_segment_mean": float(quadrature_order),
@@ -3230,13 +3336,13 @@ def _build_manual_line_source(msh, spaces: dict[str, Any], config: PipelineConfi
     }
     integration_diagnostics["line_orientation"] = _manual_line_orientation_diagnostics(
         config,
-        weights=np.asarray(all_weights, dtype=float),
-        svals=np.asarray(all_svals, dtype=float),
+        weights=np.asarray(global_weights, dtype=float),
+        svals=np.asarray(global_svals, dtype=float),
     )
     local_diagnostics.update(integration_diagnostics)
     log(
         f"[source] mode=manual_line; integration=exact_tetra_intervals; "
-        f"intervals={len(intervals)}; quadrature points={npts}; "
+        f"intervals={len(global_interval_lengths)}; quadrature points={npts}; "
         f"coverage={interval_gate['union_coverage_fraction']:.16g}; "
         "assembled direct Nedelec line integral int_Gamma t.v dl",
         comm=msh.comm,
@@ -3778,6 +3884,12 @@ def _source_integration_gate_diagnostics(source_info) -> dict[str, Any]:
     boolean_metrics = {
         "assembly_complete": bool(local.get("assembly_complete", False)),
         "serial": bool(interval_gate.get("serial", False)),
+        "distributed_ownership_complete": bool(
+            interval_gate.get(
+                "distributed_ownership_complete",
+                interval_gate.get("serial", False),
+            )
+        ),
         "affine_tetrahedra": bool(interval_gate.get("affine_tetrahedra", False)),
         "start_endpoint_covered": bool(interval_gate.get("start_endpoint_covered", False)),
         "end_endpoint_covered": bool(interval_gate.get("end_endpoint_covered", False)),
@@ -3791,7 +3903,7 @@ def _source_integration_gate_diagnostics(source_info) -> dict[str, Any]:
             "gap_length": length_tolerance,
             "overlap_length": length_tolerance,
             "assembly_complete": True,
-            "serial": True,
+            "distributed_ownership_complete": True,
             "affine_tetrahedra": True,
             "start_endpoint_covered": True,
             "end_endpoint_covered": True,
@@ -3804,7 +3916,10 @@ def _source_integration_gate_diagnostics(source_info) -> dict[str, Any]:
         ("union_coverage_fraction", math.isfinite(coverage) and abs(coverage - 1.0) <= parameter_tolerance),
         ("gap_length", math.isfinite(gap_length) and 0.0 <= gap_length <= length_tolerance),
         ("overlap_length", math.isfinite(overlap_length) and 0.0 <= overlap_length <= length_tolerance),
-        ("serial", boolean_metrics["serial"]),
+        (
+            "distributed_ownership_complete",
+            boolean_metrics["distributed_ownership_complete"],
+        ),
         ("affine_tetrahedra", boolean_metrics["affine_tetrahedra"]),
         ("start_endpoint_covered", boolean_metrics["start_endpoint_covered"]),
         ("end_endpoint_covered", boolean_metrics["end_endpoint_covered"]),
@@ -5818,15 +5933,57 @@ def _should_use_bdf2_step(*, time_method: str, step: int, first_output_step: int
     return str(time_method).strip().lower() == "bdf2" and int(step) > int(first_output_step)
 
 
+def _collective_point_cell_owner(comm, local_candidates):
+    """Choose one owned global cell for a point shared by MPI partitions."""
+
+    gathered = comm.allgather(list(local_candidates))
+    candidates = [item for rank_items in gathered for item in rank_items]
+    if not candidates:
+        return None
+    owner = min(
+        candidates,
+        key=lambda item: (
+            int(item["global_cell"]),
+            int(item["owner_rank"]),
+            int(item["cell"]),
+        ),
+    )
+    return {
+        "global_cell": int(owner["global_cell"]),
+        "cell": int(owner["cell"]),
+        "owner_rank": int(owner["owner_rank"]),
+    }
+
+
 def _add_scalar_point_load(vec, msh, S, point, value: float) -> None:
     """Add value*q(point) to a scalar H1 load vector."""
 
     import numpy as np
     from petsc4py import PETSc
 
-    cell = _find_cell_for_point(msh, point)
-    if cell is None:
-        raise RuntimeError(f"point electrode {point} was not found in a local cell")
+    cells = _find_cells_for_point(msh, point)
+    tdim = int(msh.topology.dim)
+    index_map = msh.topology.index_map(tdim)
+    owned_cells = [int(cell) for cell in cells if int(cell) < int(index_map.size_local)]
+    if owned_cells:
+        local_ids = np.asarray(owned_cells, dtype=np.int32)
+        global_ids = index_map.local_to_global(local_ids)
+        local_candidates = [
+            {
+                "global_cell": int(global_cell),
+                "cell": int(cell),
+                "owner_rank": int(msh.comm.rank),
+            }
+            for cell, global_cell in zip(owned_cells, global_ids)
+        ]
+    else:
+        local_candidates = []
+    owner = _collective_point_cell_owner(msh.comm, local_candidates)
+    if owner is None:
+        raise RuntimeError(f"point electrode {point} was not found in any owned cell")
+    if int(owner["owner_rank"]) != int(msh.comm.rank):
+        return
+    cell = int(owner["cell"])
     cell_geom = _cell_geometry(msh, cell)
     X = msh.geometry.cmap.pull_back(np.asarray(point, dtype=float).reshape(1, 3), cell_geom)
     basis = S.element.basix_element.tabulate(0, X)[0, 0, :, 0]

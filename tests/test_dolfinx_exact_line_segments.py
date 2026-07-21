@@ -197,3 +197,20 @@ def test_collective_atomic_intervals_choose_global_cell_before_owner_rank():
     assert len(rank1["intervals"]) == 1
     assert rank1["intervals"][0]["global_cell"] == 20
     assert rank1["intervals"][0]["owner_rank"] == 1
+
+
+def test_collective_point_cell_owner_is_unique_across_partition_boundary():
+    sp = _load_pipeline_module()
+    payloads = [
+        [{"global_cell": 40, "cell": 4, "owner_rank": 0}],
+        [{"global_cell": 20, "cell": 8, "owner_rank": 1}],
+    ]
+
+    owner0 = sp._collective_point_cell_owner(
+        _GatherComm(rank=0, payloads=payloads), payloads[0]
+    )
+    owner1 = sp._collective_point_cell_owner(
+        _GatherComm(rank=1, payloads=payloads), payloads[1]
+    )
+
+    assert owner0 == owner1 == {"global_cell": 20, "cell": 8, "owner_rank": 1}
