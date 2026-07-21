@@ -2833,6 +2833,45 @@ def test_receiver_excludes_ghost_cells_before_candidate_collapse(monkeypatch):
     assert record["candidate_count_max"] == 1
 
 
+def test_cell_geometry_helpers_use_geometry_dofmap_after_mpi_reordering():
+    sp = _load_pipeline_module()
+    wrong_topology_vertices = np.asarray([0, 1, 2, 3], dtype=np.int32)
+    correct_geometry_dofs = np.asarray([[4, 5, 6, 7]], dtype=np.int32)
+    coordinates = np.asarray(
+        [
+            [0.0, 0.0, 10.0],
+            [1.0, 0.0, 10.0],
+            [0.0, 1.0, 10.0],
+            [0.0, 0.0, 11.0],
+            [0.0, 0.0, -2.0],
+            [1.0, 0.0, -2.0],
+            [0.0, 1.0, -2.0],
+            [0.0, 0.0, -1.0],
+        ],
+        dtype=float,
+    )
+    connectivity = SimpleNamespace(links=lambda _cell: wrong_topology_vertices)
+    topology = SimpleNamespace(
+        dim=3,
+        create_connectivity=lambda _from_dim, _to_dim: None,
+        connectivity=lambda _from_dim, _to_dim: connectivity,
+        index_map=lambda _dim: SimpleNamespace(size_local=1),
+    )
+    msh = SimpleNamespace(
+        topology=topology,
+        geometry=SimpleNamespace(x=coordinates, dofmap=correct_geometry_dofs),
+    )
+
+    centers = sp._cell_centers(msh)
+    centers_radii_volumes = sp._cell_centers_radii_volumes(msh)
+    cell_geometry = sp._cell_geometry(msh, 0)
+
+    np.testing.assert_allclose(centers, [[0.25, 0.25, -1.75]])
+    np.testing.assert_allclose(centers_radii_volumes[0], centers)
+    assert centers_radii_volumes[2][0] == pytest.approx(1.0 / 6.0)
+    np.testing.assert_array_equal(cell_geometry, coordinates[4:8])
+
+
 def test_mesh_source_and_formal_cli_writers_reject_competing_process(tmp_path):
     sp = _load_pipeline_module()
     pipeline_path = Path(__file__).resolve().parents[1] / "dolfinx" / "sotem_pipeline.py"
