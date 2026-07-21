@@ -12,7 +12,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CONDA=${CONDA:-/home/paidaxin/miniconda3/bin/conda}
 PYTHON=${PYTHON:-/home/paidaxin/miniconda3/envs/fenicsx/bin/python}
 OUTPUT_INTERVAL_SUBSTEPS=${OUTPUT_INTERVAL_SUBSTEPS:-16}
-MIN_STEPS_BEFORE_FIRST_OBSERVATION=${MIN_STEPS_BEFORE_FIRST_OBSERVATION:-1}
+MIN_STEPS_BEFORE_FIRST_OBSERVATION=${MIN_STEPS_BEFORE_FIRST_OBSERVATION:-16}
 export PYTHONPATH="$REPO_ROOT/src:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 OBSERVATION_TIMES=$(
@@ -31,6 +31,8 @@ COMMON_ARGS=(
   --initial-dc-mode fem
   --magnetic-receiver-mode faraday_integrated
   --magnetic-dbdt-mode curl
+  --magnetic-recovery-quadrature-degree 8
+  --magnetic-recovery-quadrature-audit-degrees 2,4,6,8,10
   --outer-boundary-mode pec
   --receiver-type point
   --receiver-average-radius 2

@@ -1091,6 +1091,28 @@ def test_tracked_smoke_scripts_use_explicit_approved_quadrature_pairs_and_hz_mod
         assert "--magnetic-receiver-mode faraday_integrated" in text
 
 
+def test_song_full_window_runner_uses_faraday_hz_with_curl_dbdt():
+    root = Path(__file__).resolve().parents[1]
+    text = (
+        root / "benchmarks" / "sotem" / "run_song2025_fenicsx_p2_t4_full.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "--magnetic-receiver-mode faraday_integrated" in text
+    assert "--magnetic-dbdt-mode curl" in text
+    assert "--magnetic-recovery-quadrature-degree 8" in text
+    assert "--magnetic-recovery-quadrature-audit-degrees 2,4,6,8,10" in text
+
+
+def test_song_full_window_runner_refines_turnoff_to_first_observation():
+    root = Path(__file__).resolve().parents[1]
+    text = (
+        root / "benchmarks" / "sotem" / "run_song2025_fenicsx_p2_t4_full.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "OUTPUT_INTERVAL_SUBSTEPS=${OUTPUT_INTERVAL_SUBSTEPS:-16}" in text
+    assert "MIN_STEPS_BEFORE_FIRST_OBSERVATION=${MIN_STEPS_BEFORE_FIRST_OBSERVATION:-16}" in text
+
+
 def test_reviewed_plan_records_nonconflicting_primary_and_audit_source_quadrature():
     root = Path(__file__).resolve().parents[1]
     plan = (

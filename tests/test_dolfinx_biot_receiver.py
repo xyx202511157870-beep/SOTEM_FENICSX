@@ -62,6 +62,126 @@ def test_biot_savart_line_h_at_receiver_respects_disk_average_sampling():
     np.testing.assert_allclose(value, expected, rtol=1.0e-12, atol=1.0e-14)
 
 
+def test_total_biot_h_components_keep_conductive_and_wire_fields_separate(monkeypatch):
+    sp = _load_pipeline_module()
+    conductive = np.asarray([1.0, 2.0, 3.0])
+    wire = np.asarray([-0.25, 0.5, 4.0])
+    monkeypatch.setattr(
+        sp,
+        "_biot_savart_cell_current_h_at_receiver",
+        lambda *_args, **_kwargs: conductive.copy(),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_biot_savart_line_h_at_receiver",
+        lambda *_args, **_kwargs: wire.copy(),
+    )
+
+    parts = sp._biot_savart_total_h_components_at_receiver(
+        object(), object(), {}, sp.PipelineConfig(), 10.0
+    )
+
+    np.testing.assert_allclose(parts["conductive_h"], conductive)
+    np.testing.assert_allclose(parts["wire_h"], wire)
+    np.testing.assert_allclose(parts["total_h"], conductive + wire)
+
+    metadata = sp._faraday_initialization_diagnostics(
+        parts,
+        config=sp.PipelineConfig(magnetic_recovery_quadrature_degree=8),
+        source_current=10.0,
+    )
+    assert metadata == {
+        "method": "biot_savart_total_current",
+        "conductive_h": [1.0, 2.0, 3.0],
+        "wire_h": [-0.25, 0.5, 4.0],
+        "total_h": [0.75, 2.5, 7.0],
+        "initial_hz": 7.0,
+        "source_current": 10.0,
+        "magnetic_recovery_quadrature_degree": 8,
+    }
+
+
+def test_cell_current_biot_uses_configured_tetrahedron_quadrature(monkeypatch):
+    import basix
+
+    sp = _load_pipeline_module()
+    vertices = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+
+    class IndexMap:
+        size_local = 1
+
+    class Connectivity:
+        def links(self, _cell):
+            return np.arange(4, dtype=np.int32)
+
+    class Topology:
+        dim = 3
+
+        def create_connectivity(self, *_args):
+            return None
+
+        def connectivity(self, *_args):
+            return Connectivity()
+
+        def index_map(self, _dim):
+            return IndexMap()
+
+    mesh = SimpleNamespace(topology=Topology(), geometry=SimpleNamespace(x=vertices))
+    monkeypatch.setattr(
+        sp,
+        "_cell_centers_radii_volumes",
+        lambda _mesh: (np.asarray([[0.25, 0.25, 0.25]]), np.ones(1), np.asarray([1.0 / 6.0])),
+    )
+
+    sampled = {}
+
+    class ElectricField:
+        def eval(self, points, cells):
+            points = np.asarray(points, dtype=float)
+            sampled["count"] = points.shape[0]
+            assert np.all(np.asarray(cells) == 0)
+            return np.column_stack(
+                (1.0 + points[:, 0], 2.0 - 0.5 * points[:, 1], points[:, 2])
+            )
+
+    sigma = SimpleNamespace(x=SimpleNamespace(array=np.asarray([2.0])))
+    config = sp.PipelineConfig(
+        receiver=(2.0, 3.0, 4.0),
+        receiver_type="point",
+        magnetic_recovery_quadrature_degree=8,
+    )
+
+    actual = sp._biot_savart_cell_current_h_at_receiver(
+        ElectricField(), mesh, {"sigma": sigma, "sigma_physical": sigma}, config
+    )
+
+    qpoints, qweights = basix.make_quadrature(basix.CellType.tetrahedron, 8)
+    physical = vertices[0] + qpoints @ np.column_stack(
+        (vertices[1] - vertices[0], vertices[2] - vertices[0], vertices[3] - vertices[0])
+    ).T
+    current = 2.0 * np.column_stack(
+        (1.0 + physical[:, 0], 2.0 - 0.5 * physical[:, 1], physical[:, 2])
+    )
+    displacement = np.asarray(config.receiver)[None, :] - physical
+    radius = np.linalg.norm(displacement, axis=1)
+    expected = np.sum(
+        qweights[:, None]
+        * np.cross(current, displacement)
+        / (4.0 * np.pi * radius[:, None] ** 3),
+        axis=0,
+    )
+
+    assert sampled["count"] == qpoints.shape[0]
+    np.testing.assert_allclose(actual, expected, rtol=1.0e-12, atol=1.0e-14)
+
+
 def test_debye_cell_current_density_uses_memory_current():
     sp = _load_pipeline_module()
 
@@ -131,6 +251,28 @@ def test_faraday_receiver_hz_update_uses_backward_euler_dbdt():
     assert updated == 2.5
 
 
+def test_faraday_receiver_hz_preserves_an_initial_constant_offset():
+    sp = _load_pipeline_module()
+
+    exact = 2.0
+    biased = exact + 0.125
+    for dbzdt, dt in [(4.0e-6, 0.25), (-2.0e-6, 0.5), (1.0e-6, 0.75)]:
+        exact = sp._advance_faraday_receiver_hz(
+            previous_hz=exact,
+            dbzdt_new=dbzdt,
+            dt=dt,
+            mu=2.0e-6,
+        )
+        biased = sp._advance_faraday_receiver_hz(
+            previous_hz=biased,
+            dbzdt_new=dbzdt,
+            dt=dt,
+            mu=2.0e-6,
+        )
+
+        assert biased - exact == pytest.approx(0.125)
+
+
 def test_faraday_integrated_receiver_mode_outputs_hz_component():
     sp = _load_pipeline_module()
 
@@ -140,6 +282,44 @@ def test_faraday_integrated_receiver_mode_outputs_hz_component():
 
     assert diagnostics["magnetic_receiver_mode"] == "faraday_integrated"
     assert sp._forward_components(config) == ["Ex", "Ey", "Hz", "dBzdt"]
+
+
+def test_biot_receiver_reports_tetrahedron_quadrature_degree():
+    sp = _load_pipeline_module()
+
+    config = sp.PipelineConfig(
+        magnetic_receiver_mode="faraday_integrated",
+        magnetic_recovery_quadrature_degree=6,
+        magnetic_recovery_quadrature_audit_degrees=(2, 4, 6, 8, 10),
+    )
+    diagnostics = sp.validate_model_consistency(config)
+
+    assert diagnostics["magnetic_recovery_quadrature_degree"] == 6
+    assert diagnostics["magnetic_recovery_quadrature_audit_degrees"] == [2, 4, 6, 8, 10]
+    assert "magnetic_recovery_quadrature_degree: 6" in sp._resolved_config_yaml(config)
+    assert "magnetic_recovery_quadrature_audit_degrees:" in sp._resolved_config_yaml(config)
+
+
+@pytest.mark.parametrize("degree", [0, -1])
+def test_biot_receiver_rejects_nonpositive_quadrature_degree(degree):
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="magnetic_recovery_quadrature_degree must be positive"):
+        sp.validate_model_consistency(
+            sp.PipelineConfig(magnetic_recovery_quadrature_degree=degree)
+        )
+
+
+def test_biot_receiver_rejects_nonpositive_quadrature_audit_degree():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(
+        ValueError,
+        match="magnetic_recovery_quadrature_audit_degrees must contain positive integers",
+    ):
+        sp.validate_model_consistency(
+            sp.PipelineConfig(magnetic_recovery_quadrature_audit_degrees=(2, 0, 4))
+        )
 
 
 def test_cole_cole_debye_fit_preserves_dc_conductivity():

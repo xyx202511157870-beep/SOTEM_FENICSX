@@ -143,6 +143,8 @@ class PipelineConfig:
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
     magnetic_receiver_mode: str = "faraday_integrated"  # curl, biot_current, biot_ohmic, faraday_integrated
     magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
+    magnetic_recovery_quadrature_degree: int = 8
+    magnetic_recovery_quadrature_audit_degrees: tuple[int, ...] = ()
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
     divergence_cleaning: str = "none"  # none, conductivity
     divergence_cleaning_strength: float = 1.0
@@ -710,6 +712,19 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
         raise ValueError("magnetic_dbdt_mode must be 'curl' or 'biot_rate'")
     if magnetic_dbdt_mode == "biot_rate" and magnetic_receiver_mode not in {"biot_current", "biot_ohmic"}:
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
+    magnetic_recovery_quadrature_degree = int(config.magnetic_recovery_quadrature_degree)
+    if magnetic_recovery_quadrature_degree <= 0:
+        raise ValueError(
+            "magnetic_recovery_quadrature_degree must be positive; "
+            f"got {magnetic_recovery_quadrature_degree}"
+        )
+    magnetic_recovery_quadrature_audit_degrees = [
+        int(value) for value in config.magnetic_recovery_quadrature_audit_degrees
+    ]
+    if any(value <= 0 for value in magnetic_recovery_quadrature_audit_degrees):
+        raise ValueError(
+            "magnetic_recovery_quadrature_audit_degrees must contain positive integers"
+        )
     outer_boundary_mode = str(config.outer_boundary_mode).strip().lower()
     if outer_boundary_mode not in {"pec", "natural", "robin"}:
         raise ValueError("outer_boundary_mode must be 'pec', 'natural', or 'robin'")
@@ -972,6 +987,10 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "initial_dc_mode": initial_dc_mode,
             "magnetic_receiver_mode": magnetic_receiver_mode,
             "magnetic_dbdt_mode": magnetic_dbdt_mode,
+            "magnetic_recovery_quadrature_degree": magnetic_recovery_quadrature_degree,
+            "magnetic_recovery_quadrature_audit_degrees": (
+                magnetic_recovery_quadrature_audit_degrees
+            ),
             "outer_boundary_mode": outer_boundary_mode,
             "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
             "receiver_evaluation_mode": receiver_evaluation_mode,
@@ -5783,6 +5802,40 @@ def _initialise_debye_memories_to_field(memories, E_old) -> None:
         memory.x.scatter_forward()
 
 
+def _tetrahedron_quadrature_geometry(msh, *, degree: int = 4):
+    """Return physical tetrahedron quadrature points, cells, and volume weights."""
+
+    import basix
+    import numpy as np
+
+    tdim = msh.topology.dim
+    msh.topology.create_connectivity(tdim, 0)
+    cell_to_vertex = msh.topology.connectivity(tdim, 0)
+    n_cells = msh.topology.index_map(tdim).size_local
+    vertices = np.stack(
+        [np.asarray(msh.geometry.x[cell_to_vertex.links(cell)], dtype=float) for cell in range(n_cells)]
+    )
+    if vertices.shape != (n_cells, 4, 3):
+        raise ValueError("Biot-Savart tetrahedron quadrature requires four vertices per cell")
+
+    qpoints, qweights = basix.make_quadrature(basix.CellType.tetrahedron, int(degree))
+    jacobians = np.stack(
+        (
+            vertices[:, 1] - vertices[:, 0],
+            vertices[:, 2] - vertices[:, 0],
+            vertices[:, 3] - vertices[:, 0],
+        ),
+        axis=2,
+    )
+    determinants = np.abs(np.linalg.det(jacobians))
+    physical_points = vertices[:, None, 0, :] + np.einsum(
+        "cij,qj->cqi", jacobians, qpoints
+    )
+    cells = np.repeat(np.arange(n_cells, dtype=np.int32), qpoints.shape[0])
+    weights = (determinants[:, None] * qweights[None, :]).reshape(-1)
+    return physical_points.reshape(-1, 3), cells, weights
+
+
 def _biot_savart_cell_current_h_at_receiver(
     E,
     msh,
@@ -5791,40 +5844,47 @@ def _biot_savart_cell_current_h_at_receiver(
     *,
     debye=None,
     memories=None,
+    quadrature_degree: int | None = None,
 ):
-    """Recover receiver H from cell-centered ohmic currents with Biot-Savart."""
+    """Recover receiver H by tetrahedron quadrature of the conductive current."""
 
     import numpy as np
 
-    centers, _radii, volumes = _cell_centers_radii_volumes(msh)
-    n_cells = centers.shape[0]
-    cells = np.arange(n_cells, dtype=np.int32)
-    e_vals = np.asarray(E.eval(centers, cells), dtype=float).reshape(n_cells, 3)
+    points, cells, volume_weights = _tetrahedron_quadrature_geometry(
+        msh,
+        degree=(
+            int(config.magnetic_recovery_quadrature_degree)
+            if quadrature_degree is None
+            else int(quadrature_degree)
+        ),
+    )
+    e_vals = np.asarray(E.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
     use_debye_current = debye is not None and memories is not None and bool(debye.get("terms", []))
     if use_debye_current:
         sigma_source = materials.get("sigma_infinity_physical", materials["sigma_infinity"])
     else:
         sigma_source = materials.get("sigma_physical", materials["sigma"])
-    sigma = np.asarray(sigma_source.x.array[:n_cells], dtype=float)
+    sigma = np.asarray(sigma_source.x.array, dtype=float)[cells]
     if use_debye_current:
         delta_values = [
-            np.asarray(delta_fn.x.array[:n_cells], dtype=float) for delta_fn in debye["delta_functions"]
+            np.asarray(delta_fn.x.array, dtype=float)[cells] for delta_fn in debye["delta_functions"]
         ]
         memory_values = [
-            np.asarray(memory.eval(centers, cells), dtype=float).reshape(n_cells, 3) for memory in memories
+            np.asarray(memory.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
+            for memory in memories
         ]
         currents = _cell_current_density_from_debye_values(e_vals, sigma, delta_values, memory_values)
     else:
         currents = _cell_current_density_from_debye_values(e_vals, sigma)
     h_values = []
     for receiver in _receiver_sampling_points(config):
-        r = np.asarray(receiver, dtype=float)[None, :] - centers
+        r = np.asarray(receiver, dtype=float)[None, :] - points
         norm = np.linalg.norm(r, axis=1)
         mask = norm > 0.0
         h = np.zeros(3, dtype=float)
         if np.any(mask):
             h = np.sum(
-                volumes[mask, None]
+                volume_weights[mask, None]
                 * np.cross(currents[mask], r[mask])
                 / (4.0 * np.pi * norm[mask, None] ** 3),
                 axis=0,
@@ -5850,6 +5910,47 @@ def _biot_savart_line_h_at_receiver(config: PipelineConfig, *, current: float, n
     )
 
 
+def _biot_savart_total_h_components_at_receiver(
+    E,
+    msh,
+    materials: dict[str, Any],
+    config: PipelineConfig,
+    source_current: float,
+    *,
+    debye=None,
+    memories=None,
+    quadrature_degree: int | None = None,
+):
+    """Return separate conductive, impressed-wire, and total receiver H fields."""
+
+    import numpy as np
+
+    conductive_h = np.asarray(
+        _biot_savart_cell_current_h_at_receiver(
+            E,
+            msh,
+            materials,
+            config,
+            debye=debye,
+            memories=memories,
+            quadrature_degree=quadrature_degree,
+        ),
+        dtype=float,
+    )
+    wire_h = np.asarray(
+        _biot_savart_line_h_at_receiver(
+            config,
+            current=float(source_current),
+        ),
+        dtype=float,
+    )
+    return {
+        "conductive_h": conductive_h,
+        "wire_h": wire_h,
+        "total_h": conductive_h + wire_h,
+    }
+
+
 def _biot_savart_total_h_at_receiver(
     E,
     msh,
@@ -5860,23 +5961,41 @@ def _biot_savart_total_h_at_receiver(
     debye=None,
     memories=None,
 ):
-    """Return receiver H from ohmic cell currents plus the impressed wire current."""
+    """Return receiver H from conductive currents plus the impressed wire current."""
 
-    import numpy as np
-
-    h = _biot_savart_cell_current_h_at_receiver(
+    return _biot_savart_total_h_components_at_receiver(
         E,
         msh,
         materials,
         config,
+        source_current,
         debye=debye,
         memories=memories,
-    )
-    h += _biot_savart_line_h_at_receiver(
-        config,
-        current=float(source_current),
-    )
-    return h
+    )["total_h"]
+
+
+def _faraday_initialization_diagnostics(
+    components: dict[str, Any],
+    *,
+    config: PipelineConfig,
+    source_current: float,
+) -> dict[str, Any]:
+    """Return JSON-safe provenance for the absolute H0 used by Faraday stepping."""
+
+    import numpy as np
+
+    conductive_h = np.asarray(components["conductive_h"], dtype=float)
+    wire_h = np.asarray(components["wire_h"], dtype=float)
+    total_h = np.asarray(components["total_h"], dtype=float)
+    return {
+        "method": "biot_savart_total_current",
+        "conductive_h": conductive_h.tolist(),
+        "wire_h": wire_h.tolist(),
+        "total_h": total_h.tolist(),
+        "initial_hz": float(total_h[2]),
+        "source_current": float(source_current),
+        "magnetic_recovery_quadrature_degree": int(config.magnetic_recovery_quadrature_degree),
+    }
 
 
 def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> None:
@@ -6695,6 +6814,7 @@ def _run_fetd_forward_impl(
         raise ValueError("magnetic_dbdt_mode='biot_rate' requires a Biot magnetic_receiver_mode")
     H_old_receiver = None
     faraday_receiver_hz = None
+    faraday_initialization = None
     if magnetic_receiver_mode == "biot_current":
         H_old_receiver = _biot_savart_total_h_at_receiver(
             E_old,
@@ -6708,16 +6828,44 @@ def _run_fetd_forward_impl(
     elif magnetic_receiver_mode == "biot_ohmic":
         H_old_receiver = _biot_savart_cell_current_h_at_receiver(E_old, msh, materials, config)
     elif magnetic_receiver_mode == "faraday_integrated":
-        faraday_initial_h = _biot_savart_total_h_at_receiver(
+        initial_source_current = _source_current(0.0, config)
+        faraday_initial_parts = _biot_savart_total_h_components_at_receiver(
             E_old,
             msh,
             materials,
             config,
-            _source_current(0.0, config),
+            initial_source_current,
             debye=debye,
             memories=memories,
         )
-        faraday_receiver_hz = float(faraday_initial_h[2])
+        faraday_initialization = _faraday_initialization_diagnostics(
+            faraday_initial_parts,
+            config=config,
+            source_current=initial_source_current,
+        )
+        faraday_initialization["quadrature_audit"] = []
+        for audit_degree in config.magnetic_recovery_quadrature_audit_degrees:
+            if int(audit_degree) == int(config.magnetic_recovery_quadrature_degree):
+                audit_parts = faraday_initial_parts
+            else:
+                audit_parts = _biot_savart_total_h_components_at_receiver(
+                    E_old,
+                    msh,
+                    materials,
+                    config,
+                    initial_source_current,
+                    debye=debye,
+                    memories=memories,
+                    quadrature_degree=int(audit_degree),
+                )
+            audit_metadata = _faraday_initialization_diagnostics(
+                audit_parts,
+                config=config,
+                source_current=initial_source_current,
+            )
+            audit_metadata["magnetic_recovery_quadrature_degree"] = int(audit_degree)
+            faraday_initialization["quadrature_audit"].append(audit_metadata)
+        faraday_receiver_hz = float(faraday_initialization["initial_hz"])
 
     rows = []
     receiver_diagnostic_rows = []
@@ -6975,6 +7123,8 @@ def _run_fetd_forward_impl(
             "transient_operator_reused": bool(operator_reused),
             "ip_total_field_equation": _debye_total_field_step_metadata(debye, dt),
         }
+        if step == 0 and faraday_initialization is not None:
+            log_item["faraday_initialization"] = faraday_initialization
         if divergence_control_stats is not None:
             log_item.update(divergence_control_stats)
         if is_output:
@@ -8946,6 +9096,10 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
         "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
         "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
+        "magnetic_recovery_quadrature_degree": int(config.magnetic_recovery_quadrature_degree),
+        "magnetic_recovery_quadrature_audit_degrees": list(
+            config.magnetic_recovery_quadrature_audit_degrees
+        ),
         "divergence_cleaning": str(config.divergence_cleaning),
         "divergence_cleaning_strength": float(config.divergence_cleaning_strength),
         "divergence_cleaning_t_obs_min": float(config.divergence_cleaning_t_obs_min),
@@ -11393,6 +11547,21 @@ def _parse_float_csv(value: str | None, name: str = "comma-separated float list"
     return tuple(items)
 
 
+def _parse_int_csv(value: str | None, name: str = "comma-separated integer list") -> tuple[int, ...]:
+    if value is None or str(value).strip() == "":
+        return ()
+    items: list[int] = []
+    for raw in str(value).split(","):
+        raw = raw.strip()
+        if raw == "":
+            raise argparse.ArgumentTypeError(f"{name} contains an empty item")
+        try:
+            items.append(int(raw))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"{name} contains a non-integer item: {raw!r}") from exc
+    return tuple(items)
+
+
 def _parse_string_csv(value: str | None) -> tuple[str, ...]:
     if value is None or str(value).strip() == "":
         return ()
@@ -11465,6 +11634,17 @@ def _main_locked(argv: list[str]) -> int:
         default="faraday_integrated",
     )
     parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate"], default="curl")
+    parser.add_argument(
+        "--magnetic-recovery-quadrature-degree",
+        type=int,
+        default=8,
+        help="Tetrahedron quadrature degree used for Biot-Savart magnetic recovery and Faraday H0.",
+    )
+    parser.add_argument(
+        "--magnetic-recovery-quadrature-audit-degrees",
+        default="",
+        help="Optional comma-separated Biot-Savart degrees recorded as an H0 convergence audit.",
+    )
     parser.add_argument("--outer-boundary-mode", choices=["pec", "natural", "robin"], default="pec")
     parser.add_argument("--outer-boundary-robin-scale", type=float, default=1.0)
     parser.add_argument("--receiver-type", choices=["point", "volume_average", "disk_average"], default="point")
@@ -11628,6 +11808,11 @@ def _main_locked(argv: list[str]) -> int:
         initial_dc_mode=args.initial_dc_mode,
         magnetic_receiver_mode=args.magnetic_receiver_mode,
         magnetic_dbdt_mode=args.magnetic_dbdt_mode,
+        magnetic_recovery_quadrature_degree=args.magnetic_recovery_quadrature_degree,
+        magnetic_recovery_quadrature_audit_degrees=_parse_int_csv(
+            args.magnetic_recovery_quadrature_audit_degrees,
+            "--magnetic-recovery-quadrature-audit-degrees",
+        ),
         outer_boundary_mode=args.outer_boundary_mode,
         outer_boundary_robin_scale=args.outer_boundary_robin_scale,
         receiver_type=args.receiver_type,
