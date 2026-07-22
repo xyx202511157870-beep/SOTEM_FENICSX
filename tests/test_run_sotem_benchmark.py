@@ -121,7 +121,16 @@ def test_main_passes_source_only_and_observation_override_to_real_pipeline(monke
     monkeypatch.setitem(
         sys.modules,
         "mpi4py",
-        SimpleNamespace(MPI=SimpleNamespace(COMM_WORLD=SimpleNamespace(size=1))),
+        SimpleNamespace(
+            MPI=SimpleNamespace(
+                COMM_WORLD=SimpleNamespace(
+                    rank=0,
+                    size=1,
+                    bcast=lambda value, root=0: value,
+                    barrier=lambda: None,
+                )
+            )
+        ),
     )
     monkeypatch.setattr(pipeline, "generate_verification_mesh", lambda config: config.mesh_path())
     monkeypatch.setattr(
