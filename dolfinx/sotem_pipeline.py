@@ -109,6 +109,7 @@ class PipelineConfig:
     receiver_type: str = "point"  # point, volume_average, disk_average
     receiver_average_radius: float = 2.0
     receiver_diagnostic_types: tuple[str, ...] | str = ()
+    receiver_depth_profile_depths: tuple[float, ...] = ()
     receiver_mesh_size: float = 10.0
     receiver_anchor_mesh_size: float = 0.0
     receiver_refinement_radius: float = 60.0
@@ -257,6 +258,9 @@ class PipelineConfig:
 
     def receiver_diagnostics_csv(self) -> Path:
         return self.workdir / "receiver_diagnostics.csv"
+
+    def receiver_depth_profile_csv(self) -> Path:
+        return self.workdir / "receiver_depth_profile.csv"
 
     def receiver_diagnostics_png(self) -> Path:
         return self.workdir / "receiver_diagnostics.png"
@@ -683,6 +687,15 @@ def _sponge_diagnostics(config: PipelineConfig) -> dict[str, Any]:
     }
 
 
+def _validated_receiver_depth_profile_depths(config: PipelineConfig) -> tuple[float, ...]:
+    values = tuple(float(value) for value in config.receiver_depth_profile_depths)
+    if any(not math.isfinite(value) or value <= 0.0 for value in values):
+        raise ValueError("receiver_depth_profile_depths must contain finite positive depths")
+    if any(right <= left for left, right in zip(values, values[1:])):
+        raise ValueError("receiver_depth_profile_depths must be unique and strictly increasing")
+    return values
+
+
 def validate_model_consistency(config: PipelineConfig, reference_mode: str | None = None) -> dict[str, Any]:
     """Validate FEM and empymod inputs before constructing the mesh or reference."""
 
@@ -690,6 +703,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
 
     diagnostics: dict[str, Any] = {}
     observation_times = _validated_observation_times(config)
+    _validated_receiver_depth_profile_depths(config)
     effective_t_max = _effective_t_max(config)
 
     def require_positive(name: str, value: float) -> float:
@@ -12289,6 +12303,12 @@ def _main_locked(argv: list[str]) -> int:
     parser.add_argument("--receiver-x", type=float, default=0.0)
     parser.add_argument("--receiver-y", type=float, default=-300.0)
     parser.add_argument("--receiver-z", type=float, default=-0.1)
+    parser.add_argument(
+        "--receiver-depth-profile-depths",
+        type=_parse_float_csv,
+        default=(),
+        help="Comma-separated positive depths for terminal same-field receiver diagnostics.",
+    )
     parser.add_argument("--source-mesh-size", type=float, default=5.0)
     parser.add_argument("--source-refinement-radius", type=float, default=100.0)
     parser.add_argument("--source-quadrature-points", type=int, default=0, help="Override manual line-source Gauss points; 0 keeps the automatic rule.")
@@ -12408,6 +12428,7 @@ def _main_locked(argv: list[str]) -> int:
         ramp_off_time=args.ramp_off_time,
         observation_times=args.observation_times,
         receiver=(args.receiver_x, args.receiver_y, args.receiver_z),
+        receiver_depth_profile_depths=args.receiver_depth_profile_depths,
         source_mesh_size=args.source_mesh_size,
         source_refinement_radius=args.source_refinement_radius,
         source_quadrature_points=args.source_quadrature_points,

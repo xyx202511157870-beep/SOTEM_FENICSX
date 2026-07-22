@@ -3492,3 +3492,60 @@ def test_validation_artifacts_record_actual_reference_mode(tmp_path):
     )
 
     assert summary["reference_mode"] == "cole-cole-debye"
+
+
+def test_receiver_depth_profile_depths_are_validated():
+    sp = _load_pipeline_module()
+
+    assert sp._validated_receiver_depth_profile_depths(
+        sp.PipelineConfig(receiver_depth_profile_depths=(300.0, 400.0, 500.0, 600.0))
+    ) == (300.0, 400.0, 500.0, 600.0)
+    for values in (
+        (0.0,),
+        (-1.0,),
+        (300.0, 300.0),
+        (400.0, 300.0),
+        (float("nan"),),
+    ):
+        with pytest.raises(ValueError, match="receiver_depth_profile_depths"):
+            sp._validated_receiver_depth_profile_depths(
+                sp.PipelineConfig(receiver_depth_profile_depths=values)
+            )
+
+
+def test_receiver_depth_profile_default_is_disabled():
+    sp = _load_pipeline_module()
+
+    config = sp.PipelineConfig()
+
+    assert config.receiver_depth_profile_depths == ()
+    assert sp._validated_receiver_depth_profile_depths(config) == ()
+
+
+def test_receiver_depth_profile_round_trips_through_cli(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    captured = {}
+    validate_model_consistency = sp.validate_model_consistency
+
+    def capture_config(config):
+        captured["config"] = config
+        return validate_model_consistency(config)
+
+    monkeypatch.setattr(sp, "validate_model_consistency", capture_config)
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+
+    result = sp.main(
+        [
+            "--workdir",
+            str(tmp_path),
+            "--receiver-depth-profile-depths",
+            "300,400,500,600",
+            "--check-env-only",
+            "--no-install",
+        ]
+    )
+
+    assert result == 0
+    assert captured["config"].receiver_depth_profile_depths == pytest.approx(
+        (300.0, 400.0, 500.0, 600.0)
+    )
