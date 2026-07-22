@@ -413,3 +413,386 @@ despite the unchanged q10 minimum raw quadrature-point distance of 0.0119014 m.
 The test suite includes independent high-accuracy reference integrals for both
 an interior receiver and a near external receiver, plus production-path tests
 that ensure containing and neighboring cells take the adaptive routes.
+
+## Backward-Euler time-refinement result on the repaired mesh
+
+The paired no-IP/IP validation must use backward Euler because the current
+Debye-memory implementation does not support BDF2.  A same-mesh no-IP T4 run
+therefore followed the BDF2 spatial result.  It used 16 steps before the first
+observation and four steps between subsequent observations:
+
+```text
+/home/paidaxin/codex-sotem-song-v3-paired-be-noip-mpi8-243643f-r2/
+song-noip-be-t20
+```
+
+Eight bound MPI ranks completed 92 internal steps in 1:00:24 with 799% CPU,
+positive KSP reason 2 throughout and no swap.  The source gates and reference
+source-quadrature audit passed, but the unchanged 5% physical gate failed at
+the final 0.794328 ms sample:
+
+| Component | T4 maximum error | Peak-normalized maximum | Result |
+| --- | ---: | ---: | --- |
+| Ex | 1.495500% | 0.766018% | pass |
+| Hz | 2.433253% | 0.635374% | pass |
+| dBz/dt | 5.403222% | 1.351917% | fail |
+
+The failed point was retained; neither the threshold nor the data were
+modified.  A single-variable T8 rerun reused byte-identical Gmsh and DOLFINx
+mesh files and changed only the number of steps between observations from four
+to eight:
+
+```text
+/home/paidaxin/codex-sotem-song-v3-paired-be-noip-mpi12-t8-243643f/
+song-noip-be-t20
+```
+
+Twelve bound ranks completed 168 internal steps in 1:23:04 with 1199% CPU,
+positive KSP reason 2, 28--29 iterations at every output and no swap.  Its
+formal errors were:
+
+| Component | T8 maximum error | T8 RMS error | Peak-normalized maximum |
+| --- | ---: | ---: | ---: |
+| Ex | 0.764704% | 0.309310% | 0.673767% |
+| Hz | 1.208454% | 0.421809% | 0.317258% |
+| dBz/dt | 2.726604% | 0.999534% | 1.351512% |
+
+All three formal components pass the fixed 5% short-window gate.  The repaired
+initial Hz differs between the eight-rank T4 and twelve-rank T8 partitions by
+only about `1.3e-12` relatively, so the improvement is not an initialization
+constant or MPI partition artifact.  The T4-to-T8 reduction at the failed late
+sample, together with the already passing same-mesh BDF2 result, identifies
+backward-Euler temporal truncation as the remaining T4 error source.
+
+This is still a 10 us--0.794328 ms smoke window.  The generated artifact
+correctly leaves `final_acceptance_passed=false` because the requested 1 s
+window is not covered.
+
+## Paired Cole--Cole IP result on the repaired mesh
+
+The paired IP run changed only the earth constitutive model.  It reused the
+same 219,333-tetrahedron, 1,401,922-DOF mesh, backward-Euler T8 schedule and
+12-rank layout as the passing no-IP run.  Both mesh contracts contain the
+same hashes:
+
+```text
+Gmsh:   000ce6e7c575a0182dbd4e23702b86cbed1bf0b2cc2870b57e6e360cba856e73
+DOLFINx: 6329ef86a3562d4d8ee8229a3b46e7e67d3efef766fea5a9301314e0fbea4814
+```
+
+The production artifact is:
+
+```text
+/home/paidaxin/codex-sotem-song-v3-paired-be-ip-d8-mpi12-t8-243643f/
+song-ip-be-t20
+```
+
+Eight positive Debye terms approximate the requested Cole--Cole law
+(`rho0=100 ohm m`, `m=0.3`, `tau=1 s`, `c=0.3`) with relative L2 error
+`0.452638%`, below the unchanged 1% material-fit gate.  Four, five and six
+terms had respectively failed that gate at `2.87468%`, `1.83974%` and
+`1.15461%`; eight terms are therefore the first tested passing level, not a
+post-hoc response fit.
+
+Twelve bound MPI ranks completed 168 internal steps in 1:23:15 with 1199%
+CPU, positive KSP reason 2 throughout and no swap.  The source, source-line
+quadrature, material-fit and 5% short-window physical gates all passed:
+
+| Component | Maximum error | RMS error | Peak-normalized maximum |
+| --- | ---: | ---: | ---: |
+| Ex | 1.996575% | 1.614270% | 1.958912% |
+| Hz | 0.903835% | 0.294480% | 0.306963% |
+| dBz/dt | 2.035163% | 0.889179% | 1.796783% |
+
+The IP and no-IP q8 initial values agree to machine precision
+(`-0.002250775367955675` and `-0.0022507753679556746` A/m), as required
+because the Cole--Cole DC conductivity is the same.  Within the IP run, q8
+and q10 Biot--Savart initialization differ by only about `1.1e-9`
+relatively.  This rules out an IP-dependent initial magnetic constant.
+
+The polarization effect was also evaluated as `(IP-noIP)/noIP` rather than
+only comparing each absolute response independently:
+
+| Component | FEM effect at 10 us | Exact effect at 10 us | FEM effect at 0.794 ms | Exact effect at 0.794 ms | Maximum effect difference |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ex | -43.2909% | -41.9438% | -27.3932% | -26.3489% | 1.3570 percentage points |
+| Hz | +0.4745% | +0.4674% | +33.4101% | +33.8129% | 0.4028 percentage points |
+| dBz/dt | -28.7042% | -29.0357% | +23.9868% | +24.8270% | 0.8985 percentage points |
+
+Ey remains diagnostic-only by design.  Its FEM peak is 0.168% of the Ex
+peak, while the symmetric 1D reference is numerically zero.  It is retained
+in the artifacts and plots but excluded from the fixed formal component set.
+
+Like the paired no-IP result, this establishes only internal short-window
+validation over 10 us--0.794328 ms.  The artifact intentionally reports
+`final_acceptance_passed=false` because neither the corrected-model full
+scope nor the required 1 s endpoint is covered.
+
+## Independent SimPEG space/time audit
+
+The canonical SimPEG S0/T4 short-window run was not accepted as a third
+reference.  At 10 us its errors against the same finite-wire exact reference
+were 20.0008% in Ex, 0.9491% in Hz and 7.7022% in dBz/dt.  Increasing only the
+first-observation time subdivision from T4 to T16 reduced the errors to
+12.9443%, 0.9766% and 2.8520%, respectively, but Ex still failed.  This showed
+that both time and space resolution mattered.
+
+The S1/T16 first-observation audit used 159,424 cells and 496,218 edges.  Its
+initial Ampere solve required 2088 iterations, which exposed the old hard
+2000-iteration cutoff.  Commit `cfbf889` increased only the initialization
+iteration limit to 4000; it retained the `1e-8` external and `1e-11` internal
+residual tolerances.  The converged true residual was `7.5645e-9`, and all 16
+transient solves had positive reason 2 with maximum true residual
+`9.7592e-12`.
+
+```text
+/home/paidaxin/codex-song-simpeg-firstpoint-s1t16-243643f/result.json
+```
+
+| Component | S0/T16 error | S1/T16 error | S1 result |
+| --- | ---: | ---: | --- |
+| Ex | 12.944349% | 3.210106% | pass |
+| Hz | 0.976590% | 0.333085% | pass |
+| dBz/dt | 2.851962% | 1.380265% | pass |
+
+An S2/T16 attempt with 250,344 cells was not converted into a response point:
+the initial Ampere solve reached 4000 iterations with true residual
+`4.0935e-6`, above the same `1e-8` gate.  Its failure log is preserved at:
+
+```text
+/home/paidaxin/codex-song-simpeg-firstpoint-s2t16-243643f.failure-maxiter4000-residual4e-6.log
+```
+
+Thus S1/T16 is the first independently converged SimPEG level below the fixed
+5% first-observation gate; S2 is a solver-convergence failure, not evidence of
+further spatial convergence.
+
+The complete 20-observation S1/T16 no-IP run subsequently finished in
+2:41:56 with exit status zero, 99% CPU, peak RSS 2.72 GiB and no swap:
+
+```text
+/home/paidaxin/codex-song-simpeg-short20-s1t16-cfbf889/result.json
+```
+
+It used the same 159,424-cell, 496,218-edge S1 mesh and performed 320
+transient solves.  All backend reasons were positive reason 2, the maximum
+transient iteration count was 97 and the maximum external true relative
+residual was `9.7592e-12`.  The DC and Ampere initialization true residuals
+were respectively `2.0903e-11` and `7.5645e-9`, both below their unchanged
+`1e-8` gates.
+
+| Component | Maximum SimPEG error | Time at maximum | Terminal error |
+| --- | ---: | ---: | ---: |
+| Ex | 3.210106% | 10 us | 0.021277% |
+| Hz | 0.630309% | 0.316228 ms | 0.380335% |
+| dBz/dt | 3.452765% | 0.063096 ms | 0.300406% |
+
+All formal components pass the fixed 5% gate across the whole short window.
+On the identical 20-point time axis, the maximum SimPEG--FEniCSx difference
+scaled by the exact-reference amplitude is 3.887927% in Ex, 1.588789% in Hz
+and 3.462634% in dBz/dt.  The corresponding RMS differences are 1.517972%,
+0.737656% and 2.150435%.  This is independent agreement between two different
+three-dimensional discretizations, not merely two comparisons produced by
+the FEniCSx pipeline.
+
+### SimPEG IP failure and time-refinement diagnosis
+
+The corresponding S1/T16 IP run completed all 320 transient solves in
+2:15:02 with exit status zero, peak RSS 2.94 GiB and no swap:
+
+```text
+/home/paidaxin/codex-song-simpeg-short20-ip-s1t16-cfbf889/result.json
+```
+
+Its DC and Ampere initialization true residuals were `2.1460e-11` and
+`7.6031e-9`.  Every transient solve had positive backend reason 2, with a
+maximum of 82 iterations and maximum external true residual `2.2345e-11`.
+The 16-term Debye approximation had relative L2 error `0.0102433%`, zero DC
+conductivity residual and strictly positive amplitudes.  Solver convergence
+and the material approximation are therefore not explanations for the
+response failure.
+
+| Component | Maximum SimPEG IP error | Time at maximum | Terminal error | Result |
+| --- | ---: | ---: | ---: | --- |
+| Ex | 7.420635% | 10 us | 0.750796% | fail |
+| Hz | 0.654283% | 0.501187 ms | 0.538677% | pass |
+| dBz/dt | 3.445477% | 0.1 ms | 0.000859% | pass |
+
+The failure is retained.  At 10 us the no-IP Ex error is already signed
+`-3.210106%`; the SimPEG polarization effect is `-44.4693%` versus the exact
+`-41.9438%`, adding another same-sign 2.5255 percentage-point discrepancy.
+The two contributions combine to the signed IP Ex error `-7.420635%`.
+
+Two same-mesh, same-material, same-solver single-observation runs varied only
+the number of time steps before 10 us:
+
+```text
+/home/paidaxin/codex-song-simpeg-firstpoint-ip-s1t8-cfbf889/result.json
+/home/paidaxin/codex-song-simpeg-firstpoint-ip-s1t32-cfbf889/result.json
+```
+
+| Component | T8 error | T16 error | T32 error |
+| --- | ---: | ---: | ---: |
+| Ex | 7.802149% | 7.420635% | 7.320007% |
+| Hz | 0.336603% | 0.337439% | 0.337828% |
+| dBz/dt | 0.680039% | 0.848914% | 0.889146% |
+
+Ex improves monotonically, but the improvement from T16 to T32 is only
+0.100628 percentage points.  A conservative first-order Richardson
+extrapolation gives about 7.22% at zero time-step size; using the observed
+order of about 1.92 gives about 7.28%.  Both remain well above the unchanged
+5% gate.  Thus the accepted explanation is an S1 spatial/common-mode SimPEG
+Ex error, not insufficient T16 temporal resolution.  S2 cannot yet provide a
+spatial-convergence point because its initialization fails the independent
+`1e-8` residual gate, as recorded above.
+
+## User-selected 1 ms validation window
+
+The required engineering window was subsequently narrowed explicitly to
+`1e-5 <= t <= 1e-3 s`; extending the calculation to 1 s is not required for
+this validation decision.  The 21 logarithmically spaced observation times
+include both endpoints.  The domain/refinement audit at 1 ms used a diffusion
+length of 398.942 m, a recommended resolved radius/depth of 797.885 m, a
+resolved radius of 1000 m, and a resolved depth of 797.885 m; the 25 km outer
+domain is therefore not the limiting factor in this window.
+
+The no-IP FEniCSx run is preserved at:
+
+```text
+/home/paidaxin/codex-sotem-song-be-noip-mpi12-t8-1ms-5d03d6e/song-noip-be-t21-1ms
+```
+
+It used 12 MPI ranks, 221,164 distributed tetrahedra, 1,413,482 second-order
+Nedelec unknowns and 176 backward-Euler internal steps.  It finished with
+exit status zero in 1:28:34 at 1199% CPU, with no swap.  Every transient KSP
+solve had positive reason 2.
+
+| Component | Maximum FEniCSx error | Time at maximum | RMS error | Result |
+| --- | ---: | ---: | ---: | --- |
+| Ex | 1.036429% | 1 ms | 0.378103% | pass |
+| Hz | 1.412497% | 1 ms | 0.514213% | pass |
+| dBz/dt | 3.301669% | 1 ms | 1.212791% | pass |
+
+All three formal components pass the unchanged 5% physical-error gate over
+the complete user-selected window.  Ey remains diagnostic-only by design.
+The generated `error_summary.json` still reports
+`final_acceptance_passed=false` solely because the older acceptance-contract
+metadata requires a 1 s endpoint and `corrected_model_full` scope.  Its
+`strict_error_gate_passed` and `physical_error_gate_passed` fields are both
+true.  This legacy scope flag is not reinterpreted as a response failure.
+
+The paired IP run reused the no-IP mesh byte-for-byte.  The Gmsh mesh,
+DOLFINx mesh and mesh-contract SHA-256 values were respectively
+`ee6cb662dcbbc83cf83d63c66f634da37aef1232aff37799d25b2e69e88a07f1`,
+`e26bbdae69ef4c659d0a26db2480d78664677fd812bebfd51da9a680235f20a3`
+and `f46625d7ea671cfb0bedbd4100b709e29c8ec2126f5b7f0b1c1af73c4e26e13f`
+for both cases.  It is preserved at:
+
+```text
+/home/paidaxin/codex-sotem-song-be-ip-d8-mpi12-t8-1ms-5d03d6e/song-ip-be-t21-1ms
+```
+
+The eight-term positive Debye approximation had relative L2 error
+`0.452638%`, below the fixed 1% material-fit gate.  The run completed all 176
+backward-Euler steps with positive KSP reason 2, exit status zero, 1198% CPU,
+1:28:48 elapsed time and no swap.
+
+| Component | Maximum FEniCSx IP error | Time at maximum | RMS error | Result |
+| --- | ---: | ---: | ---: | --- |
+| Ex | 1.993756% | 19.953 us | 1.574857% | pass |
+| Hz | 1.090690% | 1 ms | 0.373077% | pass |
+| dBz/dt | 2.687928% | 1 ms | 1.047552% | pass |
+
+The paired IP case therefore also passes the unchanged 5% physical-error
+gate over the entire user-selected window.  As in the no-IP case, the legacy
+1 s/scope metadata keeps `final_acceptance_passed=false`; both strict and
+physical error gates are true.
+
+The first attempt with safety fraction 0.95 was rejected before any solve
+because the IP memory estimate was 33.37 GB versus a 33.25 GB usable limit.
+That failed preflight is preserved at:
+
+```text
+/home/paidaxin/codex-sotem-song-be-ip-d8-mpi12-t8-1ms-5d03d6e.failure-preflight-33.37gt33.25
+```
+
+The completed run changed only the safety fraction to 0.96, making the limit
+33.60 GB.  Observed execution used no swap, so this was a documented resource
+preflight adjustment rather than a numerical-tolerance relaxation.
+
+### Final 1 ms SimPEG and cross-code comparison
+
+The independently discretized SimPEG S1/T16 runs used the same 159,424-cell,
+496,218-edge mesh (`09bd7d3e...70c3`), the same 21-point time hash
+(`ce1f5f5b...f4741`) and 336 transient solves in each case.  Their atomic
+results are preserved at:
+
+```text
+/home/paidaxin/codex-song-simpeg-1ms-noip-s1t16-5d03d6e/result.json
+/home/paidaxin/codex-song-simpeg-1ms-ip-s1t16-5d03d6e/result.json
+```
+
+The no-IP audit payload recorded 2:56:10 compute elapsed time; outer process
+wall time was 3:06:21, with exit status zero and no swap.  All transient
+solves had positive reason 2, with maximum true relative residual
+`9.7592e-12`.  Its DC and Ampere initialization residuals were `2.0903e-11`
+and `7.5645e-9`.
+
+| Component | Maximum SimPEG no-IP error | Time at maximum | 1 ms error | Result |
+| --- | ---: | ---: | ---: | --- |
+| Ex | 3.210106% | 10 us | 0.044328% | pass |
+| Hz | 0.630309% | 0.316228 ms | 0.248385% | pass |
+| dBz/dt | 3.452765% | 0.063096 ms | 0.511599% | pass |
+
+The IP audit payload recorded 2:49:14 compute elapsed time; outer process wall
+time was 2:58:58, again with exit status zero and no swap.  Its 336 transient
+solves also all had positive reason 2; the maximum true relative residual was
+`3.5731e-11`.  The DC and Ampere initialization residuals were `2.1460e-11`
+and `7.6031e-9`.  Its 16-term positive Debye approximation retained relative
+L2 error `0.0102433%` and zero DC residual.
+
+| Component | Maximum SimPEG IP error | Time at maximum | 1 ms error | Result |
+| --- | ---: | ---: | ---: | --- |
+| Ex | 7.420635% | 10 us | 1.079199% | fail |
+| Hz | 0.654283% | 0.501187 ms | 0.416578% | pass |
+| dBz/dt | 3.445477% | 0.1 ms | 0.176290% | pass |
+
+The 1 ms extension therefore does not alter the earlier diagnosis: SimPEG's
+only formal failure is the early IP Ex point.  It is not caused by linear
+solver convergence, material fitting or insufficient T16 time subdivision.
+
+The four response arrays were compared on their common time axis with the
+same 1%-of-peak denominator floor.  The maximum FEniCSx--SimPEG differences,
+scaled by the exact-reference amplitude, were:
+
+| Model | Ex | Hz | dBz/dt |
+| --- | ---: | ---: | ---: |
+| no-IP | 3.889398% | 1.660883% | 3.462542% |
+| IP | 5.764285% | 1.507268% | 3.468952% |
+
+The IP Ex pairwise difference exceeds 5% only at 10 us because the SimPEG IP
+Ex result independently fails there; the FEniCSx IP Ex error is 1.66% at that
+same time and its maximum over the window is 1.99%.
+
+The polarization-effect error was also calculated as the maximum absolute
+difference between solver and exact `(IP / no-IP - 1) * 100` curves:
+
+| Solver | Ex effect error | Hz effect error | dBz/dt effect error |
+| --- | ---: | ---: | ---: |
+| FEniCSx | 1.356574 percentage points | 0.429457 pp | 0.898638 pp |
+| SimPEG | 2.525546 percentage points | 0.228192 pp | 0.858592 pp |
+
+Thus both solvers recover the polarization effect, but FEniCSx has the better
+absolute Ex agreement in both no-IP and IP cases.  SimPEG has the better Hz
+agreement; dBz/dt accuracy is comparable.
+
+The machine-readable combined audit and rendered comparison are at:
+
+```text
+/home/paidaxin/codex-song-1ms-cross-code-5d03d6e/comparison_summary.json
+/home/paidaxin/codex-song-1ms-cross-code-5d03d6e/cross_code_comparison.png
+```
+
+The relevant SimPEG adapter, validation CLI, runner and DOLFINx regression
+suites were rerun together after these computations.  Pytest reached 100%
+with exit status zero and two existing skipped tests.
