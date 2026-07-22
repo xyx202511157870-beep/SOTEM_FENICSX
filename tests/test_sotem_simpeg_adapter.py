@@ -147,7 +147,7 @@ def test_public_z_down_geometry_is_mapped_once_to_internal_z_up(song_case):
         "type": "petsc_hypre",
         "tolerance": 1.0e-8,
         "internal_tolerance": 1.0e-11,
-        "maxiter": 2000,
+        "maxiter": 4000,
         "residual_replacement_steps": 2,
         "dc_ksp_type": "cg",
         "dc_preconditioner": "hypre_boomeramg",

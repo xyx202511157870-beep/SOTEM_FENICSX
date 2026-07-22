@@ -519,7 +519,7 @@ def build_benchmark_config(
             "type": "petsc_hypre",
             "tolerance": 1.0e-8,
             "internal_tolerance": 1.0e-11,
-            "maxiter": 2000,
+            "maxiter": 4000,
             "residual_replacement_steps": 2,
             "dc_ksp_type": "cg",
             "dc_preconditioner": "hypre_boomeramg",
