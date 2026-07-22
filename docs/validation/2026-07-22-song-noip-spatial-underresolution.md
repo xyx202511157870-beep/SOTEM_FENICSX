@@ -252,3 +252,90 @@ missing-cell discrepancy.  The Nedelec-order-2 memory preflight estimate is
 The mesh-only spatial hypothesis therefore passes.  This is approval to run a
 single-variable transient test after the ongoing preserved diagnostic finishes;
 it is not yet evidence that the response itself passes empymod or SimPEG.
+
+## Preserved old-interface transient and depth baseline
+
+The 20-observation factor-2/Rx-5 m run with the unrefined internal interface
+subsequently completed rather than being inferred from the earlier partial
+run:
+
+```text
+/home/paidaxin/codex-sotem-song-p2-rx5-depth711-profile-t20-mpi8-17d6e49/
+song-noip-rx5-depth711-profile-t20
+```
+
+Eight core-bound MPI ranks completed all 91 internal steps in 2:13:58 wall
+time with 799% reported CPU usage, zero swaps and exit status 0.  All KSP
+reasons were positive convergence reason 2.  At the formal surface receiver,
+the maximum finite-source empymod errors over 10 us--0.794328 ms were:
+
+| Component | Maximum error | Time of maximum | Terminal error |
+| --- | ---: | ---: | ---: |
+| Ex | 2.010899% | 0.316228 ms | 0.248736% |
+| Hz | 0.605442% | 0.398107 ms | 0.333860% |
+| dBz/dt | 3.585368% | 0.794328 ms | 3.585368% |
+
+This is a surface-receiver smoke pass under the unchanged 5% gate, not a full
+three-dimensional validation.  The terminal field was evaluated at the four
+predeclared depth points and compared separately with 9-point finite-source
+empymod values whose 17-point quadrature audit had already converged:
+
+| Depth | Ex error | Ex absolute error | dBz/dt error | dBz/dt absolute error |
+| ---: | ---: | ---: | ---: | ---: |
+| 300 m | 2.045661% | 5.8364e-6 V/m | 17.022524% | 1.8771e-7 T/s |
+| 400 m | 1.184657% | 2.1409e-6 V/m | 7.261189% | 6.6230e-8 T/s |
+| 500 m | 4.050165% | 3.4698e-6 V/m | 3.791788% | 2.5925e-8 T/s |
+| 600 m | 52.810828% | 6.3876e-6 V/m | 4.574333% | 2.1370e-8 T/s |
+
+The 600 m Ex reference is only `1.2095e-5 V/m`, so its large relative error
+is reported together with the absolute error rather than hidden.  More
+decisively, the 300 m dBz/dt error is 17.02% and its two candidate-cell centers
+remain about 130--134 m from the requested point.  The completed response
+therefore confirms that the old internal-interface mesh cannot support a
+credible depth field even while the surface curve remains below 5%.
+
+The approved single-variable v3 rerun reuses the mesh-only candidate hashes and
+changes only the internal-interface surface refinement.  Its isolated artifact
+directory is:
+
+```text
+/home/paidaxin/codex-sotem-song-layer-interface-v3-p2-rx5-depth711-profile-t20-mpi8-72461f5/
+song-noip-rx5-depth711-profile-t20
+```
+
+No response conclusion is recorded for that candidate until its full transient
+and terminal depth profile complete.
+
+### Initial DC solver compatibility gate
+
+The first v3 transient startup failed closed before time stepping because the
+initial scalar-potential path hard-coded conjugate gradients.  On the larger
+v3 mesh PETSc returned `DIVERGED_INDEFINITE_MAT` (`reason=-10`) after three
+iterations, even though the DC conductivity form is expected to be positive
+after its single gauge constraint.  The failure evidence is preserved at:
+
+```text
+/home/paidaxin/codex-sotem-song-layer-interface-v3-p2-rx5-depth711-profile-t20-mpi8-72461f5/
+failure_snapshot_initial_dc_cg_20260722
+```
+
+An independent mesh audit found 219,333 positive-volume tetrahedra, no zero or
+inverted cells and a worst Jacobian condition number of 20.90; the old mesh was
+worse at approximately 1599.5.  Direct assembly of the 296,399 by 296,399 DC
+matrix then showed symmetry at tolerance `1e-12`, strictly positive diagonal
+entries and positive quadratic forms for three deterministic distributed test
+vectors.  Solver variants on that same matrix isolated the algorithmic
+difference:
+
+| KSP / PC | PETSc reason | Iterations | True relative residual |
+| --- | ---: | ---: | ---: |
+| CG / Hypre BoomerAMG | -10 | 3 | 8.6594e-3 |
+| GMRES / Hypre BoomerAMG | 2 | 9 | 1.5336e-8 |
+| CG / GAMG | -8 | 5 | 1.1932 |
+| CG / Jacobi | -10 | 57 | 4.2574e-2 |
+
+The production DC path was changed to use the already-configured pipeline KSP
+type, whose default is GMRES, instead of overriding it to CG.  A production
+function rerun on the real v3 mesh converged in nine iterations with reason 2
+and produced a finite initial-field vector.  This repairs a solver-compatibility
+failure; it does not by itself establish response accuracy.

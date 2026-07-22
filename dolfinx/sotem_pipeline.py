@@ -6889,6 +6889,17 @@ def _make_nedelec_solution_sampler_at_points(msh, sample_points):
     return sample
 
 
+def _configure_initial_dc_ksp(ksp, config: PipelineConfig) -> None:
+    """Configure the initial DC solver without assuming CG compatibility."""
+
+    ksp.setType(config.ksp_type)
+    ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=max(config.max_it, 1000))
+    pc = ksp.getPC()
+    pc.setType("hypre")
+    pc.setHYPREType("boomeramg")
+    ksp.setFromOptions()
+
+
 def _solve_initial_dc_field(msh, spaces, materials, facet_tags, config: PipelineConfig):
     """Solve charge-conserving DC potential and interpolate E0=-grad(phi)."""
 
@@ -6920,12 +6931,7 @@ def _solve_initial_dc_field(msh, spaces, materials, facet_tags, config: Pipeline
 
     ksp = PETSc.KSP().create(A.comm)
     ksp.setOperators(A)
-    ksp.setType("cg")
-    ksp.setTolerances(rtol=config.rtol, atol=config.atol, max_it=max(config.max_it, 1000))
-    pc = ksp.getPC()
-    pc.setType("hypre")
-    pc.setHYPREType("boomeramg")
-    ksp.setFromOptions()
+    _configure_initial_dc_ksp(ksp, config)
     ksp.solve(b, phi.x.petsc_vec)
     phi.x.scatter_forward()
     its = ksp.getIterationNumber()
