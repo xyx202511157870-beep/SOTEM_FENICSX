@@ -2499,11 +2499,15 @@ def _apply_local_mesh_quality_gate(summary: dict[str, Any]) -> dict[str, Any]:
         "min_quality_3r_over_R": LOCAL_MESH_MIN_QUALITY,
         "max_aspect_R_over_3r": LOCAL_MESH_MAX_ASPECT,
     }
-    required = (
+    fixed_required = (
         "source_hit_cells",
         "receiver_colliding_or_nearest_cells",
         "interface_source_receiver_patch",
     )
+    declared_required = tuple(
+        str(value) for value in gated.get("required_selections", ())
+    )
+    required = tuple(dict.fromkeys((*fixed_required, *declared_required)))
     failures = []
     selections = gated.get("selections")
     if not isinstance(selections, dict):
@@ -2541,6 +2545,40 @@ def _require_local_mesh_quality_gate(summary: dict[str, Any]) -> None:
         )
 
 
+def _quality_cells_for_point(msh, point):
+    """Select owned colliding cells, or one collective nearest cell."""
+
+    import numpy as np
+
+    point_array = np.asarray(point, dtype=float)
+    owned_cells = int(msh.topology.index_map(msh.topology.dim).size_local)
+    cells = [
+        int(cell)
+        for cell in _find_cells_for_point(msh, point_array)
+        if int(cell) < owned_cells
+    ]
+    global_collision_count = _collective_entity_count(msh.comm, len(cells))
+    selection_mode = "colliding"
+    if global_collision_count == 0:
+        centers = _cell_centers(msh)
+        distances = np.linalg.norm(centers - point_array, axis=1)
+        local_candidate = (
+            (
+                float(np.min(distances)),
+                int(msh.comm.rank),
+                int(np.argmin(distances)),
+            )
+            if centers.shape[0] > 0
+            else (math.inf, int(msh.comm.rank), -1)
+        )
+        winner = min(msh.comm.allgather(local_candidate))
+        if not math.isfinite(float(winner[0])) or int(winner[2]) < 0:
+            raise RuntimeError("cannot select a receiver quality cell from an empty mesh")
+        cells = [int(winner[2])] if int(winner[1]) == int(msh.comm.rank) else []
+        selection_mode = "nearest_center"
+    return cells, int(global_collision_count), selection_mode
+
+
 def diagnose_local_mesh_quality(msh, config: PipelineConfig, source_info) -> dict[str, Any]:
     """Audit only the source, receiver, and relevant interface tetrahedra."""
 
@@ -2558,37 +2596,70 @@ def diagnose_local_mesh_quality(msh, config: PipelineConfig, source_info) -> dic
         raise RuntimeError("source local diagnostics do not identify actual quadrature hit cells")
 
     receiver_point = np.asarray(config.receiver, dtype=float)
-    owned_cells = int(msh.topology.index_map(msh.topology.dim).size_local)
-    receiver_cells = [
-        int(cell)
-        for cell in _find_cells_for_point(msh, receiver_point)
-        if int(cell) < owned_cells
-    ]
-    global_receiver_collision_count = _collective_entity_count(
-        msh.comm, len(receiver_cells)
+    receiver_cells, global_receiver_collision_count, receiver_mode = (
+        _quality_cells_for_point(msh, receiver_point)
     )
-    receiver_mode = "colliding"
-    if global_receiver_collision_count == 0:
-        centers = _cell_centers(msh)
-        distances = np.linalg.norm(centers - receiver_point, axis=1)
-        local_candidate = (
-            (
-                float(np.min(distances)),
-                int(msh.comm.rank),
-                int(np.argmin(distances)),
-            )
-            if centers.shape[0] > 0
-            else (math.inf, int(msh.comm.rank), -1)
-        )
-        candidates = msh.comm.allgather(local_candidate)
-        winner = min(candidates)
-        if not math.isfinite(float(winner[0])) or int(winner[2]) < 0:
-            raise RuntimeError("cannot select a receiver quality cell from an empty mesh")
-        receiver_cells = [int(winner[2])] if int(winner[1]) == int(msh.comm.rank) else []
-        receiver_mode = "nearest_center"
     interface_cells = _interface_source_receiver_patch_cells(msh, config)
+    fixed_required = [
+        "source_hit_cells",
+        "receiver_colliding_or_nearest_cells",
+        "interface_source_receiver_patch",
+    ]
+    selections = {
+        "source_hit_cells": _summarize_tetra_cell_quality(
+            msh,
+            source_cells,
+            selection_definition="unique DOLFINx cells actually hit by manual source quadrature",
+        ),
+        "receiver_colliding_or_nearest_cells": _summarize_tetra_cell_quality(
+            msh,
+            receiver_cells,
+            selection_definition=(
+                "all DOLFINx cells colliding with the receiver point"
+                if receiver_mode == "colliding"
+                else "nearest-center DOLFINx cell because no collision was returned"
+            ),
+        ),
+        "interface_source_receiver_patch": _summarize_tetra_cell_quality(
+            msh,
+            interface_cells,
+            selection_definition=(
+                "cells touching z=0 with an interface vertex inside the configured "
+                "source-line or receiver refinement radius"
+            ),
+        ),
+    }
+    depth_profile_metadata = []
+    required_selections = list(fixed_required)
+    receiver_x, receiver_y, _receiver_z = receiver_point
+    for index, depth in enumerate(_validated_receiver_depth_profile_depths(config)):
+        point = np.asarray((receiver_x, receiver_y, -float(depth)), dtype=float)
+        cells, collision_count, selection_mode = _quality_cells_for_point(msh, point)
+        selection_key = f"receiver_depth_profile_{index:03d}"
+        selections[selection_key] = _summarize_tetra_cell_quality(
+            msh,
+            cells,
+            selection_definition=(
+                f"all DOLFINx cells colliding with receiver-depth profile point {point.tolist()}"
+                if selection_mode == "colliding"
+                else f"nearest-center DOLFINx cell for receiver-depth profile point {point.tolist()}"
+            ),
+        )
+        required_selections.append(selection_key)
+        depth_profile_metadata.append(
+            {
+                "selection_key": selection_key,
+                "depth_m": float(depth),
+                "point": [float(value) for value in point],
+                "colliding_cell_count": (
+                    int(collision_count) if selection_mode == "colliding" else 0
+                ),
+                "selection_mode": selection_mode,
+                "selected_local_cell_ids": cells,
+            }
+        )
     summary = {
-        "schema": "sotem_local_tetra_quality/v1",
+        "schema": "sotem_local_tetra_quality/v2",
         "metric_definition": {
             "inradius": "r = 3V / total_face_area",
             "circumradius": "R from the tetrahedron circumcenter linear system",
@@ -2605,30 +2676,9 @@ def diagnose_local_mesh_quality(msh, config: PipelineConfig, source_info) -> dic
             "selection_mode": receiver_mode,
             "selected_local_cell_ids": receiver_cells,
         },
-        "selections": {
-            "source_hit_cells": _summarize_tetra_cell_quality(
-                msh,
-                source_cells,
-                selection_definition="unique DOLFINx cells actually hit by manual source quadrature",
-            ),
-            "receiver_colliding_or_nearest_cells": _summarize_tetra_cell_quality(
-                msh,
-                receiver_cells,
-                selection_definition=(
-                    "all DOLFINx cells colliding with the receiver point"
-                    if receiver_mode == "colliding"
-                    else "nearest-center DOLFINx cell because no collision was returned"
-                ),
-            ),
-            "interface_source_receiver_patch": _summarize_tetra_cell_quality(
-                msh,
-                interface_cells,
-                selection_definition=(
-                    "cells touching z=0 with an interface vertex inside the configured "
-                    "source-line or receiver refinement radius"
-                ),
-            ),
-        },
+        "receiver_depth_profile": depth_profile_metadata,
+        "required_selections": required_selections,
+        "selections": selections,
     }
     return _apply_local_mesh_quality_gate(summary)
 

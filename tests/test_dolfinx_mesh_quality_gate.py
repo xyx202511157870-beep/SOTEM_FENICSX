@@ -311,6 +311,113 @@ def test_local_mesh_quality_gate_uses_fixed_thresholds_and_fails_closed():
         sp._require_local_mesh_quality_gate(gated)
 
 
+def test_local_mesh_quality_gate_fails_when_declared_depth_selection_is_missing():
+    sp = _load_pipeline_module()
+    passing = {
+        "quality_3r_over_R": {"min": 0.5},
+        "aspect_R_over_3r": {"max": 2.0},
+        "all_positive_volume": True,
+    }
+    summary = {
+        "required_selections": ["receiver_depth_profile_000"],
+        "selections": {
+            "source_hit_cells": passing,
+            "receiver_colliding_or_nearest_cells": passing,
+            "interface_source_receiver_patch": passing,
+        },
+    }
+
+    gated = sp._apply_local_mesh_quality_gate(summary)
+
+    assert gated["passed"] is False
+    assert gated["failed_selections"] == ["receiver_depth_profile_000"]
+
+
+def test_local_mesh_quality_diagnoses_every_depth_profile_point(monkeypatch):
+    sp = _load_pipeline_module()
+
+    class Comm:
+        rank = 0
+        size = 1
+
+        @staticmethod
+        def allreduce(value):
+            return value
+
+        @staticmethod
+        def allgather(value):
+            return [value]
+
+    class IndexMap:
+        size_local = 20
+
+    mesh = SimpleNamespace(
+        comm=Comm(),
+        topology=SimpleNamespace(dim=3, index_map=lambda _dim: IndexMap()),
+    )
+    seen_points = []
+
+    def find_cells(_msh, point):
+        seen_points.append(tuple(float(value) for value in point))
+        return np.asarray([len(seen_points)], dtype=np.int32)
+
+    def summarize(_msh, cells, *, selection_definition):
+        return {
+            "selection_definition": selection_definition,
+            "selected_cells": [int(cell) for cell in cells],
+            "quality_3r_over_R": {"min": 0.5},
+            "aspect_R_over_3r": {"max": 2.0},
+            "all_positive_volume": True,
+        }
+
+    monkeypatch.setattr(sp, "_source_local_projection_diagnostics_from_info", lambda _info: {})
+    monkeypatch.setattr(sp, "_find_cells_for_point", find_cells)
+    monkeypatch.setattr(sp, "_interface_source_receiver_patch_cells", lambda *_args: [9])
+    monkeypatch.setattr(sp, "_summarize_tetra_cell_quality", summarize)
+    config = sp.PipelineConfig(
+        receiver=(1.0, 2.0, -0.1),
+        receiver_depth_profile_depths=(300.0, 400.0),
+    )
+
+    result = sp.diagnose_local_mesh_quality(
+        mesh,
+        config,
+        {"quality_local_cell_ids": [8]},
+    )
+
+    assert result["required_selections"] == [
+        "source_hit_cells",
+        "receiver_colliding_or_nearest_cells",
+        "interface_source_receiver_patch",
+        "receiver_depth_profile_000",
+        "receiver_depth_profile_001",
+    ]
+    assert result["receiver_depth_profile"] == [
+        {
+            "selection_key": "receiver_depth_profile_000",
+            "depth_m": 300.0,
+            "point": [1.0, 2.0, -300.0],
+            "colliding_cell_count": 1,
+            "selection_mode": "colliding",
+            "selected_local_cell_ids": [2],
+        },
+        {
+            "selection_key": "receiver_depth_profile_001",
+            "depth_m": 400.0,
+            "point": [1.0, 2.0, -400.0],
+            "colliding_cell_count": 1,
+            "selection_mode": "colliding",
+            "selected_local_cell_ids": [3],
+        },
+    ]
+    assert seen_points == [
+        (1.0, 2.0, -0.1),
+        (1.0, 2.0, -300.0),
+        (1.0, 2.0, -400.0),
+    ]
+    assert result["passed"] is True
+
+
 def test_physical_tag_counts_require_air_earth_outer_and_interface():
     sp = _load_pipeline_module()
 
