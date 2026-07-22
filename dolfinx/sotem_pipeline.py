@@ -386,6 +386,7 @@ def _formal_acceptance_artifact_names() -> tuple[str, ...]:
         "verification_result.png",
         "verification_report.txt",
         "receiver_diagnostics.csv",
+        "receiver_depth_profile.csv",
         "receiver_diagnostics.png",
         "receiver_reference_errors.csv",
         "receiver_reference_error_curves.png",
@@ -704,7 +705,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
 
     diagnostics: dict[str, Any] = {}
     observation_times = _validated_observation_times(config)
-    _validated_receiver_depth_profile_depths(config)
+    receiver_depth_profile_depths = _validated_receiver_depth_profile_depths(config)
     effective_t_max = _effective_t_max(config)
 
     def require_positive(name: str, value: float) -> float:
@@ -1089,6 +1090,7 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "receiver_type": receiver_type,
             "receiver_average_radius": receiver_average_radius,
             "receiver_diagnostic_types": receiver_diagnostic_types,
+            "receiver_depth_profile_depths": receiver_depth_profile_depths,
             "divergence_cleaning": divergence_cleaning,
             "divergence_cleaning_strength": divergence_cleaning_strength,
             "divergence_cleaning_t_obs_min": divergence_cleaning_t_obs_min,
@@ -1130,6 +1132,10 @@ def validate_formulation(config: PipelineConfig) -> str:
         raise ValueError(
             "formulation='h' does not support resume_forward; refusing to rerun "
             "without a valid H-form checkpoint restore"
+        )
+    if formulation == "h" and _validated_receiver_depth_profile_depths(config):
+        raise ValueError(
+            "receiver_depth_profile_depths currently requires formulation='e'"
         )
     return formulation
 
@@ -5451,6 +5457,14 @@ def _evaluate_terminal_receiver_depth_profile(E, dbdt, msh, config: PipelineConf
     return rows
 
 
+def _is_terminal_depth_profile_step(step, output_step_indices, depths) -> bool:
+    return (
+        bool(depths)
+        and bool(output_step_indices)
+        and int(step) == max(int(value) for value in output_step_indices)
+    )
+
+
 def _make_secondary_receiver_projector_from_evaluate_receivers(
     electric_getter,
     dbdt_getter,
@@ -7361,6 +7375,7 @@ def _run_fetd_forward_impl(
     step_times = schedule["step_times"]
     return_times = schedule["return_times"]
     output_step_indices = set(schedule["output_step_indices"])
+    receiver_depth_profile_depths = _validated_receiver_depth_profile_depths(config)
     first_output_step = int(schedule["output_step_indices"][0])
     observation_time_by_step = {
         int(step): float(return_times[i]) for i, step in enumerate(schedule["output_step_indices"])
@@ -7712,6 +7727,28 @@ def _run_fetd_forward_impl(
                 rec["dBzdt_biot_rate"] = biot_rate
                 if magnetic_dbdt_mode == "biot_rate":
                     rec["dBzdt"] = biot_rate
+            if _is_terminal_depth_profile_step(
+                step,
+                output_step_indices,
+                receiver_depth_profile_depths,
+            ):
+                depth_profile_rows = _evaluate_terminal_receiver_depth_profile(
+                    E_new,
+                    dbdt,
+                    msh,
+                    config,
+                    time_obs=observation_time_by_step[step],
+                )
+                _write_receiver_depth_profile_csv(
+                    config,
+                    depth_profile_rows,
+                    comm=msh.comm,
+                )
+                log(
+                    f"[receiver-depth-profile] wrote {len(depth_profile_rows)} terminal rows to "
+                    f"{config.receiver_depth_profile_csv()}",
+                    comm=msh.comm,
+                )
             rows.append([rec[name] for name in components])
             receiver_diagnostic_rows.extend(
                 _evaluate_receiver_diagnostics(

@@ -135,3 +135,25 @@ def test_receiver_depth_profile_csv_is_root_only_atomic_and_ordered(tmp_path):
         comm=SimpleNamespace(rank=1),
     )
     assert not other.receiver_depth_profile_csv().exists()
+
+
+def test_depth_profile_is_terminal_only():
+    sp = _load_pipeline_module()
+    outputs = frozenset({15, 19, 23})
+
+    assert not sp._is_terminal_depth_profile_step(15, outputs, (300.0,))
+    assert not sp._is_terminal_depth_profile_step(19, outputs, (300.0,))
+    assert sp._is_terminal_depth_profile_step(23, outputs, (300.0,))
+    assert not sp._is_terminal_depth_profile_step(23, outputs, ())
+
+
+def test_depth_profile_fails_closed_for_h_formulation():
+    sp = _load_pipeline_module()
+
+    with pytest.raises(ValueError, match="receiver_depth_profile_depths.*formulation='e'"):
+        sp.validate_formulation(
+            sp.PipelineConfig(
+                formulation="h",
+                receiver_depth_profile_depths=(300.0,),
+            )
+        )
