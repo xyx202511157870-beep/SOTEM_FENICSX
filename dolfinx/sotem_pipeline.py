@@ -6494,6 +6494,326 @@ def _dg0_values_at_cells(function, cells):
     return unique_values[inverse]
 
 
+def _owned_cells_containing_point(msh, point):
+    """Return locally owned tetrahedra that contain a physical point."""
+
+    import numpy as np
+
+    cells = np.asarray(_find_cells_for_point(msh, point), dtype=np.int32)
+    n_owned = int(msh.topology.index_map(msh.topology.dim).size_local)
+    return np.unique(cells[(cells >= 0) & (cells < n_owned)])
+
+
+def _point_segment_distance(point, start, end):
+    """Return the Euclidean distance from a point to a closed segment."""
+
+    import numpy as np
+
+    point = np.asarray(point, dtype=float)
+    start = np.asarray(start, dtype=float)
+    end = np.asarray(end, dtype=float)
+    edge = end - start
+    edge_norm_sq = float(np.dot(edge, edge))
+    if edge_norm_sq == 0.0:
+        return float(np.linalg.norm(point - start))
+    parameter = float(np.dot(point - start, edge) / edge_norm_sq)
+    parameter = min(1.0, max(0.0, parameter))
+    return float(np.linalg.norm(point - (start + parameter * edge)))
+
+
+def _point_triangle_distance(point, triangle):
+    """Return the Euclidean distance from a point to a closed triangle."""
+
+    import numpy as np
+
+    point = np.asarray(point, dtype=float)
+    triangle = np.asarray(triangle, dtype=float)
+    a, b, c = triangle
+    edge_1 = b - a
+    edge_2 = c - a
+    normal = np.cross(edge_1, edge_2)
+    normal_norm = float(np.linalg.norm(normal))
+    if normal_norm > 0.0:
+        unit_normal = normal / normal_norm
+        signed_plane_distance = float(np.dot(point - a, unit_normal))
+        projection = point - signed_plane_distance * unit_normal
+        projection_offset = projection - a
+        dot_00 = float(np.dot(edge_1, edge_1))
+        dot_01 = float(np.dot(edge_1, edge_2))
+        dot_11 = float(np.dot(edge_2, edge_2))
+        dot_20 = float(np.dot(projection_offset, edge_1))
+        dot_21 = float(np.dot(projection_offset, edge_2))
+        denominator = dot_00 * dot_11 - dot_01 * dot_01
+        if denominator > 0.0:
+            bary_b = (dot_11 * dot_20 - dot_01 * dot_21) / denominator
+            bary_c = (dot_00 * dot_21 - dot_01 * dot_20) / denominator
+            bary_a = 1.0 - bary_b - bary_c
+            tolerance = 32.0 * np.finfo(float).eps
+            if min(bary_a, bary_b, bary_c) >= -tolerance:
+                return abs(signed_plane_distance)
+    return min(
+        _point_segment_distance(point, a, b),
+        _point_segment_distance(point, b, c),
+        _point_segment_distance(point, c, a),
+    )
+
+
+def _subdivide_triangle(triangle):
+    """Split one triangle into four congruent child triangles."""
+
+    import numpy as np
+
+    a, b, c = np.asarray(triangle, dtype=float)
+    ab = 0.5 * (a + b)
+    bc = 0.5 * (b + c)
+    ca = 0.5 * (c + a)
+    return (
+        np.asarray((a, ab, ca)),
+        np.asarray((ab, b, bc)),
+        np.asarray((ca, bc, c)),
+        np.asarray((ab, bc, ca)),
+    )
+
+
+def _adaptive_triangle_leaves(
+    triangle,
+    receiver,
+    *,
+    max_depth: int = 14,
+    separation_ratio: float = 1.0,
+):
+    """Refine until each face patch is no larger than its receiver distance."""
+
+    import numpy as np
+
+    if int(max_depth) < 0:
+        raise ValueError("Adaptive triangle maximum depth must be non-negative")
+    if float(separation_ratio) <= 0.0:
+        raise ValueError("Adaptive triangle separation ratio must be positive")
+    stack = [(np.asarray(triangle, dtype=float), 0)]
+    leaves = []
+    while stack:
+        candidate, depth = stack.pop()
+        edges = (
+            candidate[1] - candidate[0],
+            candidate[2] - candidate[1],
+            candidate[0] - candidate[2],
+        )
+        max_edge = max(float(np.linalg.norm(edge)) for edge in edges)
+        distance = _point_triangle_distance(receiver, candidate)
+        sufficiently_separated = max_edge <= float(separation_ratio) * distance
+        if sufficiently_separated or depth >= int(max_depth):
+            leaves.append(candidate)
+        else:
+            stack.extend((child, depth + 1) for child in _subdivide_triangle(candidate))
+    return leaves
+
+
+def _point_tetrahedron_distance(point, vertices):
+    """Return the Euclidean distance from a point to a closed tetrahedron."""
+
+    import numpy as np
+
+    point = np.asarray(point, dtype=float)
+    vertices = np.asarray(vertices, dtype=float)
+    transform = np.column_stack(
+        (vertices[1] - vertices[0], vertices[2] - vertices[0], vertices[3] - vertices[0])
+    )
+    try:
+        coordinates = np.linalg.solve(transform, point - vertices[0])
+        barycentric = np.concatenate(([1.0 - float(np.sum(coordinates))], coordinates))
+        tolerance = 64.0 * np.finfo(float).eps
+        if float(np.min(barycentric)) >= -tolerance:
+            return 0.0
+    except np.linalg.LinAlgError:
+        pass
+    faces = ((1, 2, 3), (0, 3, 2), (0, 1, 3), (0, 2, 1))
+    return min(
+        _point_triangle_distance(point, vertices[np.asarray(face, dtype=np.int32)])
+        for face in faces
+    )
+
+
+def _subdivide_tetrahedron_longest_edge(vertices):
+    """Bisect a tetrahedron across its longest edge without leaving the cell."""
+
+    import numpy as np
+
+    vertices = np.asarray(vertices, dtype=float)
+    pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+    first, second = max(
+        pairs,
+        key=lambda pair: float(np.linalg.norm(vertices[pair[1]] - vertices[pair[0]])),
+    )
+    midpoint = 0.5 * (vertices[first] + vertices[second])
+    child_1 = vertices.copy()
+    child_2 = vertices.copy()
+    child_1[second] = midpoint
+    child_2[first] = midpoint
+    return child_1, child_2
+
+
+def _adaptive_tetrahedron_leaves(
+    vertices,
+    receiver,
+    *,
+    max_depth: int = 24,
+    separation_ratio: float = 1.0,
+):
+    """Refine an external near-field cell until standard quadrature is separated."""
+
+    import numpy as np
+
+    if int(max_depth) < 0:
+        raise ValueError("Adaptive tetrahedron maximum depth must be non-negative")
+    if float(separation_ratio) <= 0.0:
+        raise ValueError("Adaptive tetrahedron separation ratio must be positive")
+    edge_pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+    stack = [(np.asarray(vertices, dtype=float), 0)]
+    leaves = []
+    while stack:
+        candidate, depth = stack.pop()
+        max_edge = max(
+            float(np.linalg.norm(candidate[second] - candidate[first]))
+            for first, second in edge_pairs
+        )
+        distance = _point_tetrahedron_distance(receiver, candidate)
+        sufficiently_separated = max_edge <= float(separation_ratio) * distance
+        if sufficiently_separated or depth >= int(max_depth):
+            leaves.append(candidate)
+        else:
+            stack.extend(
+                (child, depth + 1)
+                for child in _subdivide_tetrahedron_longest_edge(candidate)
+            )
+    return leaves
+
+
+def _adaptive_tetrahedron_kernel_quadrature(vertices, receiver, *, degree: int):
+    """Return adaptive in-cell Biot kernel samples for an external near receiver."""
+
+    import basix
+    import numpy as np
+
+    vertices = np.asarray(vertices, dtype=float)
+    receiver = np.asarray(receiver, dtype=float)
+    if vertices.shape != (4, 3) or receiver.shape != (3,):
+        raise ValueError("Adaptive tetrahedron quadrature requires (4, 3) vertices and one 3-vector")
+    if int(degree) <= 0:
+        raise ValueError("Adaptive tetrahedron quadrature degree must be positive")
+    reference_points, reference_weights = basix.make_quadrature(
+        basix.CellType.tetrahedron,
+        int(degree),
+    )
+    physical_blocks = []
+    kernel_blocks = []
+    for leaf in _adaptive_tetrahedron_leaves(vertices, receiver):
+        origin = leaf[0]
+        jacobian = np.column_stack((leaf[1] - origin, leaf[2] - origin, leaf[3] - origin))
+        physical_points = origin[None, :] + np.asarray(reference_points) @ jacobian.T
+        volume_weights = np.asarray(reference_weights) * abs(float(np.linalg.det(jacobian)))
+        displacement = receiver[None, :] - physical_points
+        distance = np.linalg.norm(displacement, axis=1)
+        valid = distance > 0.0
+        kernel_weights = np.zeros_like(displacement)
+        kernel_weights[valid] = (
+            volume_weights[valid, None]
+            * displacement[valid]
+            / distance[valid, None] ** 3
+        )
+        physical_blocks.append(physical_points)
+        kernel_blocks.append(kernel_weights)
+    return np.vstack(physical_blocks), np.vstack(kernel_blocks)
+
+
+def _owned_near_receiver_cells(msh, receiver):
+    """Return owned cells whose size is not small relative to receiver distance."""
+
+    import numpy as np
+
+    n_owned = int(msh.topology.index_map(msh.topology.dim).size_local)
+    cells = np.arange(n_owned, dtype=np.int32)
+    geometry_dofmap = np.asarray(msh.geometry.dofmap)
+    vertices = np.asarray(msh.geometry.x[geometry_dofmap[cells]], dtype=float)
+    centres = np.mean(vertices, axis=1)
+    radii = np.max(np.linalg.norm(vertices - centres[:, None, :], axis=2), axis=1)
+    centre_distance = np.linalg.norm(centres - np.asarray(receiver, dtype=float)[None, :], axis=1)
+    distance_lower_bound = np.maximum(centre_distance - radii, 0.0)
+    pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+    max_edges = np.maximum.reduce(
+        [
+            np.linalg.norm(vertices[:, second] - vertices[:, first], axis=1)
+            for first, second in pairs
+        ]
+    )
+    return cells[max_edges > distance_lower_bound]
+
+
+def _duffy_tetrahedron_kernel_quadrature(vertices, receiver, *, degree: int):
+    """Return nonsingular Biot kernel samples for an interior receiver cell."""
+
+    import basix
+    import numpy as np
+
+    vertices = np.asarray(vertices, dtype=float)
+    receiver = np.asarray(receiver, dtype=float)
+    if vertices.shape != (4, 3) or receiver.shape != (3,):
+        raise ValueError("Duffy tetrahedron quadrature requires (4, 3) vertices and one 3-vector")
+    if int(degree) <= 0:
+        raise ValueError("Duffy tetrahedron quadrature degree must be positive")
+
+    triangle_points, triangle_weights = basix.make_quadrature(
+        basix.CellType.triangle,
+        int(degree),
+    )
+    radial_points, radial_weights = basix.make_quadrature(
+        basix.CellType.interval,
+        int(degree),
+    )
+    radial = np.asarray(radial_points, dtype=float).reshape(-1)
+    radial_weights = np.asarray(radial_weights, dtype=float).reshape(-1)
+    faces = ((1, 2, 3), (0, 3, 2), (0, 1, 3), (0, 2, 1))
+    physical_blocks = []
+    kernel_blocks = []
+    for face in faces:
+        face_triangle = vertices[np.asarray(face, dtype=np.int32)]
+        for subtriangle in _adaptive_triangle_leaves(face_triangle, receiver):
+            a, b, c = subtriangle
+            edge_1 = b - a
+            edge_2 = c - a
+            face_points = (
+                a[None, :]
+                + triangle_points[:, 0, None] * edge_1[None, :]
+                + triangle_points[:, 1, None] * edge_2[None, :]
+            )
+            direction = face_points - receiver[None, :]
+            radius = np.linalg.norm(direction, axis=1)
+            determinant = abs(
+                float(np.linalg.det(np.column_stack((a - receiver, edge_1, edge_2))))
+            )
+            valid = radius > 0.0
+            transformed_kernel = np.zeros_like(direction)
+            transformed_kernel[valid] = (
+                -determinant
+                * triangle_weights[valid, None]
+                * direction[valid]
+                / radius[valid, None] ** 3
+            )
+            physical_blocks.append(
+                (
+                    receiver[None, None, :]
+                    + radial[:, None, None] * direction[None, :, :]
+                ).reshape(-1, 3)
+            )
+            kernel_blocks.append(
+                (
+                    radial_weights[:, None, None]
+                    * transformed_kernel[None, :, :]
+                ).reshape(-1, 3)
+            )
+    return np.vstack(physical_blocks), np.vstack(kernel_blocks)
+
+
 def _biot_savart_cell_current_h_at_receiver(
     E,
     msh,
@@ -6504,48 +6824,113 @@ def _biot_savart_cell_current_h_at_receiver(
     memories=None,
     quadrature_degree: int | None = None,
 ):
-    """Recover receiver H by tetrahedron quadrature of the conductive current."""
+    """Recover receiver H with Duffy quadrature in receiver-containing cells."""
 
     import numpy as np
 
+    degree = (
+        int(config.magnetic_recovery_quadrature_degree)
+        if quadrature_degree is None
+        else int(quadrature_degree)
+    )
     points, cells, volume_weights = _tetrahedron_quadrature_geometry(
         msh,
-        degree=(
-            int(config.magnetic_recovery_quadrature_degree)
-            if quadrature_degree is None
-            else int(quadrature_degree)
-        ),
+        degree=degree,
     )
-    e_vals = np.asarray(E.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
     use_debye_current = debye is not None and memories is not None and bool(debye.get("terms", []))
     if use_debye_current:
         sigma_source = materials.get("sigma_infinity_physical", materials["sigma_infinity"])
     else:
         sigma_source = materials.get("sigma_physical", materials["sigma"])
-    sigma = _dg0_values_at_cells(sigma_source, cells)
-    if use_debye_current:
+
+    def current_density(sample_points, sample_cells):
+        sample_points = np.asarray(sample_points, dtype=float)
+        sample_cells = np.asarray(sample_cells, dtype=np.int32)
+        e_vals = np.asarray(E.eval(sample_points, sample_cells), dtype=float).reshape(
+            sample_points.shape[0], 3
+        )
+        sigma = _dg0_values_at_cells(sigma_source, sample_cells)
+        if not use_debye_current:
+            return _cell_current_density_from_debye_values(e_vals, sigma)
         delta_values = [
-            _dg0_values_at_cells(delta_fn, cells)
+            _dg0_values_at_cells(delta_fn, sample_cells)
             for delta_fn in debye["delta_functions"]
         ]
         memory_values = [
-            np.asarray(memory.eval(points, cells), dtype=float).reshape(points.shape[0], 3)
+            np.asarray(memory.eval(sample_points, sample_cells), dtype=float).reshape(
+                sample_points.shape[0], 3
+            )
             for memory in memories
         ]
-        currents = _cell_current_density_from_debye_values(e_vals, sigma, delta_values, memory_values)
-    else:
-        currents = _cell_current_density_from_debye_values(e_vals, sigma)
+        return _cell_current_density_from_debye_values(
+            e_vals,
+            sigma,
+            delta_values,
+            memory_values,
+        )
+
+    currents = current_density(points, cells)
+    geometry_dofmap = np.asarray(msh.geometry.dofmap)
     h_values = []
     for receiver in _receiver_sampling_points(config):
-        r = np.asarray(receiver, dtype=float)[None, :] - points
+        receiver = np.asarray(receiver, dtype=float)
+        singular_cells = _owned_cells_containing_point(msh, receiver)
+        near_cells = np.setdiff1d(
+            _owned_near_receiver_cells(msh, receiver),
+            singular_cells,
+            assume_unique=False,
+        )
+        special_cells = np.union1d(singular_cells, near_cells)
+        regular_mask = ~np.isin(cells, special_cells)
+        r = receiver[None, :] - points
         norm = np.linalg.norm(r, axis=1)
-        mask = norm > 0.0
+        mask = regular_mask & (norm > 0.0)
         h = np.zeros(3, dtype=float)
         if np.any(mask):
             h = np.sum(
                 volume_weights[mask, None]
                 * np.cross(currents[mask], r[mask])
                 / (4.0 * np.pi * norm[mask, None] ** 3),
+                axis=0,
+            )
+        for cell in singular_cells:
+            vertices = np.asarray(
+                msh.geometry.x[geometry_dofmap[int(cell)]],
+                dtype=float,
+            )
+            singular_points, kernel_weights = _duffy_tetrahedron_kernel_quadrature(
+                vertices,
+                receiver,
+                degree=degree,
+            )
+            singular_cell_ids = np.full(
+                singular_points.shape[0],
+                int(cell),
+                dtype=np.int32,
+            )
+            singular_currents = current_density(singular_points, singular_cell_ids)
+            h += np.sum(
+                np.cross(singular_currents, kernel_weights) / (4.0 * np.pi),
+                axis=0,
+            )
+        for cell in near_cells:
+            vertices = np.asarray(
+                msh.geometry.x[geometry_dofmap[int(cell)]],
+                dtype=float,
+            )
+            near_points, kernel_weights = _adaptive_tetrahedron_kernel_quadrature(
+                vertices,
+                receiver,
+                degree=degree,
+            )
+            near_cell_ids = np.full(
+                near_points.shape[0],
+                int(cell),
+                dtype=np.int32,
+            )
+            near_currents = current_density(near_points, near_cell_ids)
+            h += np.sum(
+                np.cross(near_currents, kernel_weights) / (4.0 * np.pi),
                 axis=0,
             )
         h_values.append(h)

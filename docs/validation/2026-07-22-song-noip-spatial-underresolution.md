@@ -339,3 +339,77 @@ type, whose default is GMRES, instead of overriding it to CG.  A production
 function rerun on the real v3 mesh converged in nine iterations with reason 2
 and produced a finite initial-field vector.  This repairs a solver-compatibility
 failure; it does not by itself establish response accuracy.
+
+## Refined-interface v3 transient result
+
+The corrected v3 no-IP run used the approved interface-refined mesh, the same
+20 observations through 0.794328 ms, eight core-bound MPI ranks, and no change
+to the fixed physical acceptance threshold:
+
+```text
+/home/paidaxin/codex-sotem-song-layer-interface-v3-p2-rx5-depth711-profile-t20-mpi8-340a030/
+song-noip-rx5-depth711-profile-t20
+```
+
+It completed all 91 internal BDF2 steps in 1:00:55 wall time with 799% CPU
+usage, zero swap and positive KSP convergence reason 2 throughout.  The mesh
+has 219,333 tetrahedra and 1,401,922 global Nedelec-order-2 degrees of freedom.
+At the formal surface receiver, the maximum errors against the same 9-point
+finite-source empymod reference were:
+
+| Component | Refined-interface maximum | Old-interface maximum | Time of new maximum |
+| --- | ---: | ---: | ---: |
+| Ex | 0.677062% | 2.010899% | 0.010000 ms |
+| Hz | 0.169503% | 0.605442% | 0.794328 ms |
+| dBz/dt | 1.355536% | 3.585368% | 0.010000 ms |
+
+The terminal depth-profile comparison changed as follows:
+
+| Depth | New Ex error | Old Ex error | New dBz/dt error | Old dBz/dt error |
+| ---: | ---: | ---: | ---: | ---: |
+| 300 m | 0.247120% | 2.045661% | 0.028324% | 17.022524% |
+| 400 m | 0.413626% | 1.184657% | 0.054198% | 7.261189% |
+| 500 m | 0.546922% | 4.050165% | 0.352672% | 3.791788% |
+| 600 m | 2.853020% | 52.810828% | 0.187363% | 4.574333% |
+
+The selected-cell-center distance at 300 m fell from about 131.88 m to
+23.64 m, and at 600 m from 29.53 m to 4.55 m.  The simultaneous surface and
+depth improvements validate the internal-interface spatial diagnosis.  This
+artifact remains a short-window no-IP spatial validation, not a full 1 s or
+IP validation; its generated `error_summary.json` records that limitation.
+
+## Interior-receiver magnetic-initialization quadrature repair
+
+The v3 run also exposed an independent initialization issue.  Before the
+repair, the total initial receiver Hz changed non-monotonically with nominal
+tetrahedron quadrature degree: q8 gave `-2.25081716674e-3 A/m`, q10 gave
+`-2.22018898159e-3 A/m`, and q14 returned to `-2.25072737909e-3 A/m`.  At q10,
+a quadrature point landed only 0.0119014 m from the receiver inside its
+containing tetrahedron.  This was a near-singular point-sampling artifact, not
+a DC or Faraday time-stepping error.
+
+The production Biot-Savart recovery now uses a radial Duffy transform with
+adaptive face refinement in receiver-containing cells.  Neighboring cells
+whose maximum edge is not small relative to their receiver distance use
+longest-edge adaptive tetrahedron subdivision with all evaluation points kept
+inside the original finite element cell.  Far cells retain vectorized standard
+tetrahedron quadrature.
+
+The real 219,333-cell mesh was then re-solved on eight MPI ranks and audited
+without changing the DC field.  The repaired initial values are:
+
+| Degree | Conductive Hz (A/m) | Total Hz (A/m) |
+| ---: | ---: | ---: |
+| 2 | 2.108788081073e-8 | -2.250769702512e-3 |
+| 4 | 1.549652564516e-8 | -2.250775293867e-3 |
+| 6 | 1.538817925300e-8 | -2.250775402214e-3 |
+| 8 | 1.542244005309e-8 | -2.250775367953e-3 |
+| 10 | 1.542001241246e-8 | -2.250775370380e-3 |
+| 12 | 1.541890726309e-8 | -2.250775371486e-3 |
+| 14 | 1.541901298671e-8 | -2.250775371380e-3 |
+
+Thus q8 through q14 agree within approximately `1.6e-9` relative in total Hz,
+despite the unchanged q10 minimum raw quadrature-point distance of 0.0119014 m.
+The test suite includes independent high-accuracy reference integrals for both
+an interior receiver and a near external receiver, plus production-path tests
+that ensure containing and neighboring cells take the adaptive routes.

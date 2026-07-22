@@ -171,6 +171,12 @@ def test_cell_current_biot_uses_configured_tetrahedron_quadrature(monkeypatch):
         "_cell_centers_radii_volumes",
         lambda _mesh: (np.asarray([[0.25, 0.25, 0.25]]), np.ones(1), np.asarray([1.0 / 6.0])),
     )
+    monkeypatch.setattr(
+        sp,
+        "_owned_cells_containing_point",
+        lambda _mesh, _point: np.empty(0, dtype=np.int32),
+        raising=False,
+    )
 
     sampled = {}
 
@@ -221,6 +227,215 @@ def test_cell_current_biot_uses_configured_tetrahedron_quadrature(monkeypatch):
 
     assert sampled["count"] == qpoints.shape[0]
     np.testing.assert_allclose(actual, expected, rtol=1.0e-12, atol=1.0e-14)
+
+
+def test_duffy_tetrahedron_kernel_matches_internal_receiver_reference():
+    sp = _load_pipeline_module()
+    vertices = np.asarray(
+        [
+            [1.828983104746442, -501.3195161955183, -7.816281280291658],
+            [2.471794896604981, -496.7641249110663, -5.282164134735484],
+            [-3.780993313630343, -499.5272655001847, -7.779353302158516],
+            [0.0, -500.0, 0.0],
+        ]
+    )
+    receiver = np.asarray([0.0, -500.0, -0.1])
+    expected = np.asarray([-0.1391020924241277, -0.4065117335422597, 2.0981778927098076])
+
+    _points_8, kernel_weights_8 = sp._duffy_tetrahedron_kernel_quadrature(
+        vertices,
+        receiver,
+        degree=8,
+    )
+    _points_10, kernel_weights_10 = sp._duffy_tetrahedron_kernel_quadrature(
+        vertices,
+        receiver,
+        degree=10,
+    )
+
+    integral_8 = np.sum(kernel_weights_8, axis=0)
+    integral_10 = np.sum(kernel_weights_10, axis=0)
+    np.testing.assert_allclose(integral_8, expected, rtol=2.0e-5, atol=2.0e-7)
+    np.testing.assert_allclose(integral_10, expected, rtol=2.0e-5, atol=2.0e-7)
+    np.testing.assert_allclose(integral_8, integral_10, rtol=2.0e-5, atol=2.0e-7)
+
+
+def test_adaptive_tetrahedron_kernel_matches_near_external_receiver_reference():
+    sp = _load_pipeline_module()
+    vertices = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    receiver = np.asarray([-0.01, -0.02, -0.03])
+    expected = np.asarray(
+        [-0.3879475714079929, -0.40682635406163314, -0.426096000143438]
+    )
+
+    _points, kernel_weights = sp._adaptive_tetrahedron_kernel_quadrature(
+        vertices,
+        receiver,
+        degree=4,
+    )
+
+    np.testing.assert_allclose(
+        np.sum(kernel_weights, axis=0),
+        expected,
+        rtol=2.0e-5,
+        atol=2.0e-7,
+    )
+
+
+def test_cell_current_biot_adapts_near_external_cell(monkeypatch):
+    sp = _load_pipeline_module()
+    vertices = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+
+    class IndexMap:
+        size_local = 1
+
+    class Topology:
+        dim = 3
+
+        def index_map(self, _dim):
+            return IndexMap()
+
+    mesh = SimpleNamespace(
+        comm=SimpleNamespace(size=1),
+        topology=Topology(),
+        geometry=SimpleNamespace(
+            x=vertices,
+            dofmap=np.arange(4, dtype=np.int32).reshape(1, 4),
+        ),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_owned_cells_containing_point",
+        lambda _mesh, _point: np.empty(0, dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_owned_near_receiver_cells",
+        lambda _mesh, _point: np.asarray([0], dtype=np.int32),
+        raising=False,
+    )
+
+    class ElectricField:
+        def eval(self, points, cells):
+            assert np.all(np.asarray(cells) == 0)
+            return np.tile(np.asarray([1.0, 2.0, 3.0]), (len(points), 1))
+
+    class DofMap:
+        bs = 1
+
+        def cell_dofs(self, cell):
+            return np.asarray([cell], dtype=np.int32)
+
+    sigma = SimpleNamespace(
+        x=SimpleNamespace(array=np.asarray([2.0])),
+        function_space=SimpleNamespace(dofmap=DofMap()),
+    )
+    config = sp.PipelineConfig(
+        receiver=(-0.01, -0.02, -0.03),
+        receiver_type="point",
+        magnetic_recovery_quadrature_degree=4,
+    )
+
+    actual = sp._biot_savart_cell_current_h_at_receiver(
+        ElectricField(),
+        mesh,
+        {"sigma": sigma, "sigma_physical": sigma},
+        config,
+    )
+
+    kernel_integral = np.asarray(
+        [-0.3879475714079929, -0.40682635406163314, -0.426096000143438]
+    )
+    expected = np.cross(2.0 * np.asarray([1.0, 2.0, 3.0]), kernel_integral) / (
+        4.0 * np.pi
+    )
+    np.testing.assert_allclose(actual, expected, rtol=2.0e-5, atol=2.0e-7)
+
+
+def test_cell_current_biot_uses_duffy_quadrature_for_containing_cell(monkeypatch):
+    sp = _load_pipeline_module()
+    vertices = np.asarray(
+        [
+            [1.828983104746442, -501.3195161955183, -7.816281280291658],
+            [2.471794896604981, -496.7641249110663, -5.282164134735484],
+            [-3.780993313630343, -499.5272655001847, -7.779353302158516],
+            [0.0, -500.0, 0.0],
+        ]
+    )
+
+    class IndexMap:
+        size_local = 1
+
+    class Topology:
+        dim = 3
+
+        def index_map(self, _dim):
+            return IndexMap()
+
+    mesh = SimpleNamespace(
+        comm=SimpleNamespace(size=1),
+        topology=Topology(),
+        geometry=SimpleNamespace(
+            x=vertices,
+            dofmap=np.arange(4, dtype=np.int32).reshape(1, 4),
+        ),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_owned_cells_containing_point",
+        lambda _mesh, _point: np.asarray([0], dtype=np.int32),
+        raising=False,
+    )
+
+    class ElectricField:
+        def eval(self, points, cells):
+            assert np.all(np.asarray(cells) == 0)
+            return np.tile(np.asarray([1.0, 2.0, 3.0]), (len(points), 1))
+
+    class DofMap:
+        bs = 1
+
+        def cell_dofs(self, cell):
+            return np.asarray([cell], dtype=np.int32)
+
+    sigma = SimpleNamespace(
+        x=SimpleNamespace(array=np.asarray([2.0])),
+        function_space=SimpleNamespace(dofmap=DofMap()),
+    )
+    config = sp.PipelineConfig(
+        receiver=(0.0, -500.0, -0.1),
+        receiver_type="point",
+        magnetic_recovery_quadrature_degree=8,
+    )
+
+    actual = sp._biot_savart_cell_current_h_at_receiver(
+        ElectricField(),
+        mesh,
+        {"sigma": sigma, "sigma_physical": sigma},
+        config,
+    )
+
+    kernel_integral = np.asarray(
+        [-0.1391020924241277, -0.4065117335422597, 2.0981778927098076]
+    )
+    expected = np.cross(2.0 * np.asarray([1.0, 2.0, 3.0]), kernel_integral) / (
+        4.0 * np.pi
+    )
+    np.testing.assert_allclose(actual, expected, rtol=2.0e-5, atol=2.0e-7)
 
 
 def test_debye_cell_current_density_uses_memory_current():
