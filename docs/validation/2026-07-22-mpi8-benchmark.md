@@ -86,3 +86,55 @@ Before another full benchmark, use isolated 2/4/8-rank short tests to tune the
 PETSc/HYPRE solver and avoid recomputing reusable DC/H0 initialization data.
 Full-response MPI output remains unverified until a completed run is compared
 component-by-component with the serial response.
+
+## Post-fix four-rank/eight-rank benchmark
+
+The earlier incomplete eight-rank result above is retained as failure evidence.
+After the collective-boundary, distributed-vector, point-receiver and
+Biot-Savart geometry fixes in commit `9e0796e`, a new controlled benchmark
+changed only the MPI rank count from four to eight. Both runs used the same
+153,264-cell mesh, 984,394 global Nedelec-order-2 degrees of freedom, 16 BDF2
+steps and one 10 us observation. OpenMP and BLAS thread counts were fixed at
+one per rank and MPI ranks were bound to cores.
+
+Artifacts:
+
+```text
+/home/paidaxin/codex-sotem-song-p2-rx5-depth711-first1-mpi4-9e0796e/
+song-noip-rx5-depth711-first1
+
+/home/paidaxin/codex-sotem-song-p2-rx5-depth711-first1-mpi8-9e0796e/
+song-noip-rx5-depth711-first1
+```
+
+| Metric | Four ranks | Eight ranks |
+| --- | ---: | ---: |
+| Wall time | 30:11.99 | 20:05.39 |
+| CPU utilization | 399% | 797% |
+| Swap operations | 0 | 0 |
+| Exit status | 0 | 0 |
+
+The measured four-to-eight-rank speedup is 1.503x, corresponding to a 33.48%
+wall-time reduction. The extra partitioning increased the first/last transient
+KSP iterations from 72/90 to 84/93, so the speedup is useful but sublinear.
+
+The formal response components agree to parallel-reduction precision:
+
+| Component | Four ranks | Eight ranks | Relative difference |
+| --- | ---: | ---: | ---: |
+| Ex | 9.0549337003e-4 | 9.0549362593e-4 | 2.8261e-7 |
+| Hz | -2.2161012221e-3 | -2.2161011866e-3 | 1.6010e-8 |
+| dBz/dt | 4.4570780035e-6 | 4.4570825647e-6 | 1.0234e-6 |
+
+`Ey` remains diagnostic-only and differed by 4.3973e-5 relatively. Against
+the finite-source empymod reference, the eight-rank errors were 1.38735% for
+Ex, 0.02845% for Hz and 0.61618% for dBz/dt. These are single-observation
+results and do not establish full-window no-IP or IP validation.
+
+The host exposes 20 physical cores and 20 logical processors on a hybrid Intel
+Core Ultra 7 265K (8 performance cores plus 12 efficiency cores). Eight bound
+MPI ranks are selected for subsequent long runs because this matches the
+performance-core count, preserves memory headroom and avoids synchronous MPI
+load imbalance between performance and efficiency cores. Increasing past eight
+ranks requires a separate benchmark rather than an assumption of linear
+scaling.
