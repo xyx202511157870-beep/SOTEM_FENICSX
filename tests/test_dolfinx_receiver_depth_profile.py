@@ -55,11 +55,8 @@ def test_terminal_depth_profile_reuses_fields_and_negative_z(monkeypatch, tmp_pa
             "candidate_center_distance_min": 12.0,
             "candidate_center_distance_max": 14.0,
             "candidate_center_distance_mean": 13.0,
-            "selected_center_distance_mean": 13.0,
-            "selected_center_distance_max": 13.0,
             "candidate_center_z_min": eval_config.receiver[2] - 5.0,
             "candidate_center_z_max": eval_config.receiver[2] + 5.0,
-            "selected_center_z_mean": eval_config.receiver[2],
         }
 
     monkeypatch.setattr(sp, "evaluate_receivers", fake_evaluate)
@@ -88,8 +85,11 @@ def test_terminal_depth_profile_reuses_fields_and_negative_z(monkeypatch, tmp_pa
     )
     assert [row["depth_m"] for row in rows] == [300.0, 400.0]
     assert [row["dBzdt"] for row in rows] == pytest.approx([300.0, 400.0])
-    assert [row["selected_center_z_mean"] for row in rows] == pytest.approx(
-        [-300.0, -400.0]
+    assert [row["candidate_center_z_min"] for row in rows] == pytest.approx(
+        [-305.0, -405.0]
+    )
+    assert [row["candidate_center_z_max"] for row in rows] == pytest.approx(
+        [-295.0, -395.0]
     )
 
 
