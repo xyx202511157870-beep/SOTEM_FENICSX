@@ -204,3 +204,51 @@ a 2.48 GB maximum resident set and no swapping for the MPI launcher process.
 This establishes a usable four-core path for subsequent local validation, but
 does not change the failed/incomplete status of the 1 s no-IP window or the
 still-pending IP validation.
+
+## Internal 300 m layer-interface root cause and mesh-only repair
+
+The paired Song no-IP/IP command retains a 300 m model boundary with equal
+100 ohm-m resistivities so both branches can use one mesh.  Direct inspection
+showed that the three-dimensional 80 m Gmsh `Box` field did not constrain this
+internal OCC surface.  Inside 1000 m horizontal radius, the old factor-2/Rx-5 m
+mesh had only 11 interface triangles; every maximum edge exceeded 600 m and the
+largest was 1356.37 m.  The triangle covering `(0, -500, -300)` produced two
+colliding tetrahedra with the following fixed quality metrics:
+
+| Quantity | Minimum/maximum |
+| --- | ---: |
+| `3r/R` minimum | 0.00416838 |
+| `R/(3r)` maximum | 239.901 |
+| maximum cell edge | 1356.37 m |
+
+Commit `6a2253a` extends the fail-closed local mesh preflight to every configured
+terminal depth point.  The preserved old mesh now fails only
+`receiver_depth_profile_000` (300 m); its 400/500/600 m selections pass.
+
+A mesh-only candidate then embedded a deterministic 80 m point lattice into the
+physical 300 m layer surface without changing material boundaries, equations,
+receivers or acceptance thresholds:
+
+```text
+/home/paidaxin/codex-sotem-song-layer-interface-lattice-mesh-candidate
+```
+
+It generated in 5.165 s with 37,259 Gmsh nodes and 219,333 physically tagged
+tetrahedra.  The DOLFINx companion contains the same 219,333 tetrahedra; the
+larger HXT progress count included 5,906 outer-boundary triangles and was not a
+missing-cell discrepancy.  The Nedelec-order-2 memory preflight estimate is
+26.70 GB against the existing 30.4 GB usable limit.
+
+| Gate | Candidate result |
+| --- | ---: |
+| 300 m interface triangles within 1000 m | 1980 |
+| interface maximum edge | 80.0 m |
+| triangles above the conservative 160 m gate | 0 |
+| 300 m point minimum `3r/R` | 0.614925 |
+| 400 m point minimum `3r/R` | 0.863643 |
+| 500 m point minimum `3r/R` | 0.687601 |
+| 600 m point minimum `3r/R` | 0.816489 |
+
+The mesh-only spatial hypothesis therefore passes.  This is approval to run a
+single-variable transient test after the ongoing preserved diagnostic finishes;
+it is not yet evidence that the response itself passes empymod or SimPEG.

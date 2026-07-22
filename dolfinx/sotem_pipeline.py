@@ -70,7 +70,7 @@ PHYS_OUTER = 201
 PHYS_SURFACE = 202
 PHYS_SOURCE_LINE = 301
 SPONGE_ALL_SIDES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
-MESH_GENERATOR_CONTRACT_VERSION = "sotem-air-earth-unembedded-probes/v2"
+MESH_GENERATOR_CONTRACT_VERSION = "sotem-air-earth-unembedded-probes/v3"
 LOCAL_MESH_MIN_QUALITY = 0.01
 _FORWARD_ARTIFACT_SCHEMA_VERSION = 3
 _FORWARD_ARTIFACT_IDENTITY_KEYS = (
@@ -593,6 +593,36 @@ def _diffusion_refinement_box(config: PipelineConfig) -> dict[str, float]:
         "depth": float(depth),
         "top": float(base_top),
         "mesh_size": float(config.diffusion_refinement_mesh_size),
+    }
+
+
+def _layer_interface_refinement_lattice(config: PipelineConfig) -> dict[str, Any]:
+    """Return a bounded-spacing lattice for active internal layer surfaces."""
+
+    box = _diffusion_refinement_box(config)
+    radius = float(box["radius"])
+    mesh_size = float(box["mesh_size"])
+    if not math.isfinite(mesh_size) or mesh_size <= 0.0:
+        raise ValueError("diffusion_refinement_mesh_size must be finite and positive")
+    layer_depths, _layer_resistivities = _normalise_layer_model(config)
+    depth_tolerance = max(1.0e-9, 1.0e-12 * float(box["depth"]))
+    active_depths = tuple(
+        float(depth)
+        for depth in layer_depths
+        if float(depth) <= float(box["depth"]) + depth_tolerance
+    )
+    intervals = max(1, int(math.ceil(2.0 * radius / mesh_size)))
+    axis_coordinates = tuple(
+        -radius + 2.0 * radius * index / intervals
+        for index in range(intervals + 1)
+    )
+    return {
+        "active_depths": active_depths,
+        "radius": radius,
+        "mesh_size": mesh_size,
+        "intervals_per_axis": intervals,
+        "axis_coordinates": axis_coordinates,
+        "points_per_interface": (intervals + 1) ** 2,
     }
 
 
@@ -1634,6 +1664,7 @@ def _mesh_contract_identity(config: PipelineConfig) -> dict[str, Any]:
     """Return the geometry/refinement identity required to reuse a mesh."""
 
     diffusion_box = _diffusion_refinement_box(config)
+    layer_lattice = _layer_interface_refinement_lattice(config)
     return {
         "schema": "sotem_mesh_contract/v1",
         "generator_version": MESH_GENERATOR_CONTRACT_VERSION,
@@ -1654,12 +1685,20 @@ def _mesh_contract_identity(config: PipelineConfig) -> dict[str, Any]:
             "receiver_anchor_mesh_size": float(config.receiver_anchor_mesh_size),
             "receiver_refinement_radius": float(config.receiver_refinement_radius),
             "diffusion_box": {str(key): float(value) for key, value in diffusion_box.items()},
+            "layer_interface_refinement": {
+                "active_depths": [float(value) for value in layer_lattice["active_depths"]],
+                "radius": float(layer_lattice["radius"]),
+                "mesh_size": float(layer_lattice["mesh_size"]),
+                "intervals_per_axis": int(layer_lattice["intervals_per_axis"]),
+                "points_per_interface": int(layer_lattice["points_per_interface"]),
+            },
         },
         "embedding_policy": {
             "source_line_in_volume": False,
             "source_points_in_volume": False,
             "receiver_points_in_volume": False,
             "interface_refinement_points_on_surface": True,
+            "layer_interface_refinement_points_on_surface": True,
         },
     }
 
@@ -1766,6 +1805,20 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         receiver_surface_cloud = [
             occ.addPoint(*point, receiver_anchor_mesh_size) for point in _receiver_surface_refinement_points(config)
         ]
+        layer_lattice = _layer_interface_refinement_lattice(config)
+        layer_interface_clouds = {
+            float(depth): [
+                occ.addPoint(
+                    float(x),
+                    float(y),
+                    -float(depth),
+                    float(layer_lattice["mesh_size"]),
+                )
+                for x in layer_lattice["axis_coordinates"]
+                for y in layer_lattice["axis_coordinates"]
+            ]
+            for depth in layer_lattice["active_depths"]
+        }
         occ.synchronize()
 
         volumes = gmsh.model.getEntities(3)
@@ -1787,11 +1840,22 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
         surfaces = gmsh.model.getEntities(2)
         outer: list[int] = []
         interface: list[int] = []
+        layer_interface_surfaces = {
+            float(depth): [] for depth in layer_lattice["active_depths"]
+        }
         tol = 1.0e-6
         for _, tag in surfaces:
             xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(2, tag)
             if abs(zmin) < tol and abs(zmax) < tol:
                 interface.append(tag)
+            elif any(
+                abs(zmin + depth) < tol and abs(zmax + depth) < tol
+                for depth in layer_interface_surfaces
+            ):
+                for depth in layer_interface_surfaces:
+                    if abs(zmin + depth) < tol and abs(zmax + depth) < tol:
+                        layer_interface_surfaces[depth].append(tag)
+                        break
             elif (
                 abs(xmin - x0) < tol
                 and abs(xmax - x0) < tol
@@ -1820,6 +1884,14 @@ def generate_verification_mesh(config: PipelineConfig) -> Path:
 
         for interface_surf in interface:
             gmsh.model.mesh.embed(0, receiver_surface_cloud, 2, interface_surf)
+        for depth, point_tags in layer_interface_clouds.items():
+            matching_surfaces = layer_interface_surfaces.get(depth, [])
+            if not matching_surfaces:
+                raise RuntimeError(
+                    f"failed to identify internal layer interface at depth {depth:g} m"
+                )
+            for surface_tag in matching_surfaces:
+                gmsh.model.mesh.embed(0, point_tags, 2, surface_tag)
 
         f_line = gmsh.model.mesh.field.add("Distance")
         gmsh.model.mesh.field.setNumbers(f_line, "CurvesList", [source_line])

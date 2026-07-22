@@ -111,13 +111,15 @@ class _RecordingModel:
         if dim == 3:
             return [(3, tag) for (entity_dim, tag) in self.occ.centers if entity_dim == 3]
         if dim == 2:
-            return [(2, 501), (2, 502)]
+            return [(2, 501), (2, 502), (2, 503)]
         return []
 
     def getBoundingBox(self, dim, tag):
         assert dim == 2
         if tag == 501:
             return (-25_000.0, -25_000.0, 0.0, 25_000.0, 25_000.0, 0.0)
+        if tag == 503:
+            return (-25_000.0, -25_000.0, -300.0, 25_000.0, 25_000.0, -300.0)
         return (-25_000.0, -25_000.0, -25_000.0, -25_000.0, 25_000.0, 10_000.0)
 
     def addPhysicalGroup(self, dim, tags, physical_tag):
@@ -149,6 +151,28 @@ class _RecordingGmsh:
         self.written.write_text("synthetic mesh", encoding="utf-8")
 
 
+def test_layer_interface_refinement_lattice_has_bounded_spacing():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        layer_depths=(300.0, 900.0),
+        layer_resistivities=(100.0, 100.0, 100.0),
+        diffusion_refinement_factor=0.0,
+        diffusion_refinement_mesh_size=400.0,
+    )
+
+    lattice = sp._layer_interface_refinement_lattice(config)
+
+    assert lattice["active_depths"] == (300.0,)
+    assert lattice["radius"] == pytest.approx(1000.0)
+    assert lattice["mesh_size"] == pytest.approx(400.0)
+    assert lattice["intervals_per_axis"] == 5
+    assert lattice["axis_coordinates"] == pytest.approx(
+        (-1000.0, -600.0, -200.0, 200.0, 600.0, 1000.0)
+    )
+    assert max(np.diff(lattice["axis_coordinates"])) <= 400.0
+    assert lattice["points_per_interface"] == 36
+
+
 def test_gmsh_refinement_entities_are_not_embedded_in_earth_volume(monkeypatch, tmp_path):
     sp = _load_pipeline_module()
     fake = _RecordingGmsh()
@@ -170,6 +194,38 @@ def test_gmsh_refinement_entities_are_not_embedded_in_earth_volume(monkeypatch, 
     assert any(dim == 1 and physical_tag == sp.PHYS_SOURCE_LINE for dim, _tags, physical_tag in fake.model.physical)
     assert any(name == "CurvesList" for _tag, name, _values in fake.model.mesh.field.number_lists)
     assert any(name == "PointsList" for _tag, name, _values in fake.model.mesh.field.number_lists)
+
+
+def test_gmsh_embeds_diffusion_lattice_on_active_layer_interface(monkeypatch, tmp_path):
+    sp = _load_pipeline_module()
+    fake = _RecordingGmsh()
+    monkeypatch.setitem(sys.modules, "gmsh", fake)
+    monkeypatch.setattr(sp, "_mesh_memory_preflight_for_path", lambda *_args: None)
+    monkeypatch.setattr(
+        sp,
+        "_write_dolfinx_companion_mesh",
+        lambda config: config.dolfinx_mesh_path().write_text("volume mesh", encoding="utf-8"),
+    )
+    config = sp.PipelineConfig(
+        workdir=tmp_path,
+        force_mesh=True,
+        layer_depths=(300.0,),
+        layer_resistivities=(100.0, 100.0),
+        diffusion_refinement_factor=0.0,
+        diffusion_refinement_mesh_size=400.0,
+    )
+
+    sp.generate_verification_mesh(config)
+
+    layer_embeds = [
+        item
+        for item in fake.model.mesh.embeds
+        if item[2:] == (2, 503)
+    ]
+    assert len(layer_embeds) == 1
+    assert layer_embeds[0][0] == 0
+    assert len(layer_embeds[0][1]) == 36
+    assert all(target_dim == 2 for _source_dim, _tags, target_dim, _target in fake.model.mesh.embeds)
 
 
 def test_gmsh_writes_dolfinx_companion_without_orphan_source_physical_group(monkeypatch, tmp_path):
@@ -534,3 +590,25 @@ def test_mesh_contract_identity_changes_reuse_decision(tmp_path):
     assert sp._mesh_contract_matches(config) is False
     sp._write_mesh_contract(config)
     assert sp._mesh_contract_matches(config) is True
+
+
+def test_mesh_contract_records_layer_interface_refinement():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        layer_depths=(300.0, 900.0),
+        layer_resistivities=(100.0, 100.0, 100.0),
+        diffusion_refinement_factor=0.0,
+        diffusion_refinement_mesh_size=400.0,
+    )
+
+    identity = sp._mesh_contract_identity(config)
+
+    assert identity["generator_version"] == "sotem-air-earth-unembedded-probes/v3"
+    assert identity["refinement"]["layer_interface_refinement"] == {
+        "active_depths": [300.0],
+        "radius": 1000.0,
+        "mesh_size": 400.0,
+        "intervals_per_axis": 5,
+        "points_per_interface": 36,
+    }
+    assert identity["embedding_policy"]["layer_interface_refinement_points_on_surface"] is True
