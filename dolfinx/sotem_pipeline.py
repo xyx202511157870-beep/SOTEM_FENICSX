@@ -5430,6 +5430,7 @@ def _evaluate_terminal_receiver_depth_profile(E, dbdt, msh, config: PipelineConf
             config,
             receiver=(float(receiver_x), float(receiver_y), -float(depth)),
             receiver_type="point",
+            receiver_diagnostic_types=("point",),
         )
         rec = evaluate_receivers(E, dbdt, msh, diagnostic_config)
         row = {

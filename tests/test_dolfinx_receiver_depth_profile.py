@@ -33,7 +33,16 @@ def test_terminal_depth_profile_reuses_fields_and_negative_z(monkeypatch, tmp_pa
     seen = []
 
     def fake_evaluate(E, dbdt, msh, eval_config):
-        seen.append((E, dbdt, msh, eval_config.receiver, eval_config.receiver_type))
+        seen.append(
+            (
+                E,
+                dbdt,
+                msh,
+                eval_config.receiver,
+                eval_config.receiver_type,
+                eval_config.receiver_diagnostic_types,
+            )
+        )
         return {
             "Ex": eval_config.receiver[2],
             "Ey": 0.0,
@@ -43,6 +52,14 @@ def test_terminal_depth_profile_reuses_fields_and_negative_z(monkeypatch, tmp_pa
             "candidate_count_max": 1,
             "candidate_count_mean": 1.0,
             "multi_candidate_sample_count": 0,
+            "candidate_center_distance_min": 12.0,
+            "candidate_center_distance_max": 14.0,
+            "candidate_center_distance_mean": 13.0,
+            "selected_center_distance_mean": 13.0,
+            "selected_center_distance_max": 13.0,
+            "candidate_center_z_min": eval_config.receiver[2] - 5.0,
+            "candidate_center_z_max": eval_config.receiver[2] + 5.0,
+            "selected_center_z_mean": eval_config.receiver[2],
         }
 
     monkeypatch.setattr(sp, "evaluate_receivers", fake_evaluate)
@@ -62,11 +79,18 @@ def test_terminal_depth_profile_reuses_fields_and_negative_z(monkeypatch, tmp_pa
         (1.0, 2.0, -400.0),
     ]
     assert all(
-        item[0] is E and item[1] is dbdt and item[2] is msh and item[4] == "point"
+        item[0] is E
+        and item[1] is dbdt
+        and item[2] is msh
+        and item[4] == "point"
+        and item[5] == ("point",)
         for item in seen
     )
     assert [row["depth_m"] for row in rows] == [300.0, 400.0]
     assert [row["dBzdt"] for row in rows] == pytest.approx([300.0, 400.0])
+    assert [row["selected_center_z_mean"] for row in rows] == pytest.approx(
+        [-300.0, -400.0]
+    )
 
 
 def test_receiver_depth_profile_csv_is_root_only_atomic_and_ordered(tmp_path):
