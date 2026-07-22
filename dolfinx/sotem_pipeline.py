@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, fields as dataclass_fields, replace
 import hashlib
 import importlib
 import importlib.util
+import io
 import json
 import math
 from numbers import Integral
@@ -5403,6 +5404,53 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
     return rec
 
 
+_RECEIVER_DEPTH_PROFILE_GEOMETRY_FIELDS = (
+    "candidate_center_distance_min",
+    "candidate_center_distance_max",
+    "candidate_center_distance_mean",
+    "selected_center_distance_mean",
+    "selected_center_distance_max",
+    "candidate_center_z_min",
+    "candidate_center_z_max",
+    "selected_center_z_mean",
+)
+
+
+def _evaluate_terminal_receiver_depth_profile(E, dbdt, msh, config: PipelineConfig, *, time_obs: float):
+    rows = []
+    receiver_x, receiver_y, _receiver_z = config.receiver
+    for depth in _validated_receiver_depth_profile_depths(config):
+        diagnostic_config = replace(
+            config,
+            receiver=(float(receiver_x), float(receiver_y), -float(depth)),
+            receiver_type="point",
+        )
+        rec = evaluate_receivers(E, dbdt, msh, diagnostic_config)
+        row = {
+            "time_obs": float(time_obs),
+            "depth_m": float(depth),
+            "receiver_x": float(receiver_x),
+            "receiver_y": float(receiver_y),
+            "receiver_z": -float(depth),
+            "Ex": float(rec["Ex"]),
+            "Ey": float(rec["Ey"]),
+            "dBzdt": float(rec["dBzdt"]),
+            "sample_count": int(rec.get("sample_count", 0)),
+            "candidate_count_min": int(rec.get("candidate_count_min", 0)),
+            "candidate_count_max": int(rec.get("candidate_count_max", 0)),
+            "candidate_count_mean": float(rec.get("candidate_count_mean", math.nan)),
+            "multi_candidate_sample_count": int(rec.get("multi_candidate_sample_count", 0)),
+        }
+        row.update(
+            {
+                name: float(rec.get(name, math.nan))
+                for name in _RECEIVER_DEPTH_PROFILE_GEOMETRY_FIELDS
+            }
+        )
+        rows.append(row)
+    return rows
+
+
 def _make_secondary_receiver_projector_from_evaluate_receivers(
     electric_getter,
     dbdt_getter,
@@ -9798,6 +9846,60 @@ def _atomic_write_text(path: Path, payload: str) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(payload, encoding="utf-8")
     temporary.replace(path)
+
+
+def _write_receiver_depth_profile_csv(config: PipelineConfig, rows, *, comm) -> None:
+    if int(comm.rank) != 0:
+        return
+    rows = list(rows or [])
+    path = config.receiver_depth_profile_csv()
+    if not rows:
+        if path.exists():
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "time_obs",
+        "depth_m",
+        "receiver_x",
+        "receiver_y",
+        "receiver_z",
+        "Ex",
+        "Ey",
+        "dBzdt",
+        "sample_count",
+        "candidate_count_min",
+        "candidate_count_max",
+        "candidate_count_mean",
+        "multi_candidate_sample_count",
+        *_RECEIVER_DEPTH_PROFILE_GEOMETRY_FIELDS,
+    ]
+    handle = io.StringIO(newline="")
+    writer = csv.DictWriter(handle, fieldnames=fields)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "time_obs": float(row.get("time_obs", math.nan)),
+                "depth_m": float(row.get("depth_m", math.nan)),
+                "receiver_x": float(row.get("receiver_x", math.nan)),
+                "receiver_y": float(row.get("receiver_y", math.nan)),
+                "receiver_z": float(row.get("receiver_z", math.nan)),
+                "Ex": float(row.get("Ex", math.nan)),
+                "Ey": float(row.get("Ey", math.nan)),
+                "dBzdt": float(row.get("dBzdt", math.nan)),
+                "sample_count": int(row.get("sample_count", 0)),
+                "candidate_count_min": int(row.get("candidate_count_min", 0)),
+                "candidate_count_max": int(row.get("candidate_count_max", 0)),
+                "candidate_count_mean": float(row.get("candidate_count_mean", math.nan)),
+                "multi_candidate_sample_count": int(row.get("multi_candidate_sample_count", 0)),
+                **{
+                    name: float(row.get(name, math.nan))
+                    for name in _RECEIVER_DEPTH_PROFILE_GEOMETRY_FIELDS
+                },
+            }
+        )
+    _atomic_write_text(path, handle.getvalue())
 
 
 def write_source_only_diagnostics(
