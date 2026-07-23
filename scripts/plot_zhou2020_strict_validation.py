@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +16,22 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORT_FORMATS = (".svg", ".png", ".tiff")
+FIGURE_STEMS = (
+    "fig01_model_contract",
+    "fig02_total_fields",
+    "fig03_reference_stability",
+    "fig04_gate_summary",
+    "fig05_debye_order_diagnostic",
+)
+DEBYE_JSON_NAME = "debye_order_diagnostic.json"
+COMPLETION_MANIFEST_NAME = "completion_manifest.json"
+PUBLISHED_BUNDLE_NAME = "publication_bundle"
+BUNDLE_SCHEMA = "atem3d.zhou2020.figure-bundle/v1"
+BUNDLE_ARTIFACT_NAMES = tuple(
+    f"{stem}{suffix}"
+    for stem in FIGURE_STEMS
+    for suffix in EXPORT_FORMATS
+) + (DEBYE_JSON_NAME,)
 EXPORT_POLICY = {
     "pdf": "forbidden_by_user",
     "known_waiver": (
@@ -130,6 +146,209 @@ def _validated_total_field_time_grid(
     if any(not np.array_equal(grids[0], grid) for grid in grids[1:]):
         raise ValueError("all four total-field time grids must be exactly equal")
     return grids[0]
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    Path(path).write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _completion_manifest(
+    staging: Path,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    actual_entries = {
+        path.name
+        for path in Path(staging).iterdir()
+    }
+    if actual_entries != set(BUNDLE_ARTIFACT_NAMES):
+        raise ValueError("figure bundle artifact set is incomplete or unexpected")
+    artifacts = {}
+    for name in BUNDLE_ARTIFACT_NAMES:
+        path = Path(staging) / name
+        artifacts[name] = {
+            "sha256": _sha256_file(path),
+            "bytes": path.stat().st_size,
+        }
+    return {
+        "schema": BUNDLE_SCHEMA,
+        "status": "complete",
+        "figure_count": len(FIGURE_STEMS),
+        "artifact_count": len(BUNDLE_ARTIFACT_NAMES),
+        "export_formats": list(EXPORT_FORMATS),
+        "pdf_policy": EXPORT_POLICY,
+        "metadata": metadata,
+        "artifacts": artifacts,
+    }
+
+
+def _write_completion_manifest(
+    staging: Path,
+    metadata: dict[str, Any],
+) -> None:
+    manifest_path = Path(staging) / COMPLETION_MANIFEST_NAME
+    if manifest_path.exists():
+        raise ValueError("completion manifest must not exist before finalization")
+    _write_json(manifest_path, _completion_manifest(staging, metadata))
+
+
+def _validate_bundle_metadata(metadata: Any) -> None:
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(metadata.get("run_id"), str)
+        or not metadata["run_id"]
+        or metadata.get("spatial_case") != "S1T1B1"
+        or not isinstance(metadata.get("reference_audit_status"), str)
+        or not isinstance(metadata.get("qwe_converged"), bool)
+    ):
+        raise ValueError("figure bundle source metadata is invalid")
+    input_hashes = metadata.get("input_sha256")
+    if not isinstance(input_hashes, dict) or not input_hashes:
+        raise ValueError("figure bundle input hashes are missing")
+    for name, value in input_hashes.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdefABCDEF" for character in value)
+        ):
+            raise ValueError("figure bundle input hash record is invalid")
+
+
+def load_validated_bundle(bundle: Path) -> dict[str, Any]:
+    """Load a complete generation only after exact-set and hash validation."""
+
+    bundle = Path(bundle)
+    manifest_path = bundle / COMPLETION_MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"completion manifest is missing: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != BUNDLE_SCHEMA
+        or manifest.get("status") != "complete"
+        or manifest.get("figure_count") != len(FIGURE_STEMS)
+        or manifest.get("artifact_count") != len(BUNDLE_ARTIFACT_NAMES)
+        or manifest.get("export_formats") != list(EXPORT_FORMATS)
+        or manifest.get("pdf_policy") != EXPORT_POLICY
+    ):
+        raise ValueError("figure bundle completion metadata is invalid")
+    _validate_bundle_metadata(manifest.get("metadata"))
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != set(
+        BUNDLE_ARTIFACT_NAMES
+    ):
+        raise ValueError("figure bundle manifest artifact set is invalid")
+    actual_entries = {
+        path.name
+        for path in bundle.iterdir()
+    }
+    if actual_entries != set(BUNDLE_ARTIFACT_NAMES) | {
+        COMPLETION_MANIFEST_NAME
+    }:
+        raise ValueError("published figure bundle file set is invalid")
+    if any(
+        path.suffix.lower().lstrip(".") == "pdf"
+        for path in bundle.rglob("*")
+        if path.is_file()
+    ):
+        raise ValueError("PDF artifacts are forbidden by the export policy")
+    for name, item in artifacts.items():
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("sha256"), str)
+            or not isinstance(item.get("bytes"), int)
+        ):
+            raise ValueError(f"invalid artifact manifest record: {name}")
+        path = bundle / name
+        if not path.is_file():
+            raise FileNotFoundError(f"bundle artifact is missing: {name}")
+        if path.stat().st_size != item["bytes"]:
+            raise ValueError(f"bundle artifact size mismatch: {name}")
+        if _sha256_file(path) != item["sha256"]:
+            raise ValueError(f"bundle artifact hash mismatch: {name}")
+    diagnostic = json.loads(
+        (bundle / DEBYE_JSON_NAME).read_text(encoding="utf-8")
+    )
+    if (
+        not isinstance(diagnostic, dict)
+        or diagnostic.get("schema")
+        != "atem3d.zhou2020.debye-order-diagnostic/v2"
+    ):
+        raise ValueError("Debye diagnostic JSON schema is invalid")
+    return {"manifest": manifest, "diagnostic": diagnostic}
+
+
+def _replace_bundle_directory(staging: Path, target: Path) -> None:
+    """Replace one complete directory generation and roll back on failure."""
+
+    staging = Path(staging)
+    target = Path(target)
+    backup = staging.with_name(
+        staging.name.replace(
+            f".{target.name}.staging-",
+            f".{target.name}.backup-",
+            1,
+        )
+    )
+    if backup.exists():
+        raise FileExistsError(f"bundle backup already exists: {backup}")
+    old_moved = False
+    new_published = False
+    try:
+        if target.exists():
+            if not target.is_dir():
+                raise NotADirectoryError(f"bundle target is not a directory: {target}")
+            os.replace(target, backup)
+            old_moved = True
+        os.replace(staging, target)
+        new_published = True
+        load_validated_bundle(target)
+    except Exception:
+        if new_published and target.exists():
+            shutil.rmtree(target)
+        if old_moved and backup.exists():
+            os.replace(backup, target)
+        raise
+    else:
+        if backup.exists():
+            shutil.rmtree(backup)
+
+
+def _publish_bundle(
+    target: Path,
+    build_artifacts: Callable[[Path], None],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Build, finalize, validate, and expose one indivisible figure generation."""
+
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{target.name}.staging-",
+            dir=target.parent,
+        )
+    )
+    try:
+        build_artifacts(staging)
+        _write_completion_manifest(staging, metadata)
+        load_validated_bundle(staging)
+        _replace_bundle_directory(staging, target)
+        return load_validated_bundle(target)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
 def _save_all(fig: plt.Figure, stem: Path) -> None:
@@ -798,31 +1017,42 @@ def main(argv: list[str] | None = None) -> None:
         )
     )
 
-    plot_model(args.output / "fig01_model_contract")
-    plot_total_fields(
-        noip_fem,
-        ip_fem,
-        noip_ref,
-        ip_ref,
-        args.output / "fig02_total_fields",
-    )
-    plot_reference_stability(
-        audit_arrays,
-        audit,
-        args.output / "fig03_reference_stability",
-    )
-    plot_gate_summary(metrics, audit, args.output / "fig04_gate_summary")
+    def build_artifacts(staging: Path) -> None:
+        plot_model(staging / FIGURE_STEMS[0])
+        plot_total_fields(
+            noip_fem,
+            ip_fem,
+            noip_ref,
+            ip_ref,
+            staging / FIGURE_STEMS[1],
+        )
+        plot_reference_stability(
+            audit_arrays,
+            audit,
+            staging / FIGURE_STEMS[2],
+        )
+        plot_gate_summary(metrics, audit, staging / FIGURE_STEMS[3])
 
-    diagnostic = plot_debye_order_diagnostic(
-        args.compute_root / "noip-S0T0B0" / "verification_data.npz",
-        args.compute_root / "ip-S0T0B0-n4" / "verification_data.npz",
-        args.compute_root / "ip-S0T0B0-n16" / "verification_data.npz",
-        args.output / "fig05_debye_order_diagnostic",
-    )
-    assert isinstance(diagnostic, dict)
-    (args.output / "debye_order_diagnostic.json").write_text(
-        json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+        diagnostic = plot_debye_order_diagnostic(
+            args.compute_root / "noip-S0T0B0" / "verification_data.npz",
+            args.compute_root / "ip-S0T0B0-n4" / "verification_data.npz",
+            args.compute_root / "ip-S0T0B0-n16" / "verification_data.npz",
+            staging / FIGURE_STEMS[4],
+        )
+        assert isinstance(diagnostic, dict)
+        _write_json(staging / DEBYE_JSON_NAME, diagnostic)
+
+    metadata = {
+        "run_id": run.name,
+        "spatial_case": "S1T1B1",
+        "input_sha256": validated_audit["manifest"]["input_sha256"],
+        "reference_audit_status": audit["status"],
+        "qwe_converged": bool(audit["qwe"]["converged"]),
+    }
+    _publish_bundle(
+        args.output / PUBLISHED_BUNDLE_NAME,
+        build_artifacts,
+        metadata,
     )
 
 

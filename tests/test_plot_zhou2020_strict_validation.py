@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
+import os
 from pathlib import Path
 
 import matplotlib
@@ -548,3 +550,255 @@ def test_scale_safe_relative_l2_avoids_overflow():
     numerator = 0.1 * denominator
 
     assert plotter._relative_l2(numerator, denominator) == pytest.approx(0.1)
+
+
+def _write_minimal_bundle_artifacts(plotter, staging: Path) -> None:
+    for stem in plotter.FIGURE_STEMS:
+        for suffix in plotter.EXPORT_FORMATS:
+            (staging / f"{stem}{suffix}").write_bytes(
+                f"{stem}{suffix}".encode()
+            )
+    plotter._write_json(
+        staging / plotter.DEBYE_JSON_NAME,
+        {
+            "schema": "atem3d.zhou2020.debye-order-diagnostic/v2",
+            "comparison": {},
+        },
+    )
+
+
+def _bundle_metadata() -> dict:
+    return {
+        "run_id": "test-run",
+        "spatial_case": "S1T1B1",
+        "input_sha256": {"case.yaml": "0" * 64},
+        "reference_audit_status": "inconclusive",
+        "qwe_converged": False,
+    }
+
+
+def _assert_no_transaction_debris(target: Path) -> None:
+    assert not list(target.parent.glob(f".{target.name}.staging-*"))
+    assert not list(target.parent.glob(f".{target.name}.backup-*"))
+
+
+def test_bundle_success_writes_manifest_last_and_loader_verifies_hashes(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    writes = []
+    original_write_json = plotter._write_json
+
+    def record_json_write(path, payload):
+        writes.append(Path(path).name)
+        return original_write_json(path, payload)
+
+    monkeypatch.setattr(plotter, "_write_json", record_json_write)
+
+    validated = plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        _bundle_metadata(),
+    )
+
+    assert writes[-1] == plotter.COMPLETION_MANIFEST_NAME
+    assert validated["manifest"]["status"] == "complete"
+    assert set(validated["manifest"]["artifacts"]) == set(
+        plotter.BUNDLE_ARTIFACT_NAMES
+    )
+    for name, item in validated["manifest"]["artifacts"].items():
+        assert item["sha256"] == hashlib.sha256(
+            (target / name).read_bytes()
+        ).hexdigest()
+    assert not list(target.rglob("*.pdf"))
+    plotter.load_validated_bundle(target)
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_late_failure_after_fig03_preserves_existing_target(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+
+    def fail_after_fig03(staging):
+        for index in range(1, 4):
+            (staging / f"fig0{index}.png").write_bytes(b"new")
+        raise RuntimeError("late failure after fig03")
+
+    with pytest.raises(RuntimeError, match="after fig03"):
+        plotter._publish_bundle(target, fail_after_fig03, _bundle_metadata())
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    assert list(target.iterdir()) == [target / "old-generation.txt"]
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_debye_json_failure_preserves_existing_target(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+
+    def fail_at_json(*_args, **_kwargs):
+        raise RuntimeError("Debye JSON failure")
+
+    monkeypatch.setattr(plotter, "_write_json", fail_at_json)
+
+    with pytest.raises(RuntimeError, match="Debye JSON"):
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_invalid_debye_json_rolls_back_before_exposure(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+
+    def write_invalid_json(staging):
+        for stem in plotter.FIGURE_STEMS:
+            for suffix in plotter.EXPORT_FORMATS:
+                (staging / f"{stem}{suffix}").write_bytes(b"new")
+        (staging / plotter.DEBYE_JSON_NAME).write_text(
+            "{not-json",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(json.JSONDecodeError):
+        plotter._publish_bundle(
+            target,
+            write_invalid_json,
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_manifest_failure_preserves_existing_target(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+
+    def fail_manifest(*_args, **_kwargs):
+        raise RuntimeError("manifest failure")
+
+    monkeypatch.setattr(plotter, "_write_completion_manifest", fail_manifest)
+
+    with pytest.raises(RuntimeError, match="manifest failure"):
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_final_replace_failure_rolls_back_existing_target(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+    original_replace = os.replace
+
+    def fail_staging_publish(source, destination):
+        source = Path(source)
+        destination = Path(destination)
+        if ".staging-" in source.name and destination == target:
+            raise OSError("injected final os.replace failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(plotter.os, "replace", fail_staging_publish)
+
+    with pytest.raises(OSError, match="final os.replace"):
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    assert list(target.iterdir()) == [target / "old-generation.txt"]
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_loader_rejects_tampered_artifact(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        _bundle_metadata(),
+    )
+    artifact = target / plotter.BUNDLE_ARTIFACT_NAMES[0]
+    original = artifact.read_bytes()
+    artifact.write_bytes(bytes([original[0] ^ 0xFF]) + original[1:])
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        plotter.load_validated_bundle(target)
+
+
+def test_bundle_loader_rejects_unmanifested_directory(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        _bundle_metadata(),
+    )
+    (target / "unmanifested").mkdir()
+
+    with pytest.raises(ValueError, match="file set"):
+        plotter.load_validated_bundle(target)
+
+
+def test_main_real_run_publishes_self_validating_bundle(tmp_path):
+    plotter = _load_plotter()
+    compute_root = (
+        ROOT
+        / "generated/validation/zhou2020_grounded_wire/compute"
+    )
+
+    plotter.main(
+        [
+            "--run",
+            str(FORMAL_RUN),
+            "--compute-root",
+            str(compute_root),
+            "--reference-audit",
+            str(HARDENED_AUDIT),
+            "--output",
+            str(tmp_path),
+        ]
+    )
+
+    bundle = tmp_path / plotter.PUBLISHED_BUNDLE_NAME
+    validated = plotter.load_validated_bundle(bundle)
+    assert validated["manifest"]["metadata"]["run_id"] == FORMAL_RUN.name
+    diagnostic = json.loads(
+        (bundle / plotter.DEBYE_JSON_NAME).read_text(encoding="utf-8")
+    )
+    assert diagnostic["schema"] == "atem3d.zhou2020.debye-order-diagnostic/v2"
+    assert not list(bundle.rglob("*.pdf"))
+    _assert_no_transaction_debris(bundle)
