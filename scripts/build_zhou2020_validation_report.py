@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import date
 import hashlib
 import importlib.util
+from io import BytesIO
 import json
 import os
 from pathlib import Path
+import secrets
 import subprocess
 import tempfile
 from typing import Any
+import zipfile
+from xml.etree import ElementTree
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
@@ -22,6 +27,13 @@ from docx.shared import Cm, Pt, RGBColor
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPORT_SCHEMA = "atem3d.zhou2020.report/v2"
+REPORT_REQUIRED_TEXT = (
+    REPORT_SCHEMA,
+    "failed_with_reproducible_evidence",
+    "reference-transform unstable",
+    "inconclusive",
+)
 NAVY = "17365D"
 TEAL = "167D8D"
 PALE_BLUE = "EAF0F8"
@@ -63,12 +75,18 @@ def _load_module(name: str, path: Path):
     return module
 
 
-def _load_validated_bundle(path: Path) -> dict[str, Any]:
+def _load_validated_bundle(
+    path: Path,
+    reference_audit: Path,
+) -> dict[str, Any]:
     module = _load_module(
         "zhou_publication_bundle_validator",
         ROOT / "scripts/plot_zhou2020_strict_validation.py",
     )
-    return module.load_validated_bundle(Path(path))
+    return module.load_validated_bundle(
+        Path(path),
+        Path(reference_audit),
+    )
 
 
 def _load_validated_reference_audit(path: Path) -> dict[str, Any]:
@@ -77,6 +95,20 @@ def _load_validated_reference_audit(path: Path) -> dict[str, Any]:
         ROOT / "scripts/audit_zhou2020_reference_stability.py",
     )
     return module.load_validated_audit(Path(path))
+
+
+def _load_validated_audit_identity(
+    path: Path,
+    validated_audit: dict[str, Any],
+) -> dict[str, Any]:
+    module = _load_module(
+        "zhou_reference_audit_identity_for_report",
+        ROOT / "scripts/plot_zhou2020_strict_validation.py",
+    )
+    return module._reference_audit_identity(
+        Path(path),
+        validated_audit,
+    )
 
 
 def _docx_path(value: str) -> Path:
@@ -221,18 +253,23 @@ def _add_status(doc: Document, title: str, body: str, *, positive: bool) -> None
 
 def _add_figure(
     doc: Document,
-    image: Path,
+    image_bytes: bytes,
     caption: str,
     *,
     width_cm: float = 16.7,
 ) -> None:
-    if not image.is_file():
-        raise FileNotFoundError(f"validated bundle figure is missing: {image}")
     paragraph = doc.add_paragraph()
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    paragraph.add_run().add_picture(str(image), width=Cm(width_cm))
-    caption_paragraph = doc.add_paragraph()
+    paragraph.paragraph_format.keep_together = True
+    paragraph.paragraph_format.keep_with_next = True
+    paragraph.add_run().add_picture(
+        BytesIO(image_bytes),
+        width=Cm(width_cm),
+    )
+    caption_paragraph = doc.add_paragraph(style="Caption")
     caption_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    caption_paragraph.paragraph_format.keep_together = True
+    caption_paragraph.paragraph_format.keep_with_next = True
     run = caption_paragraph.add_run(caption)
     _format_run(run, size=8.5, color=GRAY, font="宋体")
 
@@ -274,6 +311,226 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _snapshot_publication_pngs(
+    publication_bundle: Path,
+    manifest: dict[str, Any],
+) -> dict[str, bytes]:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError("publication bundle artifact records are missing")
+    snapshots: dict[str, bytes] = {}
+    for name, _ in FIGURES:
+        record = artifacts.get(name)
+        path = Path(publication_bundle) / name
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("sha256"), str)
+            or not isinstance(record.get("bytes"), int)
+            or not path.is_file()
+        ):
+            raise ValueError(f"publication PNG artifact identity is invalid: {name}")
+        payload = path.read_bytes()
+        if (
+            len(payload) != record["bytes"]
+            or _sha256_bytes(payload) != record["sha256"]
+            or not payload.startswith(b"\x89PNG\r\n\x1a\n")
+        ):
+            raise ValueError(f"publication PNG artifact changed: {name}")
+        snapshots[name] = payload
+    return snapshots
+
+
+def _report_lock_path(output: Path) -> Path:
+    output = Path(output)
+    return output.with_name(f".{output.name}.lock")
+
+
+def _fsync_file(path: Path) -> None:
+    with Path(path).open("rb+") as stream:
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    descriptor = os.open(
+        Path(path),
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _acquire_report_lock(output: Path) -> tuple[Path, str]:
+    lock = _report_lock_path(output)
+    token = secrets.token_hex(32)
+    descriptor = os.open(
+        lock,
+        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            descriptor = -1
+            stream.write(token + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        _fsync_directory(lock.parent)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            if lock.read_text(encoding="utf-8").strip() == token:
+                lock.unlink()
+                _fsync_directory(lock.parent)
+        except (FileNotFoundError, OSError, UnicodeError):
+            pass
+        raise
+    return lock, token
+
+
+def _release_report_lock(owner: tuple[Path, str]) -> bool:
+    lock, token = owner
+    try:
+        current = lock.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError):
+        return False
+    if current != token:
+        return False
+    lock.unlink()
+    _fsync_directory(lock.parent)
+    return True
+
+
+def _document_text_from_xml(document_xml: bytes) -> str:
+    root = ElementTree.fromstring(document_xml)
+    namespace = (
+        "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    )
+    return "".join(
+        node.text or ""
+        for node in root.iter(f"{namespace}t")
+    )
+
+
+def _validate_staged_docx(
+    path: Path,
+    expected_pngs: dict[str, bytes],
+    *,
+    key_texts: tuple[str, ...],
+) -> None:
+    required_entries = {
+        "[Content_Types].xml",
+        "_rels/.rels",
+        "word/document.xml",
+        "word/_rels/document.xml.rels",
+    }
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if archive.testzip() is not None:
+                raise ValueError("DOCX ZIP package contains a corrupt member")
+            names = set(archive.namelist())
+            if not required_entries.issubset(names):
+                raise ValueError("DOCX package is missing required members")
+            document_xml = archive.read("word/document.xml")
+            relationships = ElementTree.fromstring(
+                archive.read("word/_rels/document.xml.rels")
+            )
+            document_root = ElementTree.fromstring(document_xml)
+            image_relationships = [
+                relation
+                for relation in relationships
+                if relation.attrib.get("Type", "").endswith("/image")
+            ]
+            if any(
+                relation.attrib.get("TargetMode") == "External"
+                for relation in relationships
+            ):
+                raise ValueError("DOCX package contains an external relationship")
+            if len(image_relationships) != len(FIGURES):
+                raise ValueError("DOCX image relationship count is invalid")
+            targets = [
+                "word/" + relation.attrib["Target"].replace("\\", "/")
+                for relation in image_relationships
+            ]
+            media_names = sorted(
+                name
+                for name in names
+                if name.startswith("word/media/")
+            )
+            if (
+                len(media_names) != len(FIGURES)
+                or sorted(targets) != media_names
+            ):
+                raise ValueError("DOCX media relationship set is invalid")
+            actual_media = [archive.read(name) for name in media_names]
+            if Counter(actual_media) != Counter(expected_pngs.values()):
+                raise ValueError("DOCX embedded image media differs from bundle PNGs")
+            drawing_nodes = document_root.findall(
+                ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"
+            )
+            if len(drawing_nodes) != len(FIGURES):
+                raise ValueError("DOCX drawing count is invalid")
+            text = _document_text_from_xml(document_xml)
+            missing = [value for value in key_texts if value not in text]
+            if missing:
+                raise ValueError(
+                    "DOCX schema or key text is missing: " + ", ".join(missing)
+                )
+    except (zipfile.BadZipFile, ElementTree.ParseError, KeyError) as error:
+        raise ValueError("DOCX ZIP/XML package is invalid") from error
+
+
+def _publish_docx(
+    output: Path,
+    build_staged,
+    expected_pngs: dict[str, bytes],
+    *,
+    key_texts: tuple[str, ...] = (
+        REPORT_SCHEMA,
+        "failed_with_reproducible_evidence",
+    ),
+) -> None:
+    """Serialize, validate, and atomically publish one DOCX generation."""
+
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    owner = _acquire_report_lock(output)
+    temporary: Path | None = None
+    try:
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{output.name}.tmp-",
+            suffix=".docx",
+            dir=output.parent,
+        )
+        os.close(descriptor)
+        temporary = Path(name)
+        _fsync_directory(output.parent)
+        build_staged(temporary)
+        if not temporary.is_file():
+            raise ValueError("DOCX staged builder did not create a file")
+        _fsync_file(temporary)
+        _validate_staged_docx(
+            temporary,
+            expected_pngs,
+            key_texts=key_texts,
+        )
+        os.replace(temporary, output)
+        temporary = None
+        _fsync_file(output)
+        _fsync_directory(output.parent)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+            _fsync_directory(output.parent)
+        _release_report_lock(owner)
 
 
 def _cross_bound_input_hashes(
@@ -382,6 +639,7 @@ def _load_cross_bound_metrics(
 def _validate_evidence(
     bundle: dict[str, Any],
     validated_audit: dict[str, Any],
+    audit_identity: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     manifest = bundle.get("manifest")
     diagnostic = bundle.get("diagnostic")
@@ -396,12 +654,67 @@ def _validate_evidence(
     if not isinstance(qwe, dict) or qwe.get("converged") is not False:
         raise ValueError("QWE convergence evidence changed; re-review report wording")
     metadata = manifest.get("metadata")
+    audit_manifest = validated_audit.get("manifest")
     if (
         not isinstance(metadata, dict)
+        or not isinstance(audit_manifest, dict)
         or metadata.get("reference_audit_status") != "inconclusive"
         or metadata.get("qwe_converged") is not False
     ):
         raise ValueError("publication bundle audit binding changed; re-review report")
+    recorded_identity = metadata.get("reference_audit")
+    if recorded_identity != audit_identity:
+        raise ValueError("publication bundle audit generation identity mismatch")
+    if not isinstance(audit_identity, dict):
+        raise ValueError("validated audit generation identity is missing")
+    canonical = audit_identity.get("canonical_sha256")
+    core = {
+        key: value
+        for key, value in audit_identity.items()
+        if key != "canonical_sha256"
+    }
+    if (
+        not isinstance(canonical, str)
+        or _sha256_bytes(
+            json.dumps(
+                core,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        != canonical
+    ):
+        raise ValueError("reference audit generation identity digest is invalid")
+    artifact_records = audit_manifest.get("artifacts")
+    artifact_hashes = (
+        {
+            name: record.get("sha256")
+            for name, record in artifact_records.items()
+            if isinstance(record, dict)
+        }
+        if isinstance(artifact_records, dict)
+        else None
+    )
+    exact_fields = {
+        "manifest_schema": audit_manifest.get("schema"),
+        "audit_schema": audit.get("schema"),
+        "status": audit_manifest.get("status"),
+        "artifacts": artifact_hashes,
+        "input_sha256": audit_manifest.get("input_sha256"),
+        "code_sha256": audit_manifest.get("code_sha256"),
+        "methods": audit_manifest.get("methods"),
+        "qwe": audit_manifest.get("qwe"),
+    }
+    if any(
+        audit_identity.get(name) != value
+        for name, value in exact_fields.items()
+    ):
+        raise ValueError("reference audit exact generation fields differ")
+    for name in ("status", "input_sha256", "code_sha256", "methods", "qwe"):
+        if audit_manifest.get(name) != audit.get(name):
+            raise ValueError(f"reference audit manifest/audit mismatch: {name}")
     if (
         diagnostic.get("schema")
         != "atem3d.zhou2020.debye-order-diagnostic/v2"
@@ -452,6 +765,7 @@ def _write_report(
     publication_bundle: Path,
     reference_audit: Path,
     output: Path,
+    publication_pngs: dict[str, bytes],
     metrics: dict[str, Any],
     manifest: dict[str, Any],
     diagnostic: dict[str, Any],
@@ -461,6 +775,8 @@ def _write_report(
 ) -> None:
     doc = Document()
     _configure_document(doc)
+    schema_paragraph = doc.add_paragraph()
+    schema_paragraph.add_run(f"Report schema: {REPORT_SCHEMA}")
 
     title = doc.add_paragraph(style="Title")
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -529,7 +845,7 @@ def _write_report(
     )
     _add_figure(
         doc,
-        publication_bundle / FIGURES[0][0],
+        publication_pngs[FIGURES[0][0]],
         FIGURES[0][1],
     )
     _add_table(
@@ -548,7 +864,7 @@ def _write_report(
     doc.add_heading("2  文献式绝对值总场与符号诊断", level=1)
     _add_figure(
         doc,
-        publication_bundle / FIGURES[1][0],
+        publication_pngs[FIGURES[1][0]],
         FIGURES[1][1],
     )
     doc.add_paragraph(
@@ -565,7 +881,7 @@ def _write_report(
     doc.add_heading("3  参考变换稳定性审计", level=1)
     _add_figure(
         doc,
-        publication_bundle / FIGURES[2][0],
+        publication_pngs[FIGURES[2][0]],
         FIGURES[2][1],
     )
     stable = audit["stable_window"]
@@ -607,7 +923,7 @@ def _write_report(
     doc.add_heading("4  正式判据与独立 false reversal", level=1)
     _add_figure(
         doc,
-        publication_bundle / FIGURES[3][0],
+        publication_pngs[FIGURES[3][0]],
         FIGURES[3][1],
     )
     hz_noip = _first_prediction(metrics, "noip", "Hz")
@@ -637,7 +953,7 @@ def _write_report(
     doc.add_heading("5  Debye 极点数内部敏感性", level=1)
     _add_figure(
         doc,
-        publication_bundle / FIGURES[4][0],
+        publication_pngs[FIGURES[4][0]],
         FIGURES[4][1],
     )
     comparison = diagnostic["comparison"]
@@ -713,21 +1029,7 @@ def _write_report(
         "GEOPHYSICS, 85(4), E111-E120. DOI: 10.1190/geo2019-0322.1."
     )
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        prefix=f".{output.name}.",
-        suffix=".tmp.docx",
-        dir=output.parent,
-        delete=False,
-    ) as stream:
-        temporary = Path(stream.name)
-    try:
-        doc.save(temporary)
-        with temporary.open("rb+") as stream:
-            os.fsync(stream.fileno())
-        os.replace(temporary, output)
-    finally:
-        temporary.unlink(missing_ok=True)
+    doc.save(output)
 
 
 def build_report(
@@ -745,9 +1047,24 @@ def build_report(
     if output.suffix.lower() != ".docx":
         raise ValueError("report output must be DOCX; PDF generation is forbidden")
 
-    bundle = _load_validated_bundle(publication_bundle)
+    bundle = _load_validated_bundle(
+        publication_bundle,
+        reference_audit,
+    )
     validated_audit = _load_validated_reference_audit(reference_audit)
-    manifest, diagnostic, audit = _validate_evidence(bundle, validated_audit)
+    audit_identity = _load_validated_audit_identity(
+        reference_audit,
+        validated_audit,
+    )
+    manifest, diagnostic, audit = _validate_evidence(
+        bundle,
+        validated_audit,
+        audit_identity,
+    )
+    publication_pngs = _snapshot_publication_pngs(
+        publication_bundle,
+        manifest,
+    )
 
     metrics = _load_cross_bound_metrics(
         root,
@@ -755,25 +1072,26 @@ def build_report(
         manifest,
         validated_audit,
     )
-    for figure, _ in FIGURES:
-        if not (publication_bundle / figure).is_file():
-            raise FileNotFoundError(
-                f"validated publication bundle figure is missing: {figure}"
-            )
 
     git_commit, git_dirty = _git_state(root)
-    _write_report(
-        root=root,
-        run=run,
-        publication_bundle=publication_bundle,
-        reference_audit=reference_audit,
-        output=output,
-        metrics=metrics,
-        manifest=manifest,
-        diagnostic=diagnostic,
-        audit=audit,
-        git_commit=git_commit,
-        git_dirty=git_dirty,
+    _publish_docx(
+        output,
+        lambda staging: _write_report(
+            root=root,
+            run=run,
+            publication_bundle=publication_bundle,
+            reference_audit=reference_audit,
+            output=staging,
+            publication_pngs=publication_pngs,
+            metrics=metrics,
+            manifest=manifest,
+            diagnostic=diagnostic,
+            audit=audit,
+            git_commit=git_commit,
+            git_dirty=git_dirty,
+        ),
+        publication_pngs,
+        key_texts=REPORT_REQUIRED_TEXT,
     )
 
 

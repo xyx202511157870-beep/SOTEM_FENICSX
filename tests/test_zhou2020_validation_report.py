@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import shutil
@@ -45,6 +46,17 @@ def _metric(value: float, gate: float, passed: bool) -> dict[str, object]:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_digest(identity: dict[str, object]) -> str:
+    encoded = json.dumps(
+        identity,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _make_report_fixture(tmp_path: Path):
@@ -132,6 +144,7 @@ def _make_report_fixture(tmp_path: Path):
     )
 
     audit = {
+        "schema": "atem3d.zhou2020.reference-stability/v1",
         "status": "inconclusive",
         "qwe": {
             "converged": False,
@@ -178,6 +191,51 @@ def _make_report_fixture(tmp_path: Path):
         fig.savefig(bundle / name, dpi=80)
         plt.close(fig)
 
+    audit_manifest = {
+        "schema": "atem3d.zhou2020.reference-audit-manifest/v1",
+        "status": "inconclusive",
+        "input_sha256": input_hashes,
+        "code_sha256": {"audit.py": "a" * 64},
+        "methods": {"direct_frequency_qwe": {"ft": "qwe"}},
+        "qwe": audit["qwe"],
+        "artifacts": {
+            "reference_stability.json": {"sha256": "b" * 64},
+            "reference_stability.npz": {"sha256": "c" * 64},
+        },
+    }
+    audit.update(
+        {
+            "input_sha256": input_hashes,
+            "code_sha256": audit_manifest["code_sha256"],
+            "methods": audit_manifest["methods"],
+        }
+    )
+    audit_identity_core = {
+        "root_relative": "output/reference_audit_hardened_v2",
+        "manifest_sha256": "d" * 64,
+        "manifest_schema": audit_manifest["schema"],
+        "audit_schema": audit["schema"],
+        "status": audit_manifest["status"],
+        "artifacts": {
+            name: record["sha256"]
+            for name, record in audit_manifest["artifacts"].items()
+        },
+        "input_sha256": input_hashes,
+        "code_sha256": audit_manifest["code_sha256"],
+        "methods": audit_manifest["methods"],
+        "qwe": audit_manifest["qwe"],
+    }
+    audit_identity = dict(audit_identity_core)
+    audit_identity["canonical_sha256"] = _canonical_digest(audit_identity_core)
+    manifest["metadata"]["reference_audit"] = audit_identity
+    manifest["artifacts"] = {
+        name: {
+            "sha256": _sha256(bundle / name),
+            "bytes": (bundle / name).stat().st_size,
+        }
+        for name in FIGURE_NAMES
+    }
+
     fixture = {
         "root": tmp_path,
         "run": run,
@@ -188,15 +246,12 @@ def _make_report_fixture(tmp_path: Path):
             "diagnostic": diagnostic,
         },
         "validated_audit": {
-            "manifest": {
-                "status": "inconclusive",
-                "input_sha256": input_hashes,
-            },
+            "manifest": audit_manifest,
             "audit": audit,
             "arrays": {},
         },
+        "audit_identity": audit_identity,
     }
-    fixture["validated_audit"]["audit"]["input_sha256"] = input_hashes
     return fixture
 
 
@@ -216,12 +271,17 @@ def _patch_validators(report, fixture, monkeypatch) -> None:
     monkeypatch.setattr(
         report,
         "_load_validated_bundle",
-        lambda path: fixture["validated_bundle"],
+        lambda path, audit_path: fixture["validated_bundle"],
     )
     monkeypatch.setattr(
         report,
         "_load_validated_reference_audit",
         lambda path: fixture["validated_audit"],
+    )
+    monkeypatch.setattr(
+        report,
+        "_load_validated_audit_identity",
+        lambda path, validated: fixture["audit_identity"],
     )
     monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
 
@@ -234,8 +294,9 @@ def test_report_consumes_validated_publication_bundle_and_audit(
     fixture = _make_report_fixture(tmp_path)
     calls: list[tuple[str, Path]] = []
 
-    def load_bundle(path: Path):
+    def load_bundle(path: Path, audit_path: Path):
         calls.append(("bundle", Path(path)))
+        assert Path(audit_path) == fixture["audit_dir"]
         return fixture["validated_bundle"]
 
     def load_audit(path: Path):
@@ -244,6 +305,11 @@ def test_report_consumes_validated_publication_bundle_and_audit(
 
     monkeypatch.setattr(report, "_load_validated_bundle", load_bundle)
     monkeypatch.setattr(report, "_load_validated_reference_audit", load_audit)
+    monkeypatch.setattr(
+        report,
+        "_load_validated_audit_identity",
+        lambda path, validated: fixture["audit_identity"],
+    )
     monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
     output = tmp_path / "report.docx"
 
@@ -270,12 +336,17 @@ def test_report_language_and_package_are_scientifically_fail_closed(
     monkeypatch.setattr(
         report,
         "_load_validated_bundle",
-        lambda path: fixture["validated_bundle"],
+        lambda path, audit_path: fixture["validated_bundle"],
     )
     monkeypatch.setattr(
         report,
         "_load_validated_reference_audit",
         lambda path: fixture["validated_audit"],
+    )
+    monkeypatch.setattr(
+        report,
+        "_load_validated_audit_identity",
+        lambda path, validated: fixture["audit_identity"],
     )
     monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
     output = tmp_path / "report.docx"
@@ -361,12 +432,25 @@ def test_report_refuses_changed_reference_audit_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report,
         "_load_validated_bundle",
-        lambda path: fixture["validated_bundle"],
+        lambda path, audit_path: fixture["validated_bundle"],
     )
     monkeypatch.setattr(
         report,
         "_load_validated_reference_audit",
         lambda path: changed,
+    )
+    changed_identity = dict(fixture["audit_identity"])
+    changed_identity["status"] = "passed"
+    changed_core = {
+        key: value
+        for key, value in changed_identity.items()
+        if key != "canonical_sha256"
+    }
+    changed_identity["canonical_sha256"] = _canonical_digest(changed_core)
+    monkeypatch.setattr(
+        report,
+        "_load_validated_audit_identity",
+        lambda path, validated: changed_identity,
     )
     monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
 
@@ -475,6 +559,293 @@ def test_unbound_source_convergence_file_is_not_read(tmp_path, monkeypatch):
 
     assert output.is_file()
     assert "source quadrature difference" not in _document_text(output)
+
+
+def test_report_rejects_same_inputs_but_different_audit_generation(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    different = json.loads(json.dumps(fixture["audit_identity"]))
+    different["methods"]["direct_frequency_qwe"]["ft"] = "fftlog"
+    core = {
+        key: value
+        for key, value in different.items()
+        if key != "canonical_sha256"
+    }
+    different["canonical_sha256"] = _canonical_digest(core)
+    monkeypatch.setattr(
+        report,
+        "_load_validated_bundle",
+        lambda path, audit_path: fixture["validated_bundle"],
+    )
+    monkeypatch.setattr(
+        report,
+        "_load_validated_reference_audit",
+        lambda path: fixture["validated_audit"],
+    )
+    monkeypatch.setattr(
+        report,
+        "_load_validated_audit_identity",
+        lambda path, validated: different,
+    )
+    monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
+    output = tmp_path / "mismatched-audit.docx"
+
+    with pytest.raises(ValueError, match="audit generation identity"):
+        report.build_report(
+            fixture["root"],
+            fixture["run"],
+            fixture["bundle"],
+            fixture["audit_dir"],
+            output,
+        )
+
+    assert not output.exists()
+
+
+def test_report_rejects_png_tampered_after_bundle_validation(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+
+    def load_bundle(path, audit_path):
+        (fixture["bundle"] / FIGURE_NAMES[2]).write_bytes(b"post-validation tamper")
+        return fixture["validated_bundle"]
+
+    monkeypatch.setattr(report, "_load_validated_bundle", load_bundle)
+    monkeypatch.setattr(
+        report,
+        "_load_validated_reference_audit",
+        lambda path: fixture["validated_audit"],
+    )
+    monkeypatch.setattr(
+        report,
+        "_load_validated_audit_identity",
+        lambda path, validated: fixture["audit_identity"],
+    )
+    monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
+    output = tmp_path / "tampered-image.docx"
+
+    with pytest.raises(ValueError, match="PNG|image|artifact"):
+        report.build_report(
+            fixture["root"],
+            fixture["run"],
+            fixture["bundle"],
+            fixture["audit_dir"],
+            output,
+        )
+
+    assert not output.exists()
+
+
+def _publisher_images(fixture) -> dict[str, bytes]:
+    return {
+        name: (fixture["bundle"] / name).read_bytes()
+        for name in FIGURE_NAMES
+    }
+
+
+def _minimal_docx_builder(
+    images: dict[str, bytes],
+    *,
+    mutate_first: bool = False,
+):
+    def build(path: Path) -> None:
+        doc = Document()
+        doc.add_paragraph("atem3d.zhou2020.report/v2")
+        doc.add_paragraph("failed_with_reproducible_evidence")
+        for index, payload in enumerate(images.values()):
+            if mutate_first and index == 0:
+                payload = next(iter(images.values()))
+                changed = bytearray(payload)
+                changed[-1] ^= 1
+                payload = bytes(changed)
+            doc.add_picture(BytesIO(payload))
+        doc.save(path)
+
+    return build
+
+
+def _report_debris(output: Path) -> list[Path]:
+    return [
+        *output.parent.glob(f".{output.name}.tmp-*"),
+        *output.parent.glob(f".{output.name}.lock"),
+    ]
+
+
+def test_docx_publisher_rejects_lock_collision_and_preserves_other_owner(
+    tmp_path,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    output = tmp_path / "report.docx"
+    lock = report._report_lock_path(output)
+    lock.write_text("other-owner", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        report._publish_docx(
+            output,
+            _minimal_docx_builder(_publisher_images(fixture)),
+            _publisher_images(fixture),
+        )
+
+    assert lock.read_text(encoding="utf-8") == "other-owner"
+    assert not output.exists()
+
+
+def test_docx_publisher_validates_temp_before_replacing_existing_report(
+    tmp_path,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    output = tmp_path / "report.docx"
+    old = b"previous committed report"
+    output.write_bytes(old)
+
+    with pytest.raises(ValueError, match="DOCX|ZIP|package"):
+        report._publish_docx(
+            output,
+            lambda path: path.write_bytes(b"not a docx"),
+            _publisher_images(fixture),
+        )
+
+    assert output.read_bytes() == old
+    assert _report_debris(output) == []
+
+
+def test_docx_publisher_rejects_embedded_media_tamper(tmp_path):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    output = tmp_path / "report.docx"
+    old = b"previous report"
+    output.write_bytes(old)
+
+    with pytest.raises(ValueError, match="media|image"):
+        report._publish_docx(
+            output,
+            _minimal_docx_builder(
+                _publisher_images(fixture),
+                mutate_first=True,
+            ),
+            _publisher_images(fixture),
+        )
+
+    assert output.read_bytes() == old
+    assert _report_debris(output) == []
+
+
+def test_docx_publisher_replace_failure_preserves_old_and_cleans_debris(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    output = tmp_path / "report.docx"
+    old = b"previous report"
+    output.write_bytes(old)
+    monkeypatch.setattr(
+        report.os,
+        "replace",
+        lambda source, target: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with pytest.raises(OSError, match="replace failed"):
+        report._publish_docx(
+            output,
+            _minimal_docx_builder(_publisher_images(fixture)),
+            _publisher_images(fixture),
+        )
+
+    assert output.read_bytes() == old
+    assert _report_debris(output) == []
+
+
+def test_docx_publisher_keyboard_interrupt_cleans_owned_lock_and_temp(
+    tmp_path,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    output = tmp_path / "report.docx"
+
+    def interrupted(path):
+        path.write_bytes(b"partial")
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        report._publish_docx(
+            output,
+            interrupted,
+            _publisher_images(fixture),
+        )
+
+    assert not output.exists()
+    assert _report_debris(output) == []
+
+
+def test_docx_publisher_does_not_remove_changed_lock_owner(tmp_path):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    output = tmp_path / "report.docx"
+    lock = report._report_lock_path(output)
+
+    def ownership_changed(path):
+        path.write_bytes(b"partial")
+        lock.write_text("new-owner", encoding="utf-8")
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        report._publish_docx(
+            output,
+            ownership_changed,
+            _publisher_images(fixture),
+        )
+
+    assert lock.read_text(encoding="utf-8") == "new-owner"
+    assert not output.exists()
+    lock.unlink()
+    assert _report_debris(output) == []
+
+
+def test_figure_paragraphs_and_captions_prevent_orphaning(tmp_path, monkeypatch):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    _patch_validators(report, fixture, monkeypatch)
+    output = tmp_path / "report.docx"
+
+    report.build_report(
+        fixture["root"],
+        fixture["run"],
+        fixture["bundle"],
+        fixture["audit_dir"],
+        output,
+    )
+
+    doc = Document(output)
+    captions = [
+        paragraph
+        for paragraph in doc.paragraphs
+        if paragraph.style.name == "Caption"
+    ]
+    assert len(captions) == 5
+    assert all(
+        paragraph.paragraph_format.keep_together
+        and paragraph.paragraph_format.keep_with_next
+        for paragraph in captions
+    )
+    picture_paragraphs = [
+        paragraph
+        for paragraph in doc.paragraphs
+        if paragraph._p.xpath(".//w:drawing")
+    ]
+    assert len(picture_paragraphs) == 5
+    assert all(
+        paragraph.paragraph_format.keep_with_next
+        for paragraph in picture_paragraphs
+    )
 
 
 def test_cli_requires_bundle_audit_and_docx_output_only():
