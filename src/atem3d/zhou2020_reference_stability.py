@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from numbers import Real
 from typing import Any
 
 import numpy as np
@@ -30,10 +31,25 @@ def _relative_l2(values, reference) -> float:
         raise ValueError("values and reference must have the same shape")
     if not np.isfinite(value_array).all() or not np.isfinite(reference_array).all():
         raise ValueError("values and reference must be finite")
-    reference_norm = float(np.linalg.norm(reference_array))
-    if reference_norm == 0.0:
+    if reference_array.size == 0 or not np.any(reference_array):
         raise ValueError("reference norm must be non-zero")
-    return float(np.linalg.norm(value_array - reference_array) / reference_norm)
+    scale = max(
+        float(np.max(np.abs(value_array))),
+        float(np.max(np.abs(reference_array))),
+    )
+    scaled_values = value_array / scale
+    scaled_reference = reference_array / scale
+    numerator = float(np.linalg.norm(scaled_values - scaled_reference))
+    denominator = float(np.linalg.norm(scaled_reference))
+    result = numerator / denominator
+    if (
+        not np.isfinite(numerator)
+        or not np.isfinite(denominator)
+        or denominator == 0.0
+        or not np.isfinite(result)
+    ):
+        raise ValueError("relative L2 calculation must be finite")
+    return result
 
 
 def _validated_inputs(times, *arrays) -> tuple[np.ndarray, ...]:
@@ -75,7 +91,12 @@ def first_stable_sample(
         or not np.isfinite(candidate_values).all()
     ):
         raise ValueError("candidates must have shape (n_times, n_methods>=2)")
-    if not np.isfinite(signal_to_spread) or signal_to_spread <= 0.0:
+    if isinstance(signal_to_spread, (bool, np.bool_)) or not isinstance(
+        signal_to_spread, Real
+    ):
+        raise ValueError("signal_to_spread must be a finite real scalar")
+    ratio = float(signal_to_spread)
+    if not np.isfinite(ratio) or ratio <= 0.0:
         raise ValueError("signal_to_spread must be finite and positive")
     if isinstance(consecutive, bool) or not isinstance(consecutive, (int, np.integer)):
         raise ValueError("consecutive must be a positive integer")
@@ -84,7 +105,7 @@ def first_stable_sample(
 
     centre = np.median(candidate_values, axis=1)
     spread = np.ptp(candidate_values, axis=1)
-    stable = np.abs(centre) >= signal_to_spread * spread
+    stable = np.abs(centre) >= ratio * spread
     for start_index in range(time_values.size - consecutive + 1):
         if np.all(stable[start_index : start_index + consecutive]):
             return start_index
@@ -117,6 +138,8 @@ def build_reference_stability_audit(
         direct_frequency_qwe,
         fenicsx_increment,
     )
+    if not isinstance(direct_qwe_converged, (bool, np.bool_)):
+        raise ValueError("direct_qwe_converged must be a boolean")
     start_index = first_stable_sample(
         time_values,
         np.column_stack((default_values, separate_values, direct_values)),
