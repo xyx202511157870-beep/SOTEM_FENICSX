@@ -224,7 +224,7 @@ def run_reference_sweep(
     )
 
     metadata = {
-        "schema": "atem3d.zhou2020.empymod-metadata/v1",
+        "schema": "atem3d.zhou2020.empymod-metadata/v2",
         "case_id": case.case_id,
         "reference_modes": ["noip", "exact_pelton_ip"],
         "components": list(COMPONENTS),
@@ -232,6 +232,26 @@ def run_reference_sweep(
             "Ex": "V/m",
             "Hz": "A/m",
             "dBzdt": "T/s",
+        },
+        "component_conventions": {
+            "Ex": {
+                "empymod_receiver": "electric",
+                "empymod_signal": -1,
+                "scale": "1",
+                "source_waveform": "ideal_step_off",
+            },
+            "Hz": {
+                "empymod_receiver": "H",
+                "empymod_signal": -1,
+                "scale": "1",
+                "source_waveform": "ideal_step_off",
+            },
+            "dBzdt": {
+                "empymod_receiver": "H",
+                "empymod_signal": 0,
+                "scale": "-mu0",
+                "source_waveform": "ideal_step_off",
+            },
         },
         "srcpts_values": list(srcpts),
         "selected_srcpts": final_srcpts,

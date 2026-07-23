@@ -56,11 +56,28 @@ def _write_reference(path: Path, *, complete: bool = True) -> None:
     (path / "empymod_srcpts_convergence.json").write_text(
         json.dumps({"status": "passed"}), encoding="utf-8"
     )
+    (path / "empymod_metadata.json").write_text(
+        json.dumps(
+            {
+                "schema": "atem3d.zhou2020.empymod-metadata/v2",
+                "component_conventions": {
+                    "dBzdt": {
+                        "empymod_receiver": "H",
+                        "empymod_signal": 0,
+                        "scale": "-mu0",
+                        "source_waveform": "ideal_step_off",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     artifacts = {}
     for name in (
         "empymod_noip.csv",
         "empymod_ip.csv",
         "empymod_srcpts_convergence.json",
+        "empymod_metadata.json",
     ):
         artifacts[name] = {"path": name, "sha256": _sha256(path / name)}
     (path / "reference_manifest.json").write_text(
@@ -144,6 +161,27 @@ def test_publish_reference_is_fail_closed(
     source = tmp_path / "reference"
     _write_reference(source, complete=False)
     with pytest.raises(ValueError, match="reference_verified"):
+        publish_reference(run_dir, source)
+    assert not (run_dir / "reference").exists()
+
+
+def test_publish_reference_rejects_wrong_dbdt_semantics(
+    tmp_path: Path, snapshots: tuple[Path, Path]
+) -> None:
+    run_dir = _prepared(tmp_path, snapshots)
+    source = tmp_path / "reference"
+    _write_reference(source)
+    metadata_path = source / "empymod_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["component_conventions"]["dBzdt"]["empymod_signal"] = -1
+    metadata["component_conventions"]["dBzdt"]["scale"] = "mu0"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    manifest_path = source / "reference_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["empymod_metadata.json"]["sha256"] = _sha256(metadata_path)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dBzdt convention"):
         publish_reference(run_dir, source)
     assert not (run_dir / "reference").exists()
 

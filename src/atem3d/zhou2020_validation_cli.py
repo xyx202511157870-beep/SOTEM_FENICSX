@@ -438,6 +438,7 @@ def _verify_reference_manifest(source: Path, manifest: dict[str, Any]) -> None:
         "empymod_noip.csv",
         "empymod_ip.csv",
         "empymod_srcpts_convergence.json",
+        "empymod_metadata.json",
     }
     addressed = {record["path"] for record in records.values()}
     if not required.issubset(addressed):
@@ -447,6 +448,22 @@ def _verify_reference_manifest(source: Path, manifest: dict[str, Any]) -> None:
         target = source / Path(*relative.parts)
         if not target.is_file() or _sha256_file(target) != record["sha256"]:
             raise ValueError(f"reference artifact hash mismatch: {relative}")
+    metadata = _load_json(source / "empymod_metadata.json")
+    convention = metadata.get("component_conventions", {}).get("dBzdt", {})
+    expected_convention = {
+        "empymod_receiver": "H",
+        "empymod_signal": 0,
+        "scale": "-mu0",
+        "source_waveform": "ideal_step_off",
+    }
+    if (
+        metadata.get("schema") != "atem3d.zhou2020.empymod-metadata/v2"
+        or convention != expected_convention
+    ):
+        raise ValueError(
+            "reference dBzdt convention must use impulse H with signal=0 "
+            "and scale=-mu0 for an ideal step-off source"
+        )
 
 
 def _atomic_copy_tree(source: Path, target: Path, run: Path) -> None:

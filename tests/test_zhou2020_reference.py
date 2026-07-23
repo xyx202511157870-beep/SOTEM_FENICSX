@@ -117,6 +117,16 @@ def test_reference_sweep_writes_signed_canonical_evidence(tmp_path):
     assert manifest["status"] == "reference_verified"
     assert set(manifest["file_sha256"]) == required - {"reference_manifest.json"}
     assert all(len(value) == 64 for value in manifest["file_sha256"].values())
+    metadata = json.loads(
+        (tmp_path / "empymod_metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["schema"] == "atem3d.zhou2020.empymod-metadata/v2"
+    assert metadata["component_conventions"]["dBzdt"] == {
+        "empymod_receiver": "H",
+        "empymod_signal": 0,
+        "scale": "-mu0",
+        "source_waveform": "ideal_step_off",
+    }
 
 
 def test_reference_sweep_fails_closed_when_source_convergence_exceeds_gate(
