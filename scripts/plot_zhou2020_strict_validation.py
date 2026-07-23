@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -17,6 +21,23 @@ EXPORT_POLICY = {
     "known_waiver": (
         "The static Nature-figure preflight requires PDF, but the user's "
         "explicit no-PDF constraint takes precedence."
+    ),
+}
+AUDIT_BOUND_INPUTS = {
+    "case.yaml": Path("snapshots/case.yaml"),
+    "run_manifest.json": Path("run_manifest.json"),
+    "reference_manifest.json": Path("reference/reference_manifest.json"),
+    "empymod_metadata.json": Path("reference/empymod_metadata.json"),
+    "strict_comparison.json": Path(
+        "comparisons/S1T1B1/strict_comparison.json"
+    ),
+    "empymod_noip.csv": Path("reference/empymod_noip.csv"),
+    "empymod_ip.csv": Path("reference/empymod_ip.csv"),
+    "fenicsx_noip_predictions.csv": Path(
+        "fenicsx/noip/S1T1B1/predictions.csv"
+    ),
+    "fenicsx_ip_predictions.csv": Path(
+        "fenicsx/ip/S1T1B1/predictions.csv"
     ),
 }
 COMPONENTS = (
@@ -70,22 +91,97 @@ def _require_positive_times(values: np.ndarray) -> np.ndarray:
     times = np.asarray(values, dtype=float)
     if times.ndim != 1 or not np.isfinite(times).all() or np.any(times <= 0.0):
         raise ValueError("logarithmic time coordinates must be finite and strictly positive")
+    if times.size == 0 or np.any(np.diff(times) <= 0.0):
+        raise ValueError("time coordinates must be non-empty and strictly increasing")
     return times
 
 
+def _require_finite_1d(
+    values: np.ndarray,
+    *,
+    label: str,
+    sample_count: int,
+) -> np.ndarray:
+    array = np.asarray(values, dtype=float)
+    if (
+        array.ndim != 1
+        or array.shape != (sample_count,)
+        or not np.isfinite(array).all()
+    ):
+        raise ValueError(
+            f"{label} must be a finite 1-D array with {sample_count} samples"
+        )
+    return array
+
+
+def _validated_total_field_time_grid(
+    *datasets: tuple[str, dict[str, np.ndarray]],
+) -> np.ndarray:
+    grids: list[np.ndarray] = []
+    for dataset_name, data in datasets:
+        times = _require_positive_times(_time_column(data))
+        for component, _ in COMPONENTS:
+            _require_finite_1d(
+                _component(data, component),
+                label=f"{dataset_name}.{component}",
+                sample_count=times.size,
+            )
+        grids.append(times)
+    if any(not np.array_equal(grids[0], grid) for grid in grids[1:]):
+        raise ValueError("all four total-field time grids must be exactly equal")
+    return grids[0]
+
+
 def _save_all(fig: plt.Figure, stem: Path) -> None:
-    """Save editable/vector and high-resolution raster outputs, never PDF."""
+    """Stage the complete no-PDF export set before atomically replacing files."""
 
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(stem.with_suffix(".svg"), bbox_inches="tight")
-    fig.savefig(stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
-    fig.savefig(
-        stem.with_suffix(".tiff"),
-        dpi=600,
-        bbox_inches="tight",
-        pil_kwargs={"compression": "tiff_lzw"},
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{stem.name}.", dir=stem.parent)
     )
+    staged_stem = staging / stem.name
+    backups: dict[Path, Path] = {}
+    published: list[Path] = []
+    try:
+        fig.savefig(staged_stem.with_suffix(".svg"), bbox_inches="tight")
+        fig.savefig(
+            staged_stem.with_suffix(".png"),
+            dpi=300,
+            bbox_inches="tight",
+        )
+        fig.savefig(
+            staged_stem.with_suffix(".tiff"),
+            dpi=600,
+            bbox_inches="tight",
+            pil_kwargs={"compression": "tiff_lzw"},
+        )
+
+        for suffix in EXPORT_FORMATS:
+            target = stem.with_suffix(suffix)
+            if target.exists():
+                backup = staging / f"previous{suffix}"
+                os.replace(target, backup)
+                backups[target] = backup
+        try:
+            for suffix in EXPORT_FORMATS:
+                target = stem.with_suffix(suffix)
+                os.replace(staged_stem.with_suffix(suffix), target)
+                published.append(target)
+        except Exception:
+            for target in published:
+                target.unlink(missing_ok=True)
+            for target, backup in backups.items():
+                if backup.exists():
+                    os.replace(backup, target)
+            raise
+    except Exception:
+        for target, backup in backups.items():
+            if backup.exists() and not target.exists():
+                os.replace(backup, target)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _finish_or_save(
@@ -93,12 +189,18 @@ def _finish_or_save(
     stem: Path | None,
     *,
     rect: tuple[float, float, float, float] | None = None,
+    tight: bool = True,
 ) -> plt.Figure | None:
-    fig.tight_layout(rect=rect)
     if stem is None:
+        if tight:
+            fig.tight_layout(rect=rect)
         return fig
-    _save_all(fig, stem)
-    plt.close(fig)
+    try:
+        if tight:
+            fig.tight_layout(rect=rect)
+        _save_all(fig, stem)
+    finally:
+        plt.close(fig)
     return None
 
 
@@ -141,6 +243,52 @@ def load_reference_audit(path: Path) -> dict[str, Any]:
     """Load only a manifest-bound Task-2 audit evidence directory."""
 
     return _load_audit_module().load_validated_audit(Path(path))
+
+
+def _audit_bound_inputs(run: Path) -> dict[str, Path]:
+    run = Path(run)
+    return {
+        name: run / relative_path
+        for name, relative_path in AUDIT_BOUND_INPUTS.items()
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cross_bind_run_to_audit(
+    run: Path,
+    validated_audit: dict[str, Any],
+) -> None:
+    """Require the plotted run to be byte-identical to the audited run inputs."""
+
+    manifest_hashes = validated_audit.get("manifest", {}).get("input_sha256")
+    audit = validated_audit.get("audit", {})
+    audit_hashes = audit.get("input_sha256")
+    paths = _audit_bound_inputs(run)
+    if (
+        not isinstance(manifest_hashes, dict)
+        or manifest_hashes != audit_hashes
+        or set(manifest_hashes) != set(paths)
+    ):
+        raise ValueError("audit input identity is incomplete or inconsistent")
+    if (
+        audit.get("methods", {})
+        .get("fenicsx_increment", {})
+        .get("spatial_case")
+        != "S1T1B1"
+    ):
+        raise ValueError("audit spatial-case identity is not S1T1B1")
+    for name, path in paths.items():
+        if not path.is_file():
+            raise FileNotFoundError(f"audited run input is missing: {path}")
+        if _sha256_file(path) != manifest_hashes[name]:
+            raise ValueError(f"audited run input hash mismatch: {name}")
 
 
 def plot_model(stem: Path | None) -> plt.Figure | None:
@@ -205,13 +353,18 @@ def plot_total_fields(
 ) -> plt.Figure | None:
     """Plot literature-style total-field magnitudes without altering source arrays."""
 
+    times = _validated_total_field_time_grid(
+        ("noip_fem", noip_fem),
+        ("ip_fem", ip_fem),
+        ("noip_ref", noip_ref),
+        ("ip_ref", ip_ref),
+    )
     fig, axes = plt.subplots(2, 3, figsize=(7.2, 4.7), sharex=True)
     variants = (
         ("No-IP", noip_fem, noip_ref),
         ("IP", ip_fem, ip_ref),
     )
     for row, (variant, fem, ref) in enumerate(variants):
-        times = _require_positive_times(_time_column(fem))
         for col, (component, label) in enumerate(COMPONENTS):
             ax = axes[row, col]
             fem_values = _positive_magnitude(_component(fem, component))
@@ -250,6 +403,8 @@ def plot_reference_stability(
 ) -> plt.Figure | None:
     """Show weak dBz/dt IP-increment stability without hiding any samples."""
 
+    if audit.get("all_samples_retained") is not True:
+        raise ValueError("audit evidence all_samples_retained must be true")
     times = _require_positive_times(arrays["time_s"])
     unstable_end = float(audit["stable_window"]["start_s"])
     series = (
@@ -332,24 +487,59 @@ def plot_reference_stability(
     qwe_converged = bool(audit["qwe"]["converged"])
     sign_changes = int(audit["default_dlf"]["sign_changes_first20"])
     axes[1].text(
-        0.98,
-        0.04,
+        0.50,
+        -0.38,
         (
             f"default DLF first-20 sign changes={sign_changes}\n"
             f"QWE converged={qwe_converged}\n"
-            f"status={audit['status']}; all samples retained"
+            f"status={audit['status']}; "
+            f"all samples retained={audit['all_samples_retained']}"
         ),
         transform=axes[1].transAxes,
-        ha="right",
-        va="bottom",
+        ha="center",
+        va="top",
         fontsize=7.2,
+        clip_on=False,
         bbox={"facecolor": "white", "edgecolor": "#B0B0B0", "alpha": 0.9},
     )
     fig.suptitle(
         "dBz/dt IP-increment reference-transform stability audit",
         y=0.995,
     )
-    return _finish_or_save(fig, stem, rect=(0.0, 0.0, 1.0, 0.95))
+    fig.subplots_adjust(
+        left=0.09,
+        right=0.98,
+        top=0.78,
+        bottom=0.34,
+        wspace=0.22,
+    )
+    return _finish_or_save(fig, stem, tight=False)
+
+
+def _failed_hz_false_reversal_time(metrics: dict[str, Any]) -> float:
+    try:
+        record = metrics["zero_crossings"]["noip"]["Hz"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("Hz false-reversal audit record is unavailable") from exc
+    prediction = record.get("prediction")
+    reference = record.get("reference")
+    if (
+        record.get("passed") is not False
+        or record.get("count_match") is not False
+        or not isinstance(prediction, list)
+        or len(prediction) != 1
+        or reference != []
+    ):
+        raise ValueError("Hz false-reversal audit record is not a failed event")
+    value = prediction[0]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not np.isfinite(float(value))
+        or float(value) <= 0.0
+    ):
+        raise ValueError("Hz false-reversal time must be finite and positive")
+    return float(value)
 
 
 def plot_gate_summary(
@@ -419,8 +609,7 @@ def plot_gate_summary(
             "alpha": 0.95,
         },
     )
-    hz_times = metrics["zero_crossings"]["noip"]["Hz"]["prediction"]
-    hz_false_reversal = float(hz_times[0]) if hz_times else 0.022
+    hz_false_reversal = _failed_hz_false_reversal_time(metrics)
     ax.text(
         0.99,
         0.98,
@@ -444,17 +633,56 @@ def plot_gate_summary(
 
 
 def _relative_l2(numerator: np.ndarray, denominator: np.ndarray) -> float:
-    norm = float(np.linalg.norm(denominator))
-    if not np.isfinite(norm) or norm == 0.0:
+    numerator = np.asarray(numerator, dtype=float)
+    denominator = np.asarray(denominator, dtype=float)
+    if (
+        numerator.shape != denominator.shape
+        or not np.isfinite(numerator).all()
+        or not np.isfinite(denominator).all()
+    ):
+        raise ValueError("relative-L2 arrays must have equal shape and be finite")
+    common_scale = max(
+        float(np.max(np.abs(numerator), initial=0.0)),
+        float(np.max(np.abs(denominator), initial=0.0)),
+    )
+    if common_scale == 0.0:
         raise ValueError("Debye-16 increment norm must be finite and non-zero")
-    return float(np.linalg.norm(numerator) / norm)
+    scaled_denominator_norm = float(
+        np.linalg.norm(denominator / common_scale)
+    )
+    if scaled_denominator_norm == 0.0:
+        raise ValueError("Debye-16 increment norm must be finite and non-zero")
+    return float(
+        np.linalg.norm(numerator / common_scale)
+        / scaled_denominator_norm
+    )
 
 
 def _load_verification(path: Path) -> tuple[np.ndarray, list[str], np.ndarray]:
     with np.load(path, allow_pickle=False) as archive:
-        times = np.asarray(archive["times"], dtype=float).copy()
-        components = [str(value) for value in archive["components"]]
+        if not {"times", "components", "fem"} <= set(archive.files):
+            raise ValueError("Debye NPZ member set is incomplete")
+        times = _require_positive_times(
+            np.asarray(archive["times"], dtype=float).copy()
+        )
+        raw_components = np.asarray(archive["components"])
+        if raw_components.ndim != 1:
+            raise ValueError("Debye components must be a 1-D array")
+        if np.issubdtype(raw_components.dtype, np.number) and not np.isfinite(
+            raw_components
+        ).all():
+            raise ValueError("Debye components must be finite")
+        components = [str(value) for value in raw_components]
         fem = np.asarray(archive["fem"], dtype=float).copy()
+    required_components = [component for component, _ in COMPONENTS]
+    if len(components) != len(set(components)) or not set(
+        required_components
+    ) <= set(components):
+        raise ValueError("Debye components must uniquely include Ex, Hz, dBzdt")
+    if fem.shape != (times.size, len(components)):
+        raise ValueError("Debye field array shape is incomplete")
+    if not np.isfinite(fem).all():
+        raise ValueError("Debye field array must be finite")
     return times, components, fem
 
 
@@ -554,6 +782,11 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     _set_style()
     run = args.run
+    validated_audit = load_reference_audit(args.reference_audit)
+    _cross_bind_run_to_audit(run, validated_audit)
+    audit = validated_audit["audit"]
+    audit_arrays = validated_audit["arrays"]
+
     formal = run / "fenicsx"
     noip_fem = _read_csv(formal / "noip" / "S1T1B1" / "predictions.csv")
     ip_fem = _read_csv(formal / "ip" / "S1T1B1" / "predictions.csv")
@@ -564,9 +797,6 @@ def main(argv: list[str] | None = None) -> None:
             encoding="utf-8"
         )
     )
-    validated_audit = load_reference_audit(args.reference_audit)
-    audit = validated_audit["audit"]
-    audit_arrays = validated_audit["arrays"]
 
     plot_model(args.output / "fig01_model_contract")
     plot_total_fields(

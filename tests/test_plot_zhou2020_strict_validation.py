@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -16,6 +17,11 @@ SCRIPT = ROOT / "scripts/plot_zhou2020_strict_validation.py"
 HARDENED_AUDIT = (
     ROOT
     / "output/zhou2020_strict_validation/reference_audit_hardened_v2"
+)
+FORMAL_RUN = (
+    ROOT
+    / "generated/validation/zhou2020_grounded_wire/runs"
+    / "20260723T062004Z_zhou_strict_v2"
 )
 
 
@@ -74,6 +80,7 @@ def _metrics() -> dict:
                 "Hz": {
                     "prediction": [0.0222724651],
                     "reference": [],
+                    "count_match": False,
                     "passed": False,
                 }
             }
@@ -136,6 +143,31 @@ def test_total_field_rejects_nonpositive_log_time():
     ip_ref = _sample_data()
 
     with pytest.raises(ValueError, match="strictly positive"):
+        plotter.plot_total_fields(noip_fem, ip_fem, noip_ref, ip_ref, None)
+
+
+def test_total_field_rejects_shifted_equal_length_time_grid():
+    plotter = _load_plotter()
+    noip_fem = _sample_data()
+    noip_ref = _sample_data()
+    ip_fem = _sample_data()
+    ip_ref = _sample_data()
+    ip_ref["time_s"] = ip_ref["time_s"] + 1.0e-12
+
+    with pytest.raises(ValueError, match="exactly equal"):
+        plotter.plot_total_fields(noip_fem, ip_fem, noip_ref, ip_ref, None)
+
+
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf])
+def test_total_field_rejects_nonfinite_component(bad_value):
+    plotter = _load_plotter()
+    noip_fem = _sample_data()
+    noip_ref = _sample_data()
+    ip_fem = _sample_data()
+    ip_ref = _sample_data()
+    ip_ref["Ex_V_per_m"][2] = bad_value
+
+    with pytest.raises(ValueError, match="finite 1-D"):
         plotter.plot_total_fields(noip_fem, ip_fem, noip_ref, ip_ref, None)
 
 
@@ -219,6 +251,48 @@ def test_signed_reference_panel_uses_linear_y_and_shades_unstable_window():
     plt.close(fig)
 
 
+def test_reference_stability_rejects_false_all_samples_retained_evidence():
+    plotter = _load_plotter()
+    times = np.geomspace(1.0e-4, 1.0e-2, 8)
+    arrays = {
+        "time_s": times,
+        "default_dlf": np.ones(times.size),
+        "separate_total_qwe": np.ones(times.size),
+        "direct_frequency_qwe": np.ones(times.size),
+        "fenicsx_increment": np.ones(times.size),
+    }
+    audit = _audit(times)
+    audit["all_samples_retained"] = False
+
+    with pytest.raises(ValueError, match="all_samples_retained"):
+        plotter.plot_reference_stability(arrays, audit, None)
+
+
+def test_reference_evidence_box_does_not_overlap_signed_data_region():
+    plotter = _load_plotter()
+    times = np.geomspace(1.0e-4, 1.0e-2, 25)
+    arrays = {
+        "time_s": times,
+        "default_dlf": np.sin(np.arange(times.size)) * 1.0e-10,
+        "separate_total_qwe": np.geomspace(1.0e-13, 1.0e-9, times.size),
+        "direct_frequency_qwe": np.geomspace(1.2e-13, 1.2e-9, times.size),
+        "fenicsx_increment": np.geomspace(1.1e-13, 1.1e-9, times.size),
+    }
+
+    fig = plotter.plot_reference_stability(arrays, _audit(times), None)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    signed_ax = fig.axes[1]
+    evidence = next(
+        text for text in signed_ax.texts if "QWE converged" in text.get_text()
+    )
+
+    assert not evidence.get_window_extent(renderer).overlaps(
+        signed_ax.get_window_extent(renderer)
+    )
+    plt.close(fig)
+
+
 def test_gate_summary_uses_only_total_fields_as_formal_bars():
     plotter = _load_plotter()
     audit = _audit(np.geomspace(1.0e-4, 1.0e-2, 8))
@@ -235,6 +309,21 @@ def test_gate_summary_uses_only_total_fields_as_formal_bars():
     assert "Hz false reversal" in text
     assert "0.022 s" in text
     plt.close(fig)
+
+
+def test_gate_summary_rejects_empty_or_nonfailed_hz_crossing_record():
+    plotter = _load_plotter()
+    audit = _audit(np.geomspace(1.0e-4, 1.0e-2, 8))
+    metrics = _metrics()
+    metrics["zero_crossings"]["noip"]["Hz"]["prediction"] = []
+
+    with pytest.raises(ValueError, match="false-reversal"):
+        plotter.plot_gate_summary(metrics, audit, None)
+
+    metrics = _metrics()
+    metrics["zero_crossings"]["noip"]["Hz"]["passed"] = True
+    with pytest.raises(ValueError, match="false-reversal"):
+        plotter.plot_gate_summary(metrics, audit, None)
 
 
 def test_debye_metric_is_four_relative_to_sixteen_not_empymod(tmp_path):
@@ -276,6 +365,51 @@ def test_save_all_does_not_create_pdf(tmp_path):
     plt.close(fig)
 
 
+def test_save_failure_leaves_existing_output_set_untouched(tmp_path, monkeypatch):
+    plotter = _load_plotter()
+    stem = tmp_path / "figure"
+    expected = {}
+    for suffix in plotter.EXPORT_FORMATS:
+        path = stem.with_suffix(suffix)
+        expected[path] = f"old-{suffix}".encode()
+        path.write_bytes(expected[path])
+    fig = plt.figure()
+    original = fig.savefig
+    calls = 0
+
+    def fail_second_save(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected save failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(fig, "savefig", fail_second_save)
+
+    with pytest.raises(RuntimeError, match="injected save failure"):
+        plotter._save_all(fig, stem)
+
+    for path, content in expected.items():
+        assert path.read_bytes() == content
+    assert not list(tmp_path.glob(".figure.*"))
+    plt.close(fig)
+
+
+def test_finish_or_save_closes_figure_when_export_fails(tmp_path, monkeypatch):
+    plotter = _load_plotter()
+    fig = plt.figure()
+    figure_number = fig.number
+
+    def fail_export(*_args, **_kwargs):
+        raise RuntimeError("injected export failure")
+
+    monkeypatch.setattr(plotter, "_save_all", fail_export)
+    with pytest.raises(RuntimeError, match="injected export failure"):
+        plotter._finish_or_save(fig, tmp_path / "figure")
+
+    assert not plt.fignum_exists(figure_number)
+
+
 def test_hardened_reference_audit_is_loaded_through_manifest_validator():
     plotter = _load_plotter()
 
@@ -287,6 +421,7 @@ def test_hardened_reference_audit_is_loaded_through_manifest_validator():
     assert validated["manifest"]["artifacts"]["reference_stability.json"][
         "sha256"
     ]
+    plotter._cross_bind_run_to_audit(FORMAL_RUN, validated)
 
 
 def test_reference_audit_loader_rejects_unmanifested_files(tmp_path):
@@ -296,6 +431,32 @@ def test_reference_audit_loader_rejects_unmanifested_files(tmp_path):
 
     with pytest.raises((FileNotFoundError, ValueError)):
         plotter.load_reference_audit(tmp_path)
+
+
+def test_cross_binding_rejects_tampered_formal_run(tmp_path):
+    plotter = _load_plotter()
+    run = tmp_path / "run"
+    paths = plotter._audit_bound_inputs(run)
+    for name, path in paths.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"input:{name}".encode())
+    input_hashes = {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in paths.items()
+    }
+    validated = {
+        "manifest": {"input_sha256": input_hashes},
+        "audit": {
+            "input_sha256": input_hashes,
+            "methods": {"fenicsx_increment": {"spatial_case": "S1T1B1"}},
+        },
+    }
+    plotter._cross_bind_run_to_audit(run, validated)
+
+    paths["strict_comparison.json"].write_bytes(b"tampered")
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        plotter._cross_bind_run_to_audit(run, validated)
 
 
 def test_cli_requires_reference_audit(monkeypatch):
@@ -346,3 +507,44 @@ def test_no_pdf_preflight_waiver_is_explicit_and_does_not_enable_pdf():
     assert "preflight" in plotter.EXPORT_POLICY["known_waiver"].lower()
     assert "pdf" in plotter.EXPORT_POLICY["known_waiver"].lower()
     assert ".pdf" not in plotter.EXPORT_FORMATS
+
+
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf])
+def test_debye_npz_rejects_nonfinite_field(tmp_path, bad_value):
+    plotter = _load_plotter()
+    path = tmp_path / "bad.npz"
+    times = np.geomspace(1.0e-4, 1.0e-2, 8)
+    values = np.ones((times.size, 3))
+    values[2, 1] = bad_value
+    np.savez_compressed(
+        path,
+        times=times,
+        components=np.array(["Ex", "Hz", "dBzdt"]),
+        fem=values,
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        plotter._load_verification(path)
+
+
+def test_debye_npz_rejects_incomplete_shape(tmp_path):
+    plotter = _load_plotter()
+    path = tmp_path / "bad-shape.npz"
+    times = np.geomspace(1.0e-4, 1.0e-2, 8)
+    np.savez_compressed(
+        path,
+        times=times,
+        components=np.array(["Ex", "Hz", "dBzdt"]),
+        fem=np.ones((times.size - 1, 3)),
+    )
+
+    with pytest.raises(ValueError, match="shape"):
+        plotter._load_verification(path)
+
+
+def test_scale_safe_relative_l2_avoids_overflow():
+    plotter = _load_plotter()
+    denominator = np.array([1.0e308, -1.0e308])
+    numerator = 0.1 * denominator
+
+    assert plotter._relative_l2(numerator, denominator) == pytest.approx(0.1)
