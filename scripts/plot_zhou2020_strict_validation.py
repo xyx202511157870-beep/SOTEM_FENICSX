@@ -1086,7 +1086,7 @@ def plot_reference_stability(
         legend_handles,
         legend_labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.89),
+        bbox_to_anchor=(0.5, 0.92),
         ncol=4,
         borderaxespad=0.0,
         columnspacing=1.1,

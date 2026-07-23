@@ -295,7 +295,7 @@ def test_reference_evidence_box_does_not_overlap_signed_data_region():
     plt.close(fig)
 
 
-def test_reference_legend_is_outside_absolute_data_region_and_inside_figure():
+def test_reference_legend_occupies_clear_top_band_under_real_style():
     plotter = _load_plotter()
     times = np.geomspace(1.0e-4, 3.0, 101)
     arrays = {
@@ -306,28 +306,53 @@ def test_reference_legend_is_outside_absolute_data_region_and_inside_figure():
         "fenicsx_increment": np.geomspace(1.1e-13, 1.1e-9, times.size),
     }
 
-    fig = plotter.plot_reference_stability(arrays, _audit(times), None)
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    absolute_ax = fig.axes[0]
-    legend = (
-        fig.legends[0]
-        if fig.legends
-        else absolute_ax.get_legend()
-    )
-    legend_bbox = legend.get_window_extent(renderer)
-    axes_bbox = absolute_ax.get_window_extent(renderer)
-    figure_bbox = fig.get_window_extent(renderer)
+    with plt.rc_context():
+        plotter._set_style()
+        fig = plotter.plot_reference_stability(arrays, _audit(times), None)
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        legend = fig.legends[0]
+        legend_bbox = legend.get_window_extent(renderer)
+        figure_bbox = fig.get_window_extent(renderer)
+        panel_title_boxes = [
+            ax.title.get_window_extent(renderer)
+            for ax in fig.axes
+        ]
+        forbidden_boxes = [
+            *(("axes data region", ax.get_window_extent(renderer))
+              for ax in fig.axes),
+            *(("panel title", box) for box in panel_title_boxes),
+            ("suptitle", fig._suptitle.get_window_extent(renderer)),
+        ]
+        for ax in fig.axes:
+            forbidden_boxes.extend(
+                [
+                    ("x label", ax.xaxis.label.get_window_extent(renderer)),
+                    ("y label", ax.yaxis.label.get_window_extent(renderer)),
+                    ("x offset text", ax.xaxis.offsetText.get_window_extent(renderer)),
+                    ("y offset text", ax.yaxis.offsetText.get_window_extent(renderer)),
+                ]
+            )
+            forbidden_boxes.extend(
+                ("axis text/annotation", text.get_window_extent(renderer))
+                for text in ax.texts
+                if text.get_visible() and text.get_text()
+            )
+            forbidden_boxes.extend(
+                ("tick label", text.get_window_extent(renderer))
+                for text in (*ax.get_xticklabels(), *ax.get_yticklabels())
+                if text.get_visible() and text.get_text()
+            )
 
-    assert not legend_bbox.overlaps(axes_bbox)
-    assert not legend_bbox.overlaps(
-        absolute_ax.xaxis.label.get_window_extent(renderer)
-    )
-    assert legend_bbox.x0 >= figure_bbox.x0
-    assert legend_bbox.y0 >= figure_bbox.y0
-    assert legend_bbox.x1 <= figure_bbox.x1
-    assert legend_bbox.y1 <= figure_bbox.y1
-    plt.close(fig)
+        for label, bbox in forbidden_boxes:
+            assert not legend_bbox.overlaps(bbox), label
+        assert legend_bbox.y0 >= max(box.y1 for box in panel_title_boxes)
+        assert legend_bbox.y1 <= fig._suptitle.get_window_extent(renderer).y0
+        assert legend_bbox.x0 >= figure_bbox.x0
+        assert legend_bbox.y0 >= figure_bbox.y0
+        assert legend_bbox.x1 <= figure_bbox.x1
+        assert legend_bbox.y1 <= figure_bbox.y1
+        plt.close(fig)
 
 
 def test_gate_summary_uses_only_total_fields_as_formal_bars():
