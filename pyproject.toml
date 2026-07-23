@@ -46,6 +46,7 @@ atem3d-clean-delta-decomposition = "atem3d.clean_delta_decomposition_cli:main"
 atem3d-magnetic-recovery-decomposition = "atem3d.magnetic_recovery_decomposition_cli:main"
 atem3d-sotem-validate = "atem3d.sotem_validation_cli:main"
 atem3d-zhou2020-reference = "atem3d.zhou2020_reference_cli:main"
+atem3d-zhou2020-validate = "atem3d.zhou2020_validation_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
