@@ -449,3 +449,132 @@ def test_halfspace_case_translates_earth_resistivity_without_layer_flags(tmp_pat
     assert flags["--rho-earth"] == "100.0"
     assert "--layer-depths" not in flags
     assert "--layer-resistivities" not in flags
+
+
+@pytest.mark.parametrize(
+    ("level", "expected_depths", "expected_resistivities", "nominal_spacing"),
+    [
+        ("S0T0B0", "500.0,510.0,520.0", "100.0,10.0,10.0,200.0", 10.0),
+        (
+            "S1T0B0",
+            "500.0,505.0,510.0,515.0,520.0",
+            "100.0,10.0,10.0,10.0,10.0,200.0",
+            5.0,
+        ),
+        (
+            "S2T0B0",
+            "500.0,502.5,505.0,507.5,510.0,512.5,515.0,517.5,520.0",
+            "100.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,10.0,200.0",
+            2.5,
+        ),
+    ],
+)
+def test_zhou_levels_resolve_the_20m_polarizable_layer_with_explicit_interfaces(
+    tmp_path,
+    level,
+    expected_depths,
+    expected_resistivities,
+    nominal_spacing,
+):
+    runner = _load_runner()
+    case = load_benchmark_case(ROOT / "benchmarks/sotem/zhou2020_grounded_wire.yaml")
+
+    flags = _flag_values(runner.build_pipeline_argv(case, "ip", level, tmp_path))
+
+    assert flags["--layer-depths"] == expected_depths
+    assert flags["--layer-resistivities"] == expected_resistivities
+    depths = [float(item) for item in flags["--layer-depths"].split(",")]
+    polarizable = [item for item in depths if 500.0 <= item <= 520.0]
+    assert polarizable[0] == pytest.approx(500.0)
+    assert polarizable[-1] == pytest.approx(520.0)
+    assert max(right - left for left, right in zip(polarizable, polarizable[1:])) == pytest.approx(
+        nominal_spacing
+    )
+
+
+def test_zhou_ip_translation_preserves_pelton_and_surface_offset_contract(tmp_path):
+    runner = _load_runner()
+    case = load_benchmark_case(ROOT / "benchmarks/sotem/zhou2020_grounded_wire.yaml")
+
+    flags = _flag_values(runner.build_pipeline_argv(case, "ip", "S1T1B1", tmp_path))
+
+    assert flags["--source-start-z"] == "-0.1"
+    assert flags["--source-end-z"] == "-0.1"
+    assert flags["--receiver-z"] == "-0.1"
+    assert flags["--canonical-surface-z"] == "0.0"
+    assert flags["--numerical-surface-offset"] == "0.1"
+    assert flags["--cole-layer-top"] == "500.0"
+    assert flags["--cole-layer-bottom"] == "520.0"
+    assert flags["--cole-rho0"] == "10.0"
+    assert flags["--cole-m"] == "0.1"
+    assert flags["--cole-tau"] == "1.0"
+    assert flags["--cole-c"] == "0.3"
+    assert flags["--source-mode"] == "manual_line"
+    assert flags["--source-projection-mode"] == "charge_conserving"
+    times = [float(item) for item in flags["--observation-times"].split(",")]
+    assert len(times) == 101
+    assert times[0] == pytest.approx(1.0e-4)
+    assert times[-1] == pytest.approx(3.0)
+
+
+def test_zhou_noip_keeps_identical_dc_model_and_numerical_geometry(tmp_path):
+    runner = _load_runner()
+    case = load_benchmark_case(ROOT / "benchmarks/sotem/zhou2020_grounded_wire.yaml")
+
+    noip = _flag_values(runner.build_pipeline_argv(case, "noip", "S1T1B1", tmp_path))
+    ip = _flag_values(runner.build_pipeline_argv(case, "ip", "S1T1B1", tmp_path))
+
+    for name in (
+        "--source-start-x",
+        "--source-start-y",
+        "--source-start-z",
+        "--source-end-x",
+        "--source-end-y",
+        "--source-end-z",
+        "--receiver-x",
+        "--receiver-y",
+        "--receiver-z",
+        "--layer-depths",
+        "--layer-resistivities",
+        "--canonical-surface-z",
+        "--numerical-surface-offset",
+        "--observation-times",
+    ):
+        assert noip[name] == ip[name]
+    assert noip["--polarization"] == "none"
+    assert ip["--polarization"] == "cole-cole"
+
+
+def test_zhou_check_env_only_reaches_real_pipeline_contract(monkeypatch, tmp_path):
+    runner = _load_runner()
+
+    captured = _run_through_real_pipeline(
+        monkeypatch,
+        runner,
+        [
+            "--case",
+            "benchmarks/sotem/zhou2020_grounded_wire.yaml",
+            "--variant",
+            "ip",
+            "--level",
+            "S1T1B1",
+            "--workdir",
+            str(tmp_path),
+            "--check-env-only",
+            "--no-install",
+        ],
+    )
+
+    config = captured["config"]
+    model = captured["model"]
+    assert config.source_start == pytest.approx((-500.0, 0.0, -0.1))
+    assert config.source_end == pytest.approx((500.0, 0.0, -0.1))
+    assert config.receiver == pytest.approx((0.0, 1000.0, -0.1))
+    assert config.layer_depths == pytest.approx((500.0, 505.0, 510.0, 515.0, 520.0))
+    assert config.layer_resistivities == pytest.approx((100.0, 10.0, 10.0, 10.0, 10.0, 200.0))
+    assert config.observation_times[0] == pytest.approx(1.0e-4)
+    assert config.observation_times[-1] == pytest.approx(3.0)
+    assert config.canonical_surface_z == pytest.approx(0.0)
+    assert config.numerical_surface_offset == pytest.approx(0.1)
+    assert model["sigma_dc_polarizable"] == pytest.approx(0.1)
+    assert model["sigma_infinity_polarizable"] == pytest.approx(1.0 / 9.0)

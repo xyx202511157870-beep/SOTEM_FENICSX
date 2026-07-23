@@ -102,6 +102,21 @@ def test_source_refinement_cloud_adds_points_below_and_crossline():
     assert (60.0, 0.0, -0.1) in points
 
 
+def test_zhou_deepest_physical_interface_is_active_in_mesh_contract():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        layer_depths=(500.0, 505.0, 510.0, 515.0, 520.0),
+        layer_resistivities=(100.0, 10.0, 10.0, 10.0, 10.0, 200.0),
+    )
+
+    lattice = sp._layer_interface_refinement_lattice(config)
+    identity = sp._mesh_contract_identity(config)
+
+    assert lattice["active_depths"][0] == 500.0
+    assert lattice["active_depths"][-1] == 520.0
+    assert identity["geometry"]["layer_depths"][-1] == 520.0
+
+
 def test_memory_preflight_accepts_one_million_cells_on_32gb_workstation():
     sp = _load_pipeline_module()
     config = sp.PipelineConfig(memory_limit_gb=32.0, memory_safety_fraction=0.95)

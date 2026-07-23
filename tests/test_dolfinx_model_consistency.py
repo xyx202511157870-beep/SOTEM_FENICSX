@@ -85,6 +85,39 @@ def test_layered_model_consistency_builds_shared_fem_and_empymod_layers():
     assert sp._earth_resistivity_at_depth(2200.0, config) == pytest.approx(200.0)
 
 
+def test_zhou_numerical_sublayers_preserve_one_physical_pelton_material():
+    sp = _load_pipeline_module()
+    config = sp.PipelineConfig(
+        source_start=(-500.0, 0.0, -0.1),
+        source_end=(500.0, 0.0, -0.1),
+        receiver=(0.0, 1000.0, -0.1),
+        expected_parallel_offset=1000.0,
+        layer_depths=(500.0, 505.0, 510.0, 515.0, 520.0),
+        layer_resistivities=(100.0, 10.0, 10.0, 10.0, 10.0, 200.0),
+        polarization="cole-cole",
+        cole_layer_top=500.0,
+        cole_layer_bottom=520.0,
+        cole_rho0=10.0,
+        cole_m=0.1,
+        cole_tau=1.0,
+        cole_c=0.3,
+        observation_times=tuple(np.geomspace(1.0e-4, 3.0, 101)),
+        canonical_surface_z=0.0,
+        numerical_surface_offset=0.1,
+    )
+
+    diagnostics = sp.validate_model_consistency(config)
+
+    assert diagnostics["layer_depths"] == pytest.approx([500.0, 505.0, 510.0, 515.0, 520.0])
+    assert diagnostics["cole_layer_top"] == pytest.approx(500.0)
+    assert diagnostics["cole_layer_bottom"] == pytest.approx(520.0)
+    assert diagnostics["sigma_dc_polarizable"] == pytest.approx(0.1)
+    assert diagnostics["sigma_infinity_polarizable"] == pytest.approx(1.0 / 9.0)
+    assert diagnostics["canonical_surface_z"] == pytest.approx(0.0)
+    assert diagnostics["numerical_surface_offset"] == pytest.approx(0.1)
+    assert diagnostics["effective_t_max"] == pytest.approx(3.0)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

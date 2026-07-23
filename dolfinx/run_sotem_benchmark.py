@@ -25,6 +25,7 @@ PIPELINE_MAIN = PIPELINE_MODULE.main
 
 _SOURCE_MESH_SIZE_M = {0: 40.0, 1: 20.0, 2: 10.0}
 _RECEIVER_MESH_SIZE_M = {0: 20.0, 1: 10.0, 2: 5.0}
+_POLARIZABLE_LAYER_SPACING_M = {0: 10.0, 1: 5.0, 2: 2.5}
 _OUTPUT_INTERVAL_SUBSTEPS = {0: 1, 1: 2, 2: 4}
 _BOUNDARY_EXTENT_M = {0: 25_000.0, 1: 50_000.0, 2: 100_000.0}
 _LEVELS = tuple(f"S{source}T{time}B{boundary}" for source in range(3) for time in range(3) for boundary in range(3))
@@ -77,6 +78,60 @@ def _level_indices(level: str) -> tuple[int, int, int]:
     return tuple(int(value) for value in match.groups())
 
 
+def _numerical_depth(canonical_depth: float, case: BenchmarkCase) -> float:
+    """Move a canonical surface point just inside the earth for point evaluation."""
+
+    value = float(canonical_depth)
+    if value > 0.0:
+        return value
+    available = tuple(float(item) for item in case.surface_offsets_m)
+    if 0.1 not in available:
+        raise ValueError(
+            "surface benchmark requires an audited 0.1 m numerical offset"
+        )
+    return 0.1
+
+
+def _refined_layer_model(
+    case: BenchmarkCase,
+    source_level: int,
+) -> tuple[list[float], list[float]]:
+    """Return physical layers plus material-neutral thin-layer subdivisions."""
+
+    layers = case.earth["layers"]
+    physical_depths = [float(layer["bottom_m"]) for layer in layers[:-1]]
+    physical_resistivities = [float(layer["rho_ohm_m"]) for layer in layers]
+    polarization = case.polarization
+    if case.validation_role != "strict_primary" or polarization is None:
+        return physical_depths, physical_resistivities
+
+    top = float(polarization["top_m"])
+    bottom = float(polarization["bottom_m"])
+    spacing = _POLARIZABLE_LAYER_SPACING_M[source_level]
+    subdivisions = []
+    depth = top
+    while depth < bottom - 1.0e-12:
+        subdivisions.append(depth)
+        depth += spacing
+    subdivisions.append(bottom)
+    depths = sorted(set([*physical_depths, *subdivisions]))
+
+    def rho_at_depth(sample_depth: float) -> float:
+        for layer in layers:
+            layer_bottom = layer["bottom_m"]
+            if layer_bottom is None or sample_depth < float(layer_bottom):
+                return float(layer["rho_ohm_m"])
+        raise RuntimeError("layer model has no halfspace")
+
+    resistivities = []
+    previous = 0.0
+    for interface in depths:
+        resistivities.append(rho_at_depth(0.5 * (previous + interface)))
+        previous = interface
+    resistivities.append(rho_at_depth(previous + max(1.0, spacing)))
+    return depths, resistivities
+
+
 def build_pipeline_argv(
     case: BenchmarkCase,
     variant: str,
@@ -97,9 +152,13 @@ def build_pipeline_argv(
     source_length, parallel_offset = _source_geometry(case)
     boundary_extent = _BOUNDARY_EXTENT_M[boundary_level]
 
-    start_x, start_y, start_down = case.source_start_down
-    end_x, end_y, end_down = case.source_end_down
-    receiver_x, receiver_y, receiver_down = case.receiver_down
+    start_x, start_y, start_down_canonical = case.source_start_down
+    end_x, end_y, end_down_canonical = case.source_end_down
+    receiver_x, receiver_y, receiver_down_canonical = case.receiver_down
+    start_down = _numerical_depth(start_down_canonical, case)
+    end_down = _numerical_depth(end_down_canonical, case)
+    receiver_down = _numerical_depth(receiver_down_canonical, case)
+    numerical_surface_offset = max(start_down, end_down, receiver_down)
     selected_times = (
         tuple(float(value) for value in case.observation_times)
         if observation_times is None
@@ -120,6 +179,8 @@ def build_pipeline_argv(
         _float_flag("receiver-x", receiver_x),
         _float_flag("receiver-y", receiver_y),
         _float_flag("receiver-z", -receiver_down),
+        "--canonical-surface-z=0.0",
+        _float_flag("numerical-surface-offset", numerical_surface_offset),
         _float_flag("rho-air", case.rho_air_ohm_m),
         _float_flag("expected-source-length", source_length),
         _float_flag("expected-parallel-offset", parallel_offset),
@@ -127,6 +188,8 @@ def build_pipeline_argv(
         "--time-origin=after_ramp",
         "--time-method=theta",
         "--time-theta=1.0",
+        "--source-mode=manual_line",
+        "--source-projection-mode=charge_conserving",
         "--initial-dc-mode=fem",
         "--magnetic-receiver-mode=faraday_integrated",
         "--magnetic-dbdt-mode=curl",
@@ -147,9 +210,7 @@ def build_pipeline_argv(
     if "rho_ohm_m" in case.earth:
         argv.append(_float_flag("rho-earth", case.earth["rho_ohm_m"]))
     else:
-        layers = case.earth["layers"]
-        depths = [layer["bottom_m"] for layer in layers[:-1]]
-        resistivities = [layer["rho_ohm_m"] for layer in layers]
+        depths, resistivities = _refined_layer_model(case, source_level)
         argv.extend(
             [
                 _float_flag("rho-earth", resistivities[0]),

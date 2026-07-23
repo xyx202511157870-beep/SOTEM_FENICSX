@@ -101,6 +101,8 @@ class PipelineConfig:
     source_end: tuple[float, float, float] = (500.0, 200.0, -0.1)
     source_current: float = 10.0
     ramp_off_time: float = 1.0e-5
+    canonical_surface_z: float = 0.0
+    numerical_surface_offset: float = 0.1
     wire_radius: float = 2.5
     source_mesh_size: float = 5.0
     source_refinement_radius: float = 100.0
@@ -578,7 +580,8 @@ def _diffusion_refinement_box(config: PipelineConfig) -> dict[str, float]:
     """Return the late-diffusion mesh box implied by config."""
 
     base_radius = 1000.0
-    base_depth = 500.0
+    layer_depths, _layer_resistivities = _normalise_layer_model(config)
+    base_depth = max(500.0, max(layer_depths, default=0.0))
     base_top = 200.0
     factor = float(config.diffusion_refinement_factor)
     if factor > 0.0:
@@ -755,6 +758,12 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     start = require_finite_point("source_start", config.source_start)
     end = require_finite_point("source_end", config.source_end)
     receiver = require_finite_point("receiver", config.receiver)
+    canonical_surface_z = float(config.canonical_surface_z)
+    numerical_surface_offset = float(config.numerical_surface_offset)
+    if not math.isfinite(canonical_surface_z):
+        raise ValueError("canonical_surface_z must be finite")
+    if not math.isfinite(numerical_surface_offset) or numerical_surface_offset <= 0.0:
+        raise ValueError("numerical_surface_offset must be finite and positive")
 
     for name, value in [
         ("x_extent", config.x_extent),
@@ -991,6 +1000,11 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             raise ValueError(f"{name} must be below the z=0 earth surface for the air-earth empymod comparison")
         if depth >= float(config.earth_depth) - tol:
             raise ValueError(f"{name} depth {depth:.12g} m exceeds the finite FEM earth depth {config.earth_depth:.12g} m")
+        if abs(depth - numerical_surface_offset) > tol:
+            raise ValueError(
+                f"{name} numerical depth {depth:.12g} m must match "
+                f"numerical_surface_offset={numerical_surface_offset:.12g} m"
+            )
     if abs(source_depth_start - source_depth_end) > tol:
         raise ValueError(
             "source_start and source_end must have matching depths for the horizontal finite-wire empymod comparison"
@@ -1093,6 +1107,18 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
             "rho_earth": float(layer_resistivities[0]),
             "sigma_air": 1.0 / float(config.rho_air),
             "sigma_earth": 1.0 / float(layer_resistivities[0]),
+            "sigma_dc_polarizable": (
+                1.0 / float(config.cole_rho0)
+                if polarization == "cole-cole"
+                else None
+            ),
+            "sigma_infinity_polarizable": (
+                1.0 / (float(config.cole_rho0) * (1.0 - float(config.cole_m)))
+                if polarization == "cole-cole"
+                else None
+            ),
+            "canonical_surface_z": canonical_surface_z,
+            "numerical_surface_offset": numerical_surface_offset,
             "layer_depths": layer_depths,
             "layer_resistivities": layer_resistivities,
             "cole_layer_top": float(config.cole_layer_top),
@@ -12947,6 +12973,8 @@ def _main_locked(argv: list[str]) -> int:
     parser.add_argument("--source-end-z", type=float, default=-0.1)
     parser.add_argument("--source-current", type=float, default=10.0)
     parser.add_argument("--ramp-off-time", type=float, default=1.0e-5)
+    parser.add_argument("--canonical-surface-z", type=float, default=0.0)
+    parser.add_argument("--numerical-surface-offset", type=float, default=0.1)
     parser.add_argument(
         "--observation-times",
         type=_parse_float_csv,
@@ -13079,6 +13107,8 @@ def _main_locked(argv: list[str]) -> int:
         source_end=(args.source_end_x, args.source_end_y, args.source_end_z),
         source_current=args.source_current,
         ramp_off_time=args.ramp_off_time,
+        canonical_surface_z=args.canonical_surface_z,
+        numerical_surface_offset=args.numerical_surface_offset,
         observation_times=args.observation_times,
         receiver=(args.receiver_x, args.receiver_y, args.receiver_z),
         receiver_depth_profile_depths=args.receiver_depth_profile_depths,
