@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Integral, Real
@@ -36,6 +38,10 @@ class BenchmarkCase:
     polarization: Mapping[str, float] | None
     components: tuple[str, ...]
     observation_times: np.ndarray
+    validation_role: str
+    literature: Mapping[str, str]
+    provenance_file: str | None
+    surface_offsets_m: tuple[float, ...]
 
 
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:
@@ -113,6 +119,40 @@ def _freeze(value: Any) -> Any:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return tuple(_freeze(item) for item in value)
     return value
+
+
+def _optional_text(payload: Mapping[str, Any], key: str, default: str) -> str:
+    value = payload.get(key, default)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be a non-empty string")
+    return value.strip()
+
+
+def _literature(value: Any) -> Mapping[str, str]:
+    if value is None:
+        return _freeze({})
+    payload = _mapping(value, "literature")
+    normalized: dict[str, str] = {}
+    for key, item in payload.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("literature keys must be non-empty strings")
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"literature.{key} must be a non-empty string")
+        normalized[key.strip()] = item.strip()
+    return _freeze(normalized)
+
+
+def _surface_offsets(value: Any) -> tuple[float, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise ValueError("surface_offsets_m must be a sequence")
+    offsets = tuple(_real_scalar(item, "surface_offsets_m") for item in value)
+    if any(item < 0.0 for item in offsets):
+        raise ValueError("surface_offsets_m must be non-negative")
+    if tuple(sorted(set(offsets))) != offsets:
+        raise ValueError("surface_offsets_m must be strictly increasing")
+    return offsets
 
 
 def _earth(earth: Any) -> Mapping[str, Any]:
@@ -228,6 +268,13 @@ def load_benchmark_case(path: str | Path) -> BenchmarkCase:
     polarization = (
         None if raw_polarization is None else _polarization(raw_polarization)
     )
+    provenance_file = payload.get("provenance_file")
+    if provenance_file is not None and (
+        not isinstance(provenance_file, str)
+        or not provenance_file.strip()
+        or Path(provenance_file).name != provenance_file
+    ):
+        raise ValueError("provenance_file must be a local non-empty filename")
 
     return BenchmarkCase(
         case_id=case_id,
@@ -252,4 +299,66 @@ def load_benchmark_case(path: str | Path) -> BenchmarkCase:
         polarization=polarization,
         components=tuple(components),
         observation_times=_times(times),
+        validation_role=_optional_text(
+            payload, "validation_role", "legacy_unspecified"
+        ),
+        literature=_literature(payload.get("literature")),
+        provenance_file=None if provenance_file is None else provenance_file.strip(),
+        surface_offsets_m=_surface_offsets(payload.get("surface_offsets_m")),
     )
+
+
+def load_benchmark_provenance(
+    path: str | Path,
+    *,
+    case_path: str | Path,
+) -> Mapping[str, Any]:
+    """Load parameter provenance and verify that it is bound to ``case_path``."""
+
+    provenance_path = Path(path)
+    case_file = Path(case_path)
+    try:
+        payload = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("benchmark provenance must be valid UTF-8 JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("benchmark provenance root must be a mapping")
+    if payload.get("schema") != "atem3d.benchmark-parameter-provenance/v1":
+        raise ValueError("unsupported benchmark provenance schema")
+
+    case = load_benchmark_case(case_file)
+    if payload.get("case_id") != case.case_id:
+        raise ValueError("benchmark provenance case_id mismatch")
+    case_bytes = case_file.read_bytes().replace(b"\r\n", b"\n")
+    expected_hash = hashlib.sha256(case_bytes).hexdigest()
+    if payload.get("case_file_sha256") != expected_hash:
+        raise ValueError("benchmark provenance case-file hash mismatch")
+    if payload.get("status") != "parameter_contract_verified":
+        raise ValueError("benchmark provenance status is not verified")
+
+    fields = payload.get("fields")
+    if not isinstance(fields, Mapping) or not fields:
+        raise ValueError("benchmark provenance fields must be a non-empty mapping")
+    allowed_grades = {"A", "B", "C", "D"}
+    for name, record in fields.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("benchmark provenance field names must be non-empty")
+        if not isinstance(record, Mapping):
+            raise ValueError(f"benchmark provenance field {name!r} must be a mapping")
+        if record.get("evidence_grade") not in allowed_grades:
+            raise ValueError(
+                f"benchmark provenance field {name!r} has unsupported evidence grade"
+            )
+        source_url = record.get("source_url")
+        if not isinstance(source_url, str) or not source_url.startswith(
+            ("https://", "http://")
+        ):
+            raise ValueError(
+                f"benchmark provenance field {name!r} requires a source URL"
+            )
+        note = record.get("note")
+        if not isinstance(note, str) or not note.strip():
+            raise ValueError(
+                f"benchmark provenance field {name!r} requires a source note"
+            )
+    return _freeze(payload)

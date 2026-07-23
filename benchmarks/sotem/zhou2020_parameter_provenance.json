@@ -1,0 +1,69 @@
+{
+  "case_file_sha256": "647ad17335c99f2078d78c8aab22e2e5ca8c2cefb064b7bbed8e40ccd21057e6",
+  "case_id": "zhou2020_grounded_wire",
+  "fields": {
+    "cole_cole_convention": {
+      "evidence_grade": "B",
+      "note": "The companion disclosure defines Pelton complex resistivity and identifies rho0 as zero-frequency resistivity.",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "earth.layers": {
+      "evidence_grade": "B",
+      "note": "The companion disclosure gives rho1=100 ohm m, h1=500 m; rho2=10 ohm m, h2=20 m; rho3=200 ohm m.",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "polarization": {
+      "evidence_grade": "B",
+      "note": "The companion disclosure identifies the second layer as polarizable with m=0.1, tau=1 s, and c=0.3.",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "receiver.location_m": {
+      "evidence_grade": "C",
+      "note": "The disclosed observation point (500,1000) is translated by -500 m in x to the centered coordinate (0,1000).",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "response.Ex": {
+      "evidence_grade": "A",
+      "note": "The GEOPHYSICS article reports stronger IP distortion in the horizontal electric field and provides the signed response figure.",
+      "source_url": "https://doi.org/10.1190/geo2019-0322.1"
+    },
+    "response.Hz": {
+      "evidence_grade": "A",
+      "note": "The GEOPHYSICS article reports the vertical magnetic-field response and its weaker IP sensitivity.",
+      "source_url": "https://doi.org/10.1190/geo2019-0322.1"
+    },
+    "source.current_a": {
+      "evidence_grade": "B",
+      "note": "The companion disclosure specifies a 10 A transmitting current for the three-layer example.",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "source.end_m": {
+      "evidence_grade": "C",
+      "note": "The disclosed 1000 m source is translated to centered endpoints; the positive-x endpoint is (500,0,0).",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "source.start_m": {
+      "evidence_grade": "C",
+      "note": "The disclosed 1000 m source is translated to centered endpoints; the negative-x endpoint is (-500,0,0).",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "source.waveform": {
+      "evidence_grade": "B",
+      "note": "The disclosed grounded-wire transient response is evaluated after an idealized current shutoff; the benchmark fixes the shutoff at t=0.",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    },
+    "surface_offsets_m": {
+      "evidence_grade": "C",
+      "note": "These offsets are numerical sensitivity values, not literature geometry, and preserve the canonical surface position at zero.",
+      "source_url": "https://doi.org/10.1190/geo2019-0322.1"
+    },
+    "times": {
+      "evidence_grade": "C",
+      "note": "The 1e-4 to 3 s window is chosen to include the article's reported separation near 1e-2 s, reversal near 1e-1 s, and the tau=1 s tail.",
+      "source_url": "https://patents.justia.com/patent/12066587"
+    }
+  },
+  "parameter_source_statement": "Journal response figures plus same-author companion technical disclosure; derived coordinate translations and numerical sensitivity values are explicitly graded C.",
+  "schema": "atem3d.benchmark-parameter-provenance/v1",
+  "status": "parameter_contract_verified"
+}

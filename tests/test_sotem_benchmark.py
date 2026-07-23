@@ -5,7 +5,10 @@ import numpy as np
 import pytest
 import yaml
 
-from atem3d.sotem_benchmark import load_benchmark_case
+from atem3d.sotem_benchmark import (
+    load_benchmark_case,
+    load_benchmark_provenance,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +98,90 @@ def test_song_pair_changes_only_polarization():
         "tau_s": 1.0,
         "c": 0.3,
     }
+    assert case.validation_role == "qualitative_only"
+
+
+def test_zhou_case_matches_traceable_grounded_wire_design():
+    case = load_benchmark_case(ROOT / "benchmarks/sotem/zhou2020_grounded_wire.yaml")
+
+    assert case.case_id == "zhou2020_grounded_wire"
+    assert case.validation_role == "strict_primary"
+    assert case.coordinates == "z_down"
+    assert case.source_start_down == (-500.0, 0.0, 0.0)
+    assert case.source_end_down == (500.0, 0.0, 0.0)
+    assert case.receiver_down == (0.0, 1000.0, 0.0)
+    assert case.current_a == 10.0
+    assert case.earth == {
+        "layers": (
+            {"top_m": 0.0, "bottom_m": 500.0, "rho_ohm_m": 100.0},
+            {"top_m": 500.0, "bottom_m": 520.0, "rho_ohm_m": 10.0},
+            {"top_m": 520.0, "bottom_m": None, "rho_ohm_m": 200.0},
+        )
+    }
+    assert case.polarization == {
+        "top_m": 500.0,
+        "bottom_m": 520.0,
+        "rho0_ohm_m": 10.0,
+        "m": 0.1,
+        "tau_s": 1.0,
+        "c": 0.3,
+    }
+    assert case.components == ("Ex", "Ey", "Hz", "dBzdt")
+    assert case.observation_times.size == 101
+    assert case.observation_times[[0, -1]].tolist() == pytest.approx(
+        [1.0e-4, 3.0]
+    )
+    assert case.provenance_file == "zhou2020_parameter_provenance.json"
+    assert case.surface_offsets_m == (0.0, 0.05, 0.1, 0.2)
+    assert case.literature["doi"] == "10.1190/geo2019-0322.1"
+
+
+def test_zhou_parameter_provenance_is_bound_and_has_no_unknown_fields():
+    case_path = ROOT / "benchmarks/sotem/zhou2020_grounded_wire.yaml"
+    provenance = load_benchmark_provenance(
+        ROOT / "benchmarks/sotem/zhou2020_parameter_provenance.json",
+        case_path=case_path,
+    )
+
+    assert provenance["case_id"] == "zhou2020_grounded_wire"
+    assert provenance["status"] == "parameter_contract_verified"
+    required_fields = {
+        "source.start_m",
+        "source.end_m",
+        "source.current_a",
+        "source.waveform",
+        "receiver.location_m",
+        "earth.layers",
+        "polarization",
+        "cole_cole_convention",
+    }
+    assert required_fields <= set(provenance["fields"])
+    assert all(
+        record["evidence_grade"] in {"A", "B", "C", "D"}
+        for record in provenance["fields"].values()
+    )
+    assert all(
+        record["evidence_grade"] != "X"
+        for record in provenance["fields"].values()
+    )
+    assert all(record["source_url"] for record in provenance["fields"].values())
+
+
+def test_zhou_parameter_provenance_rejects_a_changed_case(tmp_path):
+    source_case = ROOT / "benchmarks/sotem/zhou2020_grounded_wire.yaml"
+    changed_case = tmp_path / source_case.name
+    changed_case.write_text(
+        source_case.read_text(encoding="utf-8").replace(
+            "current_a: 10.0", "current_a: 9.0"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="case-file hash mismatch"):
+        load_benchmark_provenance(
+            ROOT / "benchmarks/sotem/zhou2020_parameter_provenance.json",
+            case_path=changed_case,
+        )
 
 
 def test_loader_rejects_non_mapping_root(tmp_path):

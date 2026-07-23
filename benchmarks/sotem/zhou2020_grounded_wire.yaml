@@ -1,0 +1,37 @@
+case_id: zhou2020_grounded_wire
+validation_role: strict_primary
+coordinates: z_down
+literature:
+  title: Induced Polarization Effect on Grounded-Wire Transient Electromagnetic Data from Transverse Electric and Magnetic Fields
+  journal: GEOPHYSICS
+  doi: 10.1190/geo2019-0322.1
+  companion_disclosure: US Patent 12066587
+provenance_file: zhou2020_parameter_provenance.json
+source:
+  start_m: [-500.0, 0.0, 0.0]
+  end_m: [500.0, 0.0, 0.0]
+  current_a: 10.0
+  waveform: ideal_step_off
+receiver:
+  location_m: [0.0, 1000.0, 0.0]
+surface_offsets_m: [0.0, 0.05, 0.1, 0.2]
+air:
+  rho_ohm_m: 1.0e8
+earth:
+  layers:
+    - {top_m: 0.0, bottom_m: 500.0, rho_ohm_m: 100.0}
+    - {top_m: 500.0, bottom_m: 520.0, rho_ohm_m: 10.0}
+    - {top_m: 520.0, bottom_m: null, rho_ohm_m: 200.0}
+polarization:
+  top_m: 500.0
+  bottom_m: 520.0
+  rho0_ohm_m: 10.0
+  m: 0.1
+  tau_s: 1.0
+  c: 0.3
+times:
+  kind: logspace
+  start_s: 1.0e-4
+  stop_s: 3.0
+  count: 101
+components: [Ex, Ey, Hz, dBzdt]
