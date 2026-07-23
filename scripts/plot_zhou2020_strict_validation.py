@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import platform
 import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
 from typing import Any, Callable
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -62,6 +67,41 @@ AUDIT_BOUND_INPUTS = {
         "fenicsx/ip/S1T1B1/predictions.csv"
     ),
 }
+DEBYE_BOUND_INPUTS = {
+    "debye_noip_verification_data.npz": Path(
+        "noip-S0T0B0/verification_data.npz"
+    ),
+    "debye_ip_n4_verification_data.npz": Path(
+        "ip-S0T0B0-n4/verification_data.npz"
+    ),
+    "debye_ip_n16_verification_data.npz": Path(
+        "ip-S0T0B0-n16/verification_data.npz"
+    ),
+}
+CONSUMED_INPUT_SCHEMAS = {
+    "case.yaml": "atem3d.zhou2020.case-yaml/v1",
+    "run_manifest.json": "atem3d.zhou2020.validation-run/v1",
+    "reference_manifest.json": "atem3d.zhou2020.reference-manifest/v1",
+    "empymod_metadata.json": "atem3d.zhou2020.empymod-metadata/v2",
+    "strict_comparison.json": "atem3d.zhou2020.strict-comparison/v1",
+    "empymod_noip.csv": "atem3d.zhou2020.reference-csv/v1",
+    "empymod_ip.csv": "atem3d.zhou2020.reference-csv/v1",
+    "fenicsx_noip_predictions.csv": "atem3d.zhou2020.predictions-csv/v1",
+    "fenicsx_ip_predictions.csv": "atem3d.zhou2020.predictions-csv/v1",
+    "debye_noip_verification_data.npz": (
+        "atem3d.zhou2020.verification-data-npz/v1"
+    ),
+    "debye_ip_n4_verification_data.npz": (
+        "atem3d.zhou2020.verification-data-npz/v1"
+    ),
+    "debye_ip_n16_verification_data.npz": (
+        "atem3d.zhou2020.verification-data-npz/v1"
+    ),
+}
+PLOT_SCRIPT_SOURCE_RELATIVE = Path(
+    "scripts/plot_zhou2020_strict_validation.py"
+)
+PLOT_PRODUCER_SCHEMA = "atem3d.zhou2020.plot-producer/v1"
 COMPONENTS = (
     ("Ex", "Ex (V/m)"),
     ("Hz", "Hz (A/m)"),
@@ -112,8 +152,10 @@ class PublicationDebrisError(RuntimeError):
         )
 
 
-def _read_csv(path: Path) -> dict[str, np.ndarray]:
-    data = np.genfromtxt(path, delimiter=",", names=True)
+def _read_csv(source: Path | bytes) -> dict[str, np.ndarray]:
+    if isinstance(source, bytes):
+        source = io.StringIO(source.decode("utf-8"))
+    data = np.genfromtxt(source, delimiter=",", names=True)
     return {name: np.asarray(data[name], dtype=float) for name in data.dtype.names}
 
 
@@ -407,6 +449,20 @@ def _validate_bundle_metadata(metadata: Any) -> None:
         or reference_audit["qwe"].get("converged") != metadata["qwe_converged"]
     ):
         raise ValueError("figure bundle audit metadata is inconsistent")
+    consumed_inputs = metadata.get("consumed_inputs")
+    _validate_consumed_input_identity(consumed_inputs)
+    for name, digest in input_hashes.items():
+        if (
+            name not in consumed_inputs
+            or consumed_inputs[name]["sha256"] != digest
+        ):
+            raise ValueError(
+                "figure bundle audit/consumed input metadata is inconsistent"
+            )
+    _validate_plot_producer_identity(
+        metadata.get("producer"),
+        reference_audit,
+    )
 
 
 def _is_sha256(value: Any) -> bool:
@@ -426,6 +482,215 @@ def _canonical_identity_digest(identity: dict[str, Any]) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _path_relative_to_root(path: Path) -> str:
+    resolved = Path(path).resolve()
+    try:
+        relative = os.path.relpath(resolved, ROOT.resolve())
+    except ValueError:
+        return resolved.as_posix()
+    return Path(relative).as_posix()
+
+
+def _validate_consumed_input_identity(records: Any) -> None:
+    expected_record_keys = {
+        "path_relative_to_root",
+        "bytes",
+        "sha256",
+        "schema",
+        "run_identity",
+        "role",
+    }
+    if not isinstance(records, dict) or not records:
+        raise ValueError("figure bundle consumed input identity is missing")
+    for name, record in records.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(record, dict)
+            or set(record) != expected_record_keys
+            or not isinstance(record["path_relative_to_root"], str)
+            or not record["path_relative_to_root"]
+            or not isinstance(record["bytes"], int)
+            or isinstance(record["bytes"], bool)
+            or record["bytes"] < 0
+            or not _is_sha256(record["sha256"])
+            or not isinstance(record["schema"], str)
+            or not record["schema"]
+            or not isinstance(record["run_identity"], str)
+            or not record["run_identity"]
+            or not isinstance(record["role"], str)
+            or not record["role"]
+        ):
+            raise ValueError("figure bundle consumed input identity is invalid")
+
+
+def _plot_producer_source_paths(
+    reference_audit: dict[str, Any],
+) -> dict[str, Path]:
+    _validate_reference_audit_identity(reference_audit)
+    relative_paths = {
+        PLOT_SCRIPT_SOURCE_RELATIVE.as_posix(),
+        *reference_audit["code_sha256"],
+    }
+    paths = {}
+    root = ROOT.resolve()
+    for name in sorted(relative_paths):
+        relative = Path(name)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or name != relative.as_posix()
+        ):
+            raise ValueError(f"invalid plot producer source path: {name}")
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(
+                f"plot producer source leaves repository: {name}"
+            ) from exc
+        paths[name] = path
+    return paths
+
+
+def _git_identity() -> dict[str, Any]:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if (
+        len(head) != 40
+        or any(character not in "0123456789abcdefABCDEF" for character in head)
+    ):
+        raise ValueError("git HEAD identity is invalid")
+    return {"head": head.lower(), "dirty": bool(status.strip())}
+
+
+def _runtime_identity() -> dict[str, str]:
+    return {
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "matplotlib": matplotlib.__version__,
+        "pillow": importlib.metadata.version("Pillow"),
+    }
+
+
+def _plot_producer_identity(
+    reference_audit: dict[str, Any],
+) -> dict[str, Any]:
+    sources = {}
+    for name, path in _plot_producer_source_paths(reference_audit).items():
+        raw = Path(path).read_bytes()
+        sources[name] = {
+            "path_relative_to_root": _path_relative_to_root(path),
+            "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+    identity: dict[str, Any] = {
+        "schema": PLOT_PRODUCER_SCHEMA,
+        "sources": sources,
+        "git": _git_identity(),
+        "runtime": _runtime_identity(),
+    }
+    identity["canonical_sha256"] = _canonical_identity_digest(identity)
+    return identity
+
+
+def _validate_plot_producer_identity(
+    identity: Any,
+    reference_audit: dict[str, Any],
+) -> None:
+    _validate_reference_audit_identity(reference_audit)
+    expected_sources = {
+        PLOT_SCRIPT_SOURCE_RELATIVE.as_posix(),
+        *reference_audit["code_sha256"],
+    }
+    if (
+        not isinstance(identity, dict)
+        or set(identity)
+        != {
+            "schema",
+            "sources",
+            "git",
+            "runtime",
+            "canonical_sha256",
+        }
+        or identity["schema"] != PLOT_PRODUCER_SCHEMA
+    ):
+        raise ValueError("plot producer identity is invalid")
+    sources = identity["sources"]
+    if (
+        not isinstance(sources, dict)
+        or set(sources) != expected_sources
+    ):
+        raise ValueError("plot producer source identity is invalid")
+    for role, record in sources.items():
+        if (
+            not isinstance(role, str)
+            or not isinstance(record, dict)
+            or set(record)
+            != {"path_relative_to_root", "bytes", "sha256"}
+            or not isinstance(record["path_relative_to_root"], str)
+            or not record["path_relative_to_root"]
+            or not isinstance(record["bytes"], int)
+            or isinstance(record["bytes"], bool)
+            or record["bytes"] < 0
+            or not _is_sha256(record["sha256"])
+        ):
+            raise ValueError("plot producer source identity is invalid")
+    git = identity["git"]
+    if (
+        not isinstance(git, dict)
+        or set(git) != {"head", "dirty"}
+        or not isinstance(git["head"], str)
+        or len(git["head"]) != 40
+        or any(
+            character not in "0123456789abcdefABCDEF"
+            for character in git["head"]
+        )
+        or not isinstance(git["dirty"], bool)
+    ):
+        raise ValueError("plot producer git identity is invalid")
+    runtime = identity["runtime"]
+    if (
+        not isinstance(runtime, dict)
+        or set(runtime) != {"python", "numpy", "matplotlib", "pillow"}
+        or any(
+            not isinstance(value, str) or not value
+            for value in runtime.values()
+        )
+    ):
+        raise ValueError("plot producer runtime identity is invalid")
+    core = {
+        key: value
+        for key, value in identity.items()
+        if key != "canonical_sha256"
+    }
+    if (
+        not _is_sha256(identity["canonical_sha256"])
+        or _canonical_identity_digest(core) != identity["canonical_sha256"]
+    ):
+        raise ValueError("plot producer canonical identity mismatch")
+
+
+def _validated_plot_producer_identity(
+    reference_audit: dict[str, Any],
+) -> dict[str, Any]:
+    identity = _plot_producer_identity(reference_audit)
+    _validate_plot_producer_identity(identity, reference_audit)
+    return identity
 
 
 def _validate_hash_mapping(value: Any, label: str) -> None:
@@ -562,9 +827,31 @@ def _validated_reference_audit_identity(path: Path) -> dict[str, Any]:
     return _reference_audit_identity(path, load_reference_audit(Path(path)))
 
 
+def _validate_publication_context(
+    metadata: dict[str, Any],
+    *,
+    consumed_input_paths: dict[str, Path] | None,
+    verify_producer: bool,
+) -> None:
+    if consumed_input_paths is not None:
+        _validate_consumed_input_paths(
+            metadata["consumed_inputs"],
+            consumed_input_paths,
+        )
+    if verify_producer:
+        current_producer = _validated_plot_producer_identity(
+            metadata["reference_audit"]
+        )
+        if metadata["producer"] != current_producer:
+            raise ValueError("plot producer identity mismatch")
+
+
 def load_validated_bundle(
     bundle: Path,
     reference_audit: Path | None = None,
+    *,
+    consumed_input_paths: dict[str, Path] | None = None,
+    verify_producer: bool = False,
 ) -> dict[str, Any]:
     """Load a complete generation only after exact-set and hash validation."""
 
@@ -584,6 +871,11 @@ def load_validated_bundle(
     ):
         raise ValueError("figure bundle completion metadata is invalid")
     _validate_bundle_metadata(manifest.get("metadata"))
+    _validate_publication_context(
+        manifest["metadata"],
+        consumed_input_paths=consumed_input_paths,
+        verify_producer=verify_producer,
+    )
     if reference_audit is not None:
         current_identity = _validated_reference_audit_identity(reference_audit)
         if manifest["metadata"]["reference_audit"] != current_identity:
@@ -637,6 +929,9 @@ def _replace_bundle_directory(
     staging: Path,
     target: Path,
     reference_audit: Path | None = None,
+    *,
+    consumed_input_paths: dict[str, Path] | None = None,
+    verify_producer: bool = False,
 ) -> None:
     """Replace one complete directory generation and roll back on failure."""
 
@@ -663,7 +958,12 @@ def _replace_bundle_directory(
         os.replace(staging, target)
         new_published = True
         _fsync_directory(target.parent)
-        load_validated_bundle(target, reference_audit)
+        load_validated_bundle(
+            target,
+            reference_audit,
+            consumed_input_paths=consumed_input_paths,
+            verify_producer=verify_producer,
+        )
     except BaseException:
         rollback_failure: BaseException | None = None
         try:
@@ -699,6 +999,9 @@ def _publish_bundle(
     build_artifacts: Callable[[Path], None],
     metadata: dict[str, Any],
     reference_audit: Path | None = None,
+    *,
+    consumed_input_paths: dict[str, Path] | None = None,
+    verify_producer: bool = False,
 ) -> dict[str, Any]:
     """Build, finalize, validate, and expose one indivisible figure generation."""
 
@@ -710,6 +1013,12 @@ def _publish_bundle(
     failure: tuple[type[BaseException], BaseException, Any] | None = None
     cleanup_failure: BaseException | None = None
     try:
+        _validate_bundle_metadata(metadata)
+        _validate_publication_context(
+            metadata,
+            consumed_input_paths=consumed_input_paths,
+            verify_producer=verify_producer,
+        )
         backup_debris = _bundle_backup_debris(target)
         if backup_debris:
             raise PublicationDebrisError(backup_debris)
@@ -721,6 +1030,11 @@ def _publish_bundle(
         )
         _fsync_directory(target.parent)
         build_artifacts(staging)
+        _validate_publication_context(
+            metadata,
+            consumed_input_paths=consumed_input_paths,
+            verify_producer=verify_producer,
+        )
         for name in BUNDLE_ARTIFACT_NAMES:
             artifact = staging / name
             if artifact.is_file():
@@ -729,9 +1043,30 @@ def _publish_bundle(
         _write_completion_manifest(staging, metadata)
         _fsync_file(staging / COMPLETION_MANIFEST_NAME)
         _fsync_directory(staging)
-        load_validated_bundle(staging, reference_audit)
-        _replace_bundle_directory(staging, target, reference_audit)
-        result = load_validated_bundle(target, reference_audit)
+        load_validated_bundle(
+            staging,
+            reference_audit,
+            consumed_input_paths=consumed_input_paths,
+            verify_producer=verify_producer,
+        )
+        _validate_publication_context(
+            metadata,
+            consumed_input_paths=consumed_input_paths,
+            verify_producer=verify_producer,
+        )
+        _replace_bundle_directory(
+            staging,
+            target,
+            reference_audit,
+            consumed_input_paths=consumed_input_paths,
+            verify_producer=verify_producer,
+        )
+        result = load_validated_bundle(
+            target,
+            reference_audit,
+            consumed_input_paths=consumed_input_paths,
+            verify_producer=verify_producer,
+        )
     except BaseException:
         failure = sys.exc_info()
     try:
@@ -886,6 +1221,20 @@ def _audit_bound_inputs(run: Path) -> dict[str, Path]:
     }
 
 
+def _publication_input_paths(
+    run: Path,
+    compute_root: Path,
+) -> dict[str, Path]:
+    paths = _audit_bound_inputs(run)
+    paths.update(
+        {
+            name: Path(compute_root) / relative_path
+            for name, relative_path in DEBYE_BOUND_INPUTS.items()
+        }
+    )
+    return paths
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -894,10 +1243,85 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _input_snapshot(
+    *,
+    name: str,
+    path: Path,
+    run_identity: str,
+    role: str,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"consumed input is missing: {path}")
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise ValueError(f"audited run input hash mismatch: {name}")
+    schema = CONSUMED_INPUT_SCHEMAS[name]
+    if path.suffix.lower() == ".json":
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema") != schema:
+            raise ValueError(f"consumed input schema mismatch: {name}")
+    return {
+        "path": path,
+        "raw": raw,
+        "identity": {
+            "path_relative_to_root": _path_relative_to_root(path),
+            "bytes": len(raw),
+            "sha256": digest,
+            "schema": schema,
+            "run_identity": run_identity,
+            "role": role,
+        },
+    }
+
+
+def _consumed_input_metadata(
+    snapshots: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    metadata = {
+        name: json.loads(
+            json.dumps(
+                snapshot["identity"],
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+        )
+        for name, snapshot in snapshots.items()
+    }
+    _validate_consumed_input_identity(metadata)
+    return metadata
+
+
+def _validate_consumed_input_paths(
+    records: dict[str, dict[str, Any]],
+    paths: dict[str, Path],
+) -> None:
+    _validate_consumed_input_identity(records)
+    if set(records) != set(paths):
+        raise ValueError("consumed input identity mismatch: input set")
+    for name, path in paths.items():
+        path = Path(path)
+        record = records[name]
+        if (
+            not path.is_file()
+            or _path_relative_to_root(path)
+            != record["path_relative_to_root"]
+        ):
+            raise ValueError(f"consumed input identity mismatch: {name}")
+        raw = path.read_bytes()
+        if (
+            len(raw) != record["bytes"]
+            or hashlib.sha256(raw).hexdigest() != record["sha256"]
+        ):
+            raise ValueError(f"consumed input identity mismatch: {name}")
+
+
 def _cross_bind_run_to_audit(
     run: Path,
     validated_audit: dict[str, Any],
-) -> None:
+) -> dict[str, dict[str, Any]]:
     """Require the plotted run to be byte-identical to the audited run inputs."""
 
     manifest_hashes = validated_audit.get("manifest", {}).get("input_sha256")
@@ -917,11 +1341,38 @@ def _cross_bind_run_to_audit(
         != "S1T1B1"
     ):
         raise ValueError("audit spatial-case identity is not S1T1B1")
-    for name, path in paths.items():
-        if not path.is_file():
-            raise FileNotFoundError(f"audited run input is missing: {path}")
-        if _sha256_file(path) != manifest_hashes[name]:
-            raise ValueError(f"audited run input hash mismatch: {name}")
+    return {
+        name: _input_snapshot(
+            name=name,
+            path=path,
+            run_identity=Path(run).name,
+            role=f"formal_validation:{name}",
+            expected_sha256=manifest_hashes[name],
+        )
+        for name, path in paths.items()
+    }
+
+
+def _snapshot_publication_inputs(
+    run: Path,
+    compute_root: Path,
+    validated_audit: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    snapshots = _cross_bind_run_to_audit(run, validated_audit)
+    if not isinstance(snapshots, dict):
+        raise ValueError("audited input snapshot is unavailable")
+    for name, relative_path in DEBYE_BOUND_INPUTS.items():
+        snapshots[name] = _input_snapshot(
+            name=name,
+            path=Path(compute_root) / relative_path,
+            run_identity=Path(run).name,
+            role=f"debye_order_diagnostic:{name}",
+        )
+    expected = set(AUDIT_BOUND_INPUTS) | set(DEBYE_BOUND_INPUTS)
+    if set(snapshots) != expected:
+        raise ValueError("publication input snapshot set is incomplete")
+    _consumed_input_metadata(snapshots)
+    return snapshots
 
 
 def plot_model(stem: Path | None) -> plt.Figure | None:
@@ -1301,8 +1752,15 @@ def _relative_l2(numerator: np.ndarray, denominator: np.ndarray) -> float:
     )
 
 
-def _load_verification(path: Path) -> tuple[np.ndarray, list[str], np.ndarray]:
-    with np.load(path, allow_pickle=False) as archive:
+def _load_verification(
+    source: Path | bytes,
+) -> tuple[np.ndarray, list[str], np.ndarray]:
+    archive_source: Path | io.BytesIO
+    if isinstance(source, bytes):
+        archive_source = io.BytesIO(source)
+    else:
+        archive_source = Path(source)
+    with np.load(archive_source, allow_pickle=False) as archive:
         if not {"times", "components", "fem"} <= set(archive.files):
             raise ValueError("Debye NPZ member set is incomplete")
         times = _require_positive_times(
@@ -1330,9 +1788,9 @@ def _load_verification(path: Path) -> tuple[np.ndarray, list[str], np.ndarray]:
 
 
 def plot_debye_order_diagnostic(
-    noip_path: Path,
-    ip4_path: Path,
-    ip16_path: Path,
+    noip_path: Path | bytes,
+    ip4_path: Path | bytes,
+    ip16_path: Path | bytes,
     stem: Path | None,
 ) -> dict[str, Any] | tuple[dict[str, Any], plt.Figure]:
     """Compare four versus sixteen Debye terms as an internal sensitivity test."""
@@ -1426,7 +1884,11 @@ def main(argv: list[str] | None = None) -> None:
     _set_style()
     run = args.run
     validated_audit = load_reference_audit(args.reference_audit)
-    _cross_bind_run_to_audit(run, validated_audit)
+    snapshots = _snapshot_publication_inputs(
+        run,
+        args.compute_root,
+        validated_audit,
+    )
     audit = validated_audit["audit"]
     audit_arrays = validated_audit["arrays"]
     reference_audit_identity = _reference_audit_identity(
@@ -1434,15 +1896,14 @@ def main(argv: list[str] | None = None) -> None:
         validated_audit,
     )
 
-    formal = run / "fenicsx"
-    noip_fem = _read_csv(formal / "noip" / "S1T1B1" / "predictions.csv")
-    ip_fem = _read_csv(formal / "ip" / "S1T1B1" / "predictions.csv")
-    noip_ref = _read_csv(run / "reference" / "empymod_noip.csv")
-    ip_ref = _read_csv(run / "reference" / "empymod_ip.csv")
+    noip_fem = _read_csv(
+        snapshots["fenicsx_noip_predictions.csv"]["raw"]
+    )
+    ip_fem = _read_csv(snapshots["fenicsx_ip_predictions.csv"]["raw"])
+    noip_ref = _read_csv(snapshots["empymod_noip.csv"]["raw"])
+    ip_ref = _read_csv(snapshots["empymod_ip.csv"]["raw"])
     metrics = json.loads(
-        (run / "comparisons" / "S1T1B1" / "strict_comparison.json").read_text(
-            encoding="utf-8"
-        )
+        snapshots["strict_comparison.json"]["raw"].decode("utf-8")
     )
 
     def build_artifacts(staging: Path) -> None:
@@ -1462,9 +1923,9 @@ def main(argv: list[str] | None = None) -> None:
         plot_gate_summary(metrics, audit, staging / FIGURE_STEMS[3])
 
         diagnostic = plot_debye_order_diagnostic(
-            args.compute_root / "noip-S0T0B0" / "verification_data.npz",
-            args.compute_root / "ip-S0T0B0-n4" / "verification_data.npz",
-            args.compute_root / "ip-S0T0B0-n16" / "verification_data.npz",
+            snapshots["debye_noip_verification_data.npz"]["raw"],
+            snapshots["debye_ip_n4_verification_data.npz"]["raw"],
+            snapshots["debye_ip_n16_verification_data.npz"]["raw"],
             staging / FIGURE_STEMS[4],
         )
         assert isinstance(diagnostic, dict)
@@ -1477,12 +1938,21 @@ def main(argv: list[str] | None = None) -> None:
         "reference_audit_status": audit["status"],
         "qwe_converged": bool(audit["qwe"]["converged"]),
         "reference_audit": reference_audit_identity,
+        "consumed_inputs": _consumed_input_metadata(snapshots),
+        "producer": _validated_plot_producer_identity(
+            reference_audit_identity
+        ),
     }
     _publish_bundle(
         args.output / PUBLISHED_BUNDLE_NAME,
         build_artifacts,
         metadata,
         reference_audit=args.reference_audit,
+        consumed_input_paths=_publication_input_paths(
+            run,
+            args.compute_root,
+        ),
+        verify_producer=True,
     )
 
 

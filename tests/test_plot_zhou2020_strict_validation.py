@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 
 import matplotlib
 
@@ -526,7 +527,18 @@ def test_cross_binding_rejects_tampered_formal_run(tmp_path):
     paths = plotter._audit_bound_inputs(run)
     for name, path in paths.items():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"input:{name}".encode())
+        if path.suffix == ".json":
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": plotter.CONSUMED_INPUT_SCHEMAS[name],
+                        "name": name,
+                    }
+                ),
+                encoding="utf-8",
+            )
+        else:
+            path.write_bytes(f"input:{name}".encode())
     input_hashes = {
         name: hashlib.sha256(path.read_bytes()).hexdigest()
         for name, path in paths.items()
@@ -679,6 +691,39 @@ def _bundle_metadata() -> dict:
         allow_nan=False,
     ).encode("utf-8")
     audit_identity["canonical_sha256"] = hashlib.sha256(canonical).hexdigest()
+    producer = {
+        "schema": "atem3d.zhou2020.plot-producer/v1",
+        "sources": {
+            name: {
+                "path_relative_to_root": name,
+                "bytes": index,
+                "sha256": f"{index}" * 64,
+            }
+            for index, name in enumerate(
+                (
+                    "scripts/plot_zhou2020_strict_validation.py",
+                    "audit.py",
+                ),
+                start=1,
+            )
+        },
+        "git": {"head": "a" * 40, "dirty": False},
+        "runtime": {
+            "python": "test",
+            "numpy": "test",
+            "matplotlib": "test",
+            "pillow": "test",
+        },
+    }
+    producer_canonical = json.dumps(
+        producer,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    producer["canonical_sha256"] = hashlib.sha256(
+        producer_canonical
+    ).hexdigest()
     return {
         "run_id": "test-run",
         "spatial_case": "S1T1B1",
@@ -686,6 +731,17 @@ def _bundle_metadata() -> dict:
         "reference_audit_status": "inconclusive",
         "qwe_converged": False,
         "reference_audit": audit_identity,
+        "consumed_inputs": {
+            "case.yaml": {
+                "path_relative_to_root": "test/case.yaml",
+                "bytes": 1,
+                "sha256": "0" * 64,
+                "schema": "atem3d.zhou2020.case-yaml/v1",
+                "run_identity": "test-run",
+                "role": "formal_validation:case.yaml",
+            }
+        },
+        "producer": producer,
     }
 
 
@@ -1263,12 +1319,48 @@ def test_main_real_run_publishes_self_validating_bundle(tmp_path):
     )
 
     bundle = tmp_path / plotter.PUBLISHED_BUNDLE_NAME
-    validated = plotter.load_validated_bundle(bundle, HARDENED_AUDIT)
+    input_paths = plotter._publication_input_paths(FORMAL_RUN, compute_root)
+    validated = plotter.load_validated_bundle(
+        bundle,
+        HARDENED_AUDIT,
+        consumed_input_paths=input_paths,
+        verify_producer=True,
+    )
     assert validated["manifest"]["metadata"]["run_id"] == FORMAL_RUN.name
     assert (
         validated["manifest"]["metadata"]["reference_audit"]
         == plotter._validated_reference_audit_identity(HARDENED_AUDIT)
     )
+    consumed_inputs = validated["manifest"]["metadata"]["consumed_inputs"]
+    assert set(consumed_inputs) == (
+        set(plotter.AUDIT_BOUND_INPUTS)
+        | set(plotter.DEBYE_BOUND_INPUTS)
+    )
+    assert len(consumed_inputs) == 12
+    for name, path in input_paths.items():
+        record = consumed_inputs[name]
+        assert record["path_relative_to_root"] == (
+            plotter._path_relative_to_root(path)
+        )
+        assert record["bytes"] == path.stat().st_size
+        assert record["sha256"] == plotter._sha256_file(path)
+        assert record["schema"] == plotter.CONSUMED_INPUT_SCHEMAS[name]
+        assert record["run_identity"] == FORMAL_RUN.name
+    assert (
+        validated["manifest"]["metadata"]["producer"]
+        == plotter._validated_plot_producer_identity(
+            validated["manifest"]["metadata"]["reference_audit"]
+        )
+    )
+    producer_sources = validated["manifest"]["metadata"]["producer"][
+        "sources"
+    ]
+    assert set(producer_sources) == {
+        plotter.PLOT_SCRIPT_SOURCE_RELATIVE.as_posix(),
+        *validated["manifest"]["metadata"]["reference_audit"][
+            "code_sha256"
+        ],
+    }
     diagnostic = json.loads(
         (bundle / plotter.DEBYE_JSON_NAME).read_text(encoding="utf-8")
     )
@@ -1311,6 +1403,20 @@ def test_loader_rejects_same_inputs_but_different_audit_generation(
     metadata = _bundle_metadata()
     metadata["input_sha256"] = dict(audit_identity["input_sha256"])
     metadata["reference_audit"] = audit_identity
+    metadata["producer"] = plotter._validated_plot_producer_identity(
+        audit_identity
+    )
+    metadata["consumed_inputs"] = {
+        name: {
+            "path_relative_to_root": f"test/{name}",
+            "bytes": 1,
+            "sha256": digest,
+            "schema": plotter.CONSUMED_INPUT_SCHEMAS[name],
+            "run_identity": "test-run",
+            "role": f"formal_validation:{name}",
+        }
+        for name, digest in audit_identity["input_sha256"].items()
+    }
     plotter._publish_bundle(
         target,
         lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
@@ -1344,3 +1450,339 @@ def test_loader_rejects_same_inputs_but_different_audit_generation(
         target / plotter.COMPLETION_MANIFEST_NAME
     ).read_bytes() == stored_manifest
     plotter.load_validated_bundle(target)
+
+
+def _copy_consumed_inputs(plotter, tmp_path: Path) -> tuple[Path, Path]:
+    run = tmp_path / "run"
+    for relative_path in plotter.AUDIT_BOUND_INPUTS.values():
+        source = FORMAL_RUN / relative_path
+        target = run / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+    source_compute = (
+        ROOT
+        / "generated/validation/zhou2020_grounded_wire/compute"
+    )
+    compute = tmp_path / "compute"
+    for relative_path in plotter.DEBYE_BOUND_INPUTS.values():
+        source = source_compute / relative_path
+        target = compute / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    return run, compute
+
+
+def _publication_metadata(plotter, run: Path, compute: Path):
+    validated_audit = plotter.load_reference_audit(HARDENED_AUDIT)
+    snapshots = plotter._snapshot_publication_inputs(
+        run,
+        compute,
+        validated_audit,
+    )
+    audit = validated_audit["audit"]
+    metadata = {
+        "run_id": run.name,
+        "spatial_case": "S1T1B1",
+        "input_sha256": validated_audit["manifest"]["input_sha256"],
+        "reference_audit_status": audit["status"],
+        "qwe_converged": bool(audit["qwe"]["converged"]),
+        "reference_audit": plotter._reference_audit_identity(
+            HARDENED_AUDIT,
+            validated_audit,
+        ),
+        "consumed_inputs": plotter._consumed_input_metadata(snapshots),
+        "producer": plotter._validated_plot_producer_identity(
+            plotter._reference_audit_identity(
+                HARDENED_AUDIT,
+                validated_audit,
+            )
+        ),
+    }
+    return metadata, plotter._publication_input_paths(run, compute)
+
+
+def test_publication_snapshot_binds_all_twelve_consumed_inputs(tmp_path):
+    plotter = _load_plotter()
+    run, compute = _copy_consumed_inputs(plotter, tmp_path)
+    validated_audit = plotter.load_reference_audit(HARDENED_AUDIT)
+
+    snapshots = plotter._snapshot_publication_inputs(
+        run,
+        compute,
+        validated_audit,
+    )
+    metadata = plotter._consumed_input_metadata(snapshots)
+
+    assert set(metadata) == (
+        set(plotter.AUDIT_BOUND_INPUTS)
+        | set(plotter.DEBYE_BOUND_INPUTS)
+    )
+    assert len(metadata) == 12
+    for name, record in metadata.items():
+        path = plotter._publication_input_paths(run, compute)[name]
+        assert record["path_relative_to_root"]
+        assert record["bytes"] == path.stat().st_size
+        assert record["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert record["schema"]
+        assert record["run_identity"] == run.name
+        assert record["role"]
+
+
+@pytest.mark.parametrize("mode", ["tamper", "path_substitution"])
+def test_loader_rejects_debye_input_identity_change(tmp_path, mode):
+    plotter = _load_plotter()
+    run, compute = _copy_consumed_inputs(plotter, tmp_path)
+    metadata, input_paths = _publication_metadata(
+        plotter,
+        run,
+        compute,
+    )
+    target = tmp_path / "publication_bundle"
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        metadata,
+        reference_audit=HARDENED_AUDIT,
+        consumed_input_paths=input_paths,
+        verify_producer=True,
+    )
+
+    name = "debye_ip_n16_verification_data.npz"
+    if mode == "tamper":
+        input_paths[name].write_bytes(input_paths[name].read_bytes() + b"x")
+    else:
+        substitute = tmp_path / "substitute" / "verification_data.npz"
+        substitute.parent.mkdir()
+        shutil.copy2(input_paths[name], substitute)
+        input_paths = dict(input_paths)
+        input_paths[name] = substitute
+
+    with pytest.raises(ValueError, match="consumed input identity mismatch"):
+        plotter.load_validated_bundle(
+            target,
+            HARDENED_AUDIT,
+            consumed_input_paths=input_paths,
+            verify_producer=True,
+        )
+    assert (target / plotter.COMPLETION_MANIFEST_NAME).is_file()
+    _assert_no_transaction_debris(target)
+
+
+def _install_fake_producer_sources(plotter, tmp_path: Path, monkeypatch):
+    sources = {}
+    for name in (
+        plotter.PLOT_SCRIPT_SOURCE_RELATIVE.as_posix(),
+        "audit.py",
+    ):
+        path = tmp_path / "producer" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {name}\n", encoding="utf-8")
+        sources[name] = path
+    monkeypatch.setattr(
+        plotter,
+        "_plot_producer_source_paths",
+        lambda _reference_audit: sources,
+    )
+    monkeypatch.setattr(
+        plotter,
+        "_git_identity",
+        lambda: {"head": "1" * 40, "dirty": False},
+    )
+    return sources
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["scripts/plot_zhou2020_strict_validation.py", "audit.py"],
+)
+def test_loader_rejects_plot_producer_source_tamper(
+    tmp_path,
+    monkeypatch,
+    role,
+):
+    plotter = _load_plotter()
+    sources = _install_fake_producer_sources(plotter, tmp_path, monkeypatch)
+    metadata = _bundle_metadata()
+    metadata["producer"] = plotter._validated_plot_producer_identity(
+        metadata["reference_audit"]
+    )
+    target = tmp_path / "publication_bundle"
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        metadata,
+        verify_producer=True,
+    )
+
+    sources[role].write_text("# changed producer\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="plot producer identity mismatch"):
+        plotter.load_validated_bundle(target, verify_producer=True)
+    _assert_no_transaction_debris(target)
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["scripts/plot_zhou2020_strict_validation.py", "audit.py"],
+)
+def test_plot_producer_replacement_during_publish_preserves_old_bundle(
+    tmp_path,
+    monkeypatch,
+    role,
+):
+    plotter = _load_plotter()
+    sources = _install_fake_producer_sources(plotter, tmp_path, monkeypatch)
+    metadata = _bundle_metadata()
+    metadata["producer"] = plotter._validated_plot_producer_identity(
+        metadata["reference_audit"]
+    )
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    old = target / "old-generation.txt"
+    old.write_text("old", encoding="utf-8")
+
+    def build_then_replace(staging):
+        _write_minimal_bundle_artifacts(plotter, staging)
+        sources[role].write_text("# replaced during publish\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="plot producer identity mismatch"):
+        plotter._publish_bundle(
+            target,
+            build_then_replace,
+            metadata,
+            verify_producer=True,
+        )
+
+    assert old.read_text(encoding="utf-8") == "old"
+    assert list(target.iterdir()) == [old]
+    _assert_no_transaction_debris(target)
+
+
+def test_loader_rejects_same_inputs_but_different_plot_producer(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    _install_fake_producer_sources(plotter, tmp_path, monkeypatch)
+    metadata = _bundle_metadata()
+    metadata["producer"] = plotter._validated_plot_producer_identity(
+        metadata["reference_audit"]
+    )
+    target = tmp_path / "publication_bundle"
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        metadata,
+        verify_producer=True,
+    )
+    original_runtime = plotter._runtime_identity()
+    different_runtime = dict(original_runtime)
+    different_runtime["numpy"] = f"{original_runtime['numpy']}-different"
+    monkeypatch.setattr(
+        plotter,
+        "_runtime_identity",
+        lambda: different_runtime,
+    )
+
+    with pytest.raises(ValueError, match="plot producer identity mismatch"):
+        plotter.load_validated_bundle(target, verify_producer=True)
+    _assert_no_transaction_debris(target)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["fenicsx_noip_predictions.csv", "strict_comparison.json"],
+)
+def test_formal_input_replacement_after_cross_bind_fails_closed(
+    tmp_path,
+    monkeypatch,
+    name,
+):
+    plotter = _load_plotter()
+    run, compute = _copy_consumed_inputs(plotter, tmp_path)
+    output = tmp_path / "output"
+    target = output / plotter.PUBLISHED_BUNDLE_NAME
+    target.mkdir(parents=True)
+    old = target / "old-generation.txt"
+    old.write_text("old", encoding="utf-8")
+    original = plotter._cross_bind_run_to_audit
+
+    def replace_after_cross_bind(*args, **kwargs):
+        snapshots = original(*args, **kwargs)
+        victim = plotter._publication_input_paths(run, compute)[name]
+        victim.write_bytes(victim.read_bytes() + b"\n")
+        return snapshots
+
+    monkeypatch.setattr(
+        plotter,
+        "_cross_bind_run_to_audit",
+        replace_after_cross_bind,
+    )
+
+    with pytest.raises(ValueError, match="consumed input identity mismatch"):
+        plotter.main(
+            [
+                "--run",
+                str(run),
+                "--compute-root",
+                str(compute),
+                "--reference-audit",
+                str(HARDENED_AUDIT),
+                "--output",
+                str(output),
+            ]
+        )
+
+    assert old.read_text(encoding="utf-8") == "old"
+    assert list(target.iterdir()) == [old]
+    _assert_no_transaction_debris(target)
+
+
+def test_debye_replacement_after_plotting_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    run, compute = _copy_consumed_inputs(plotter, tmp_path)
+    output = tmp_path / "output"
+    target = output / plotter.PUBLISHED_BUNDLE_NAME
+    target.mkdir(parents=True)
+    old = target / "old-generation.txt"
+    old.write_text("old", encoding="utf-8")
+    original = plotter.plot_debye_order_diagnostic
+
+    def replace_after_plotting(*args, **kwargs):
+        result = original(*args, **kwargs)
+        victim = (
+            compute
+            / plotter.DEBYE_BOUND_INPUTS[
+                "debye_ip_n4_verification_data.npz"
+            ]
+        )
+        victim.write_bytes(victim.read_bytes() + b"x")
+        return result
+
+    monkeypatch.setattr(
+        plotter,
+        "plot_debye_order_diagnostic",
+        replace_after_plotting,
+    )
+
+    with pytest.raises(ValueError, match="consumed input identity mismatch"):
+        plotter.main(
+            [
+                "--run",
+                str(run),
+                "--compute-root",
+                str(compute),
+                "--reference-audit",
+                str(HARDENED_AUDIT),
+                "--output",
+                str(output),
+            ]
+        )
+
+    assert old.read_text(encoding="utf-8") == "old"
+    assert list(target.iterdir()) == [old]
+    _assert_no_transaction_debris(target)
