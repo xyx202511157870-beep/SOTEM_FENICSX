@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import secrets
 import shutil
 import subprocess
@@ -50,6 +51,7 @@ EXPORT_POLICY = {
         "explicit no-PDF constraint takes precedence."
     ),
 }
+GIT_COMMAND_TIMEOUT_S = 10.0
 AUDIT_BOUND_INPUTS = {
     "case.yaml": Path("snapshots/case.yaml"),
     "run_manifest.json": Path("run_manifest.json"),
@@ -555,21 +557,152 @@ def _plot_producer_source_paths(
     return paths
 
 
-def _git_identity() -> dict[str, Any]:
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+def _running_under_wsl() -> bool:
+    if os.name != "posix":
+        return False
+    for marker in (Path("/proc/sys/kernel/osrelease"), Path("/proc/version")):
+        try:
+            value = marker.read_text(encoding="utf-8", errors="strict")
+        except (FileNotFoundError, OSError, UnicodeError):
+            continue
+        if "microsoft" in value.lower():
+            return True
+    return False
+
+
+def _validate_git_directory(path: Path) -> Path:
+    resolved = path.resolve()
+    if not resolved.is_dir() or not (resolved / "HEAD").is_file():
+        raise FileNotFoundError(
+            f"resolved git directory does not exist or is invalid: {resolved}"
+        )
+    return resolved
+
+
+def _resolve_gitdir_target(
+    target_text: str,
+    root: Path,
+    *,
+    host_os_name: str | None = None,
+    is_wsl: bool | None = None,
+    wsl_mount_root: Path | None = None,
+) -> Path:
+    if not isinstance(target_text, str) or not target_text.strip():
+        raise ValueError("gitdir target is empty")
+    if "\x00" in target_text:
+        raise ValueError("gitdir target contains a null byte")
+
+    normalized = target_text.strip().replace("\\", "/")
+    os_name = os.name if host_os_name is None else host_os_name
+    under_wsl = _running_under_wsl() if is_wsl is None else is_wsl
+    drive_match = re.fullmatch(r"([A-Za-z]):/(.*)", normalized)
+
+    if drive_match is not None:
+        drive, tail = drive_match.groups()
+        tail_parts = tuple(part for part in tail.split("/") if part)
+        if any(part in {".", ".."} for part in tail_parts):
+            raise ValueError("gitdir Windows drive path contains traversal")
+        if os_name == "nt":
+            candidate = Path(f"{drive.upper()}:/{'/'.join(tail_parts)}")
+        elif os_name == "posix" and under_wsl:
+            mount_root = (
+                Path("/mnt")
+                if wsl_mount_root is None
+                else Path(wsl_mount_root)
+            )
+            candidate = mount_root / drive.lower()
+            for part in tail_parts:
+                candidate /= part
+        else:
+            raise ValueError(
+                "Windows-drive gitdir target is supported only on Windows "
+                "or WSL"
+            )
+    else:
+        candidate = Path(normalized)
+        if not candidate.is_absolute():
+            candidate = Path(root) / candidate
+
+    return _validate_git_directory(candidate)
+
+
+def _resolve_git_dir(root: Path = ROOT) -> Path:
+    repository_root = Path(root).resolve()
+    marker = repository_root / ".git"
+    if marker.is_dir():
+        return _validate_git_directory(marker)
+    if not marker.is_file():
+        raise FileNotFoundError(
+            f"repository git directory marker does not exist: {marker}"
+        )
+
+    try:
+        contents = marker.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(
+            f"unable to read repository gitdir marker: {marker}"
+        ) from exc
+    lines = contents.splitlines()
+    if not lines:
+        raise ValueError("repository gitdir marker is empty")
+    if len(lines) != 1:
+        raise ValueError("repository gitdir marker must contain a single line")
+    prefix = "gitdir: "
+    if not lines[0].startswith(prefix):
+        raise ValueError("repository .git file is not a valid gitdir marker")
+    target = lines[0][len(prefix) :].strip()
+    if not target:
+        raise ValueError("repository gitdir target is empty")
+    return _resolve_gitdir_target(target, repository_root)
+
+
+def _run_git_identity_command(
+    git_dir: Path,
+    root: Path,
+    *arguments: str,
+) -> str:
+    command = [
+        "git",
+        "--git-dir",
+        str(git_dir),
+        "--work-tree",
+        str(root),
+        *arguments,
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=GIT_COMMAND_TIMEOUT_S,
+        )
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        subprocess.CalledProcessError,
+        OSError,
+    ) as exc:
+        raise RuntimeError("git identity command failed") from exc
+    return completed.stdout
+
+
+def _git_identity(root: Path = ROOT) -> dict[str, Any]:
+    repository_root = Path(root).resolve()
+    git_dir = _resolve_git_dir(repository_root)
+    head = _run_git_identity_command(
+        git_dir,
+        repository_root,
+        "rev-parse",
+        "HEAD",
+    ).strip()
+    status = _run_git_identity_command(
+        git_dir,
+        repository_root,
+        "status",
+        "--porcelain",
+    )
     if (
         len(head) != 40
         or any(character not in "0123456789abcdefABCDEF" for character in head)

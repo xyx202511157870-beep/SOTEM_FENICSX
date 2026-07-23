@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 
 import matplotlib
 
@@ -1527,6 +1528,230 @@ def test_publication_snapshot_binds_all_twelve_consumed_inputs(tmp_path):
         assert record["schema"]
         assert record["run_identity"] == run.name
         assert record["role"]
+
+
+def test_current_worktree_gitdir_and_identity_are_resolved_explicitly():
+    plotter = _load_plotter()
+
+    git_dir = plotter._resolve_git_dir(ROOT)
+    identity = plotter._git_identity(ROOT)
+    expected_head = subprocess.run(
+        [
+            "git",
+            "--git-dir",
+            str(git_dir),
+            "--work-tree",
+            str(ROOT),
+            "rev-parse",
+            "HEAD",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=plotter.GIT_COMMAND_TIMEOUT_S,
+    ).stdout.strip()
+
+    assert git_dir.is_dir()
+    assert (git_dir / "HEAD").is_file()
+    assert identity["head"] == expected_head
+    assert isinstance(identity["dirty"], bool)
+
+
+def test_gitdir_resolver_accepts_normal_directory(tmp_path):
+    plotter = _load_plotter()
+    root = tmp_path / "normal"
+    git_dir = root / ".git"
+    git_dir.mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    assert plotter._resolve_git_dir(root) == git_dir.resolve()
+
+
+def test_gitdir_resolver_resolves_relative_file_from_worktree_root(tmp_path):
+    plotter = _load_plotter()
+    root = tmp_path / "worktree"
+    root.mkdir()
+    git_dir = tmp_path / "common.git" / "worktrees" / "case"
+    git_dir.mkdir(parents=True)
+    (git_dir / "HEAD").write_text("1" * 40 + "\n", encoding="utf-8")
+    (root / ".git").write_text(
+        "gitdir: ../common.git/worktrees/case\n",
+        encoding="utf-8",
+    )
+
+    assert plotter._resolve_git_dir(root) == git_dir.resolve()
+
+
+def test_gitdir_resolver_converts_windows_drive_path_for_wsl(tmp_path):
+    plotter = _load_plotter()
+    root = tmp_path / "worktree"
+    root.mkdir()
+    mount_root = tmp_path / "mnt"
+    git_dir = mount_root / "d" / "Repo" / ".git" / "worktrees" / "case"
+    git_dir.mkdir(parents=True)
+    (git_dir / "HEAD").write_text("2" * 40 + "\n", encoding="utf-8")
+
+    resolved = plotter._resolve_gitdir_target(
+        r"D:\Repo\.git\worktrees\case",
+        root,
+        host_os_name="posix",
+        is_wsl=True,
+        wsl_mount_root=mount_root,
+    )
+
+    assert resolved == git_dir.resolve()
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ("", "empty"),
+        ("gitdir: \n", "empty"),
+        ("not-gitdir: target\n", "gitdir"),
+        ("gitdir: target\nsecond line\n", "single line"),
+    ],
+)
+def test_gitdir_resolver_rejects_malformed_file(
+    tmp_path,
+    contents,
+    message,
+):
+    plotter = _load_plotter()
+    root = tmp_path / "worktree"
+    root.mkdir()
+    (root / ".git").write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        plotter._resolve_git_dir(root)
+
+
+def test_gitdir_resolver_rejects_windows_drive_traversal(tmp_path):
+    plotter = _load_plotter()
+
+    with pytest.raises(ValueError, match="traversal"):
+        plotter._resolve_gitdir_target(
+            r"D:\Repo\..\escape\.git",
+            tmp_path,
+            host_os_name="posix",
+            is_wsl=True,
+            wsl_mount_root=tmp_path / "mnt",
+        )
+
+
+def test_gitdir_resolver_rejects_missing_target(tmp_path):
+    plotter = _load_plotter()
+    root = tmp_path / "worktree"
+    root.mkdir()
+    (root / ".git").write_text(
+        "gitdir: ../missing.git/worktrees/case\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError, match="git directory"):
+        plotter._resolve_git_dir(root)
+
+
+def test_git_identity_commands_bind_gitdir_worktree_and_timeout(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    git_dir = tmp_path / "repo.git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("3" * 40 + "\n", encoding="utf-8")
+    calls = []
+    outputs = iter(["4" * 40 + "\n", " M tracked.py\n"])
+    monkeypatch.setattr(
+        plotter,
+        "_resolve_git_dir",
+        lambda _root=plotter.ROOT: git_dir,
+    )
+
+    def record(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            returncode=0,
+            stdout=next(outputs),
+            stderr="",
+        )
+
+    monkeypatch.setattr(plotter.subprocess, "run", record)
+
+    assert plotter._git_identity(tmp_path) == {
+        "head": "4" * 40,
+        "dirty": True,
+    }
+    assert calls == [
+        (
+            [
+                "git",
+                "--git-dir",
+                str(git_dir),
+                "--work-tree",
+                str(tmp_path.resolve()),
+                "rev-parse",
+                "HEAD",
+            ],
+            {
+                "cwd": tmp_path.resolve(),
+                "check": True,
+                "capture_output": True,
+                "text": True,
+                "timeout": plotter.GIT_COMMAND_TIMEOUT_S,
+            },
+        ),
+        (
+            [
+                "git",
+                "--git-dir",
+                str(git_dir),
+                "--work-tree",
+                str(tmp_path.resolve()),
+                "status",
+                "--porcelain",
+            ],
+            {
+                "cwd": tmp_path.resolve(),
+                "check": True,
+                "capture_output": True,
+                "text": True,
+                "timeout": plotter.GIT_COMMAND_TIMEOUT_S,
+            },
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        FileNotFoundError("git"),
+        subprocess.TimeoutExpired(["git"], timeout=10),
+        subprocess.CalledProcessError(128, ["git"]),
+    ],
+)
+def test_git_identity_command_failure_is_fail_closed(
+    tmp_path,
+    monkeypatch,
+    failure,
+):
+    plotter = _load_plotter()
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("3" * 40 + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        plotter,
+        "_resolve_git_dir",
+        lambda _root=plotter.ROOT: git_dir,
+    )
+
+    def fail(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(plotter.subprocess, "run", fail)
+
+    with pytest.raises(RuntimeError, match="git identity command failed"):
+        plotter._git_identity(tmp_path)
 
 
 @pytest.mark.parametrize("mode", ["tamper", "path_substitution"])
