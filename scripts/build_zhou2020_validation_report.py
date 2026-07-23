@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import hashlib
 import importlib.util
 import json
 import os
@@ -263,6 +264,121 @@ def _percentage(value: float, digits: int = 2) -> str:
     return f"{float(value) * 100:.{digits}f}%"
 
 
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cross_bound_input_hashes(
+    manifest: dict[str, Any],
+    validated_audit: dict[str, Any],
+) -> dict[str, str]:
+    metadata = manifest.get("metadata")
+    audit_manifest = validated_audit.get("manifest")
+    audit = validated_audit.get("audit")
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(audit_manifest, dict)
+        or not isinstance(audit, dict)
+    ):
+        raise ValueError("validated evidence identity records are incomplete")
+    candidates = (
+        metadata.get("input_sha256"),
+        audit_manifest.get("input_sha256"),
+        audit.get("input_sha256"),
+    )
+    if (
+        any(not isinstance(candidate, dict) for candidate in candidates)
+        or candidates[0] != candidates[1]
+        or candidates[0] != candidates[2]
+    ):
+        raise ValueError("bundle and audit input identity hashes differ")
+    hashes = dict(candidates[0])
+    for required in ("run_manifest.json", "strict_comparison.json"):
+        value = hashes.get(required)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError(f"{required} identity hash is invalid")
+    return hashes
+
+
+def _load_cross_bound_metrics(
+    root: Path,
+    run: Path,
+    manifest: dict[str, Any],
+    validated_audit: dict[str, Any],
+) -> dict[str, Any]:
+    """Read strict metrics only after path, manifest, and hash cross-binding."""
+
+    run = Path(run)
+    metadata = manifest["metadata"]
+    run_id = metadata.get("run_id")
+    if not isinstance(run_id, str) or not run_id or run.name != run_id:
+        raise ValueError("formal run path does not match the bound run_id")
+    expected_run = (
+        Path(root)
+        / "generated/validation/zhou2020_grounded_wire/runs"
+        / run_id
+    )
+    if run.resolve() != expected_run.resolve():
+        raise ValueError("formal run path is outside the bound validation run root")
+    hashes = _cross_bound_input_hashes(manifest, validated_audit)
+
+    run_manifest_path = run / "run_manifest.json"
+    strict_path = run / "comparisons/S1T1B1/strict_comparison.json"
+    if not run_manifest_path.is_file() or not strict_path.is_file():
+        raise ValueError("bound formal run evidence path is missing")
+
+    run_manifest_bytes = run_manifest_path.read_bytes()
+    strict_bytes = strict_path.read_bytes()
+    if _sha256_bytes(run_manifest_bytes) != hashes["run_manifest.json"]:
+        raise ValueError("run manifest identity hash mismatch")
+    if _sha256_bytes(strict_bytes) != hashes["strict_comparison.json"]:
+        raise ValueError("strict comparison identity hash mismatch")
+    try:
+        run_manifest = json.loads(run_manifest_bytes)
+        metrics = json.loads(strict_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("bound formal evidence JSON is invalid") from error
+    if not isinstance(run_manifest, dict) or not isinstance(metrics, dict):
+        raise ValueError("bound formal evidence must contain JSON objects")
+
+    comparison = run_manifest.get("comparisons", {}).get("full/S1T1B1")
+    if (
+        run_manifest.get("schema")
+        != "atem3d.zhou2020.validation-run/v1"
+        or run_manifest.get("run_id") != run_id
+        or not isinstance(comparison, dict)
+        or comparison.get("path")
+        != "comparisons/S1T1B1/strict_comparison.json"
+        or comparison.get("sha256") != hashes["strict_comparison.json"]
+        or comparison.get("status") != "failed_with_reproducible_evidence"
+    ):
+        raise ValueError("formal run manifest identity or status is inconsistent")
+    if (
+        metrics.get("schema") != "atem3d.zhou2020.strict-comparison/v1"
+        or metrics.get("status") != comparison["status"]
+    ):
+        raise ValueError("strict comparison schema or status is inconsistent")
+
+    if (
+        _sha256_file(run_manifest_path) != hashes["run_manifest.json"]
+        or _sha256_file(strict_path) != hashes["strict_comparison.json"]
+    ):
+        raise ValueError("formal evidence changed during report generation")
+    return metrics
+
+
 def _validate_evidence(
     bundle: dict[str, Any],
     validated_audit: dict[str, Any],
@@ -340,7 +456,6 @@ def _write_report(
     manifest: dict[str, Any],
     diagnostic: dict[str, Any],
     audit: dict[str, Any],
-    source_quadrature: dict[str, Any],
     git_commit: str,
     git_dirty: bool,
 ) -> None:
@@ -566,10 +681,6 @@ def _write_report(
     )
 
     doc.add_heading("附录 A  可复现证据路径与 QA", level=1)
-    source_value = source_quadrature.get(
-        "max_relative_difference",
-        source_quadrature.get("max_rel_diff", "见原 JSON"),
-    )
     metadata = manifest["metadata"]
     _add_table(
         doc,
@@ -587,7 +698,6 @@ def _write_report(
             ["reference audit", _relative_or_absolute(reference_audit, root)],
             ["bundle run_id", str(metadata.get("run_id"))],
             ["bundle reference status", str(metadata.get("reference_audit_status"))],
-            ["source quadrature difference", str(source_value)],
             [
                 "DOCX QA",
                 "layout rendering not performed / LibreOffice unavailable；"
@@ -639,18 +749,12 @@ def build_report(
     validated_audit = _load_validated_reference_audit(reference_audit)
     manifest, diagnostic, audit = _validate_evidence(bundle, validated_audit)
 
-    metrics = json.loads(
-        (
-            run / "comparisons/S1T1B1/strict_comparison.json"
-        ).read_text(encoding="utf-8")
+    metrics = _load_cross_bound_metrics(
+        root,
+        run,
+        manifest,
+        validated_audit,
     )
-    source_quadrature = json.loads(
-        (
-            run / "reference/empymod_srcpts_convergence.json"
-        ).read_text(encoding="utf-8")
-    )
-    if metrics.get("status") != "failed_with_reproducible_evidence":
-        raise ValueError("formal status changed; re-review report wording")
     for figure, _ in FIGURES:
         if not (publication_bundle / figure).is_file():
             raise FileNotFoundError(
@@ -668,7 +772,6 @@ def build_report(
         manifest=manifest,
         diagnostic=diagnostic,
         audit=audit,
-        source_quadrature=source_quadrature,
         git_commit=git_commit,
         git_dirty=git_dirty,
     )

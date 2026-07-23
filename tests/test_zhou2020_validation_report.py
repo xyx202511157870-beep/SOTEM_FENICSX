@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
+import shutil
 import zipfile
 from xml.etree import ElementTree
 
 import matplotlib
+import pytest
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -40,8 +43,17 @@ def _metric(value: float, gate: float, passed: bool) -> dict[str, object]:
     return {"relative_l2": value, "gate": gate, "passed": passed}
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _make_report_fixture(tmp_path: Path):
-    run = tmp_path / "generated/run"
+    run_id = "synthetic-run"
+    run = (
+        tmp_path
+        / "generated/validation/zhou2020_grounded_wire/runs"
+        / run_id
+    )
     comparison = run / "comparisons/S1T1B1"
     reference = run / "reference"
     bundle = tmp_path / "publication_bundle"
@@ -59,6 +71,7 @@ def _make_report_fixture(tmp_path: Path):
         for variant in ("noip", "ip")
     }
     metrics = {
+        "schema": "atem3d.zhou2020.strict-comparison/v1",
         "status": "failed_with_reproducible_evidence",
         "total_field": total,
         "ip_increment": {
@@ -93,6 +106,26 @@ def _make_report_fixture(tmp_path: Path):
         json.dumps(metrics),
         encoding="utf-8",
     )
+    strict_hash = _sha256(comparison / "strict_comparison.json")
+    run_manifest = {
+        "schema": "atem3d.zhou2020.validation-run/v1",
+        "run_id": run_id,
+        "comparisons": {
+            "full/S1T1B1": {
+                "path": "comparisons/S1T1B1/strict_comparison.json",
+                "sha256": strict_hash,
+                "status": "failed_with_reproducible_evidence",
+            }
+        },
+    }
+    (run / "run_manifest.json").write_text(
+        json.dumps(run_manifest),
+        encoding="utf-8",
+    )
+    input_hashes = {
+        "run_manifest.json": _sha256(run / "run_manifest.json"),
+        "strict_comparison.json": strict_hash,
+    }
     (reference / "empymod_srcpts_convergence.json").write_text(
         json.dumps({"max_relative_difference": 0.001}),
         encoding="utf-8",
@@ -130,10 +163,11 @@ def _make_report_fixture(tmp_path: Path):
         "schema": "atem3d.zhou2020.figure-bundle/v1",
         "status": "complete",
         "metadata": {
-            "run_id": "synthetic-run",
+            "run_id": run_id,
             "spatial_case": "S1T1B1",
             "reference_audit_status": "inconclusive",
             "qwe_converged": False,
+            "input_sha256": input_hashes,
         },
     }
 
@@ -144,7 +178,7 @@ def _make_report_fixture(tmp_path: Path):
         fig.savefig(bundle / name, dpi=80)
         plt.close(fig)
 
-    return {
+    fixture = {
         "root": tmp_path,
         "run": run,
         "bundle": bundle,
@@ -154,11 +188,16 @@ def _make_report_fixture(tmp_path: Path):
             "diagnostic": diagnostic,
         },
         "validated_audit": {
-            "manifest": {"status": "inconclusive"},
+            "manifest": {
+                "status": "inconclusive",
+                "input_sha256": input_hashes,
+            },
             "audit": audit,
             "arrays": {},
         },
     }
+    fixture["validated_audit"]["audit"]["input_sha256"] = input_hashes
+    return fixture
 
 
 def _document_text(path: Path) -> str:
@@ -171,6 +210,20 @@ def _document_text(path: Path) -> str:
         for cell in row.cells
     ]
     return "\n".join([*paragraphs, *cells])
+
+
+def _patch_validators(report, fixture, monkeypatch) -> None:
+    monkeypatch.setattr(
+        report,
+        "_load_validated_bundle",
+        lambda path: fixture["validated_bundle"],
+    )
+    monkeypatch.setattr(
+        report,
+        "_load_validated_reference_audit",
+        lambda path: fixture["validated_audit"],
+    )
+    monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
 
 
 def test_report_consumes_validated_publication_bundle_and_audit(
@@ -329,6 +382,99 @@ def test_report_refuses_changed_reference_audit_state(tmp_path, monkeypatch):
         assert "re-review" in str(error)
     else:
         raise AssertionError("changed audit state must stop stale report prose")
+
+
+def test_report_refuses_strict_metric_tamper_without_publishing_docx(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    _patch_validators(report, fixture, monkeypatch)
+    strict = fixture["run"] / "comparisons/S1T1B1/strict_comparison.json"
+    payload = json.loads(strict.read_text(encoding="utf-8"))
+    payload["ip_increment"]["dBzdt"]["relative_l2"] = 0.01
+    strict.write_text(json.dumps(payload), encoding="utf-8")
+    output = tmp_path / "tampered.docx"
+
+    with pytest.raises(ValueError, match="hash|identity"):
+        report.build_report(
+            fixture["root"],
+            fixture["run"],
+            fixture["bundle"],
+            fixture["audit_dir"],
+            output,
+        )
+
+    assert not output.exists()
+
+
+def test_report_refuses_equal_looking_substituted_run_directory(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    _patch_validators(report, fixture, monkeypatch)
+    substituted = tmp_path / "elsewhere" / "equal-looking-other-run"
+    shutil.copytree(fixture["run"], substituted)
+    output = tmp_path / "substituted.docx"
+
+    with pytest.raises(ValueError, match="run_id|identity|path"):
+        report.build_report(
+            fixture["root"],
+            substituted,
+            fixture["bundle"],
+            fixture["audit_dir"],
+            output,
+        )
+
+    assert not output.exists()
+
+
+def test_report_refuses_same_run_id_copied_outside_bound_run_root(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    _patch_validators(report, fixture, monkeypatch)
+    substituted = tmp_path / "elsewhere" / fixture["run"].name
+    shutil.copytree(fixture["run"], substituted)
+    output = tmp_path / "same-id-substituted.docx"
+
+    with pytest.raises(ValueError, match="path|identity|run root"):
+        report.build_report(
+            fixture["root"],
+            substituted,
+            fixture["bundle"],
+            fixture["audit_dir"],
+            output,
+        )
+
+    assert not output.exists()
+
+
+def test_unbound_source_convergence_file_is_not_read(tmp_path, monkeypatch):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    _patch_validators(report, fixture, monkeypatch)
+    unbound = (
+        fixture["run"] / "reference/empymod_srcpts_convergence.json"
+    )
+    unbound.write_text("{deliberately invalid and unbound", encoding="utf-8")
+    output = tmp_path / "report.docx"
+
+    report.build_report(
+        fixture["root"],
+        fixture["run"],
+        fixture["bundle"],
+        fixture["audit_dir"],
+        output,
+    )
+
+    assert output.is_file()
+    assert "source quadrature difference" not in _document_text(output)
 
 
 def test_cli_requires_bundle_audit_and_docx_output_only():
