@@ -426,6 +426,31 @@ def test_hardened_reference_audit_is_loaded_through_manifest_validator():
     plotter._cross_bind_run_to_audit(FORMAL_RUN, validated)
 
 
+def test_reference_audit_identity_binds_exact_generation():
+    plotter = _load_plotter()
+    identity = plotter._validated_reference_audit_identity(HARDENED_AUDIT)
+    manifest = json.loads(
+        (HARDENED_AUDIT / "manifest.json").read_text(encoding="utf-8")
+    )
+    audit = json.loads(
+        (HARDENED_AUDIT / "reference_stability.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert identity["manifest_sha256"] == plotter._sha256_file(
+        HARDENED_AUDIT / "manifest.json"
+    )
+    assert identity["artifacts"] == {
+        name: manifest["artifacts"][name]["sha256"]
+        for name in plotter.REFERENCE_AUDIT_ARTIFACT_NAMES
+    }
+    assert identity["manifest_schema"] == manifest["schema"]
+    assert identity["audit_schema"] == audit["schema"]
+    for key in ("status", "input_sha256", "code_sha256", "methods", "qwe"):
+        assert identity[key] == manifest[key] == audit[key]
+
+
 def test_reference_audit_loader_rejects_unmanifested_files(tmp_path):
     plotter = _load_plotter()
     (tmp_path / "reference_stability.json").write_text("{}", encoding="utf-8")
@@ -572,12 +597,35 @@ def _write_minimal_bundle_artifacts(
 
 
 def _bundle_metadata() -> dict:
+    audit_identity = {
+        "root_relative": "test/reference_audit",
+        "manifest_sha256": "1" * 64,
+        "manifest_schema": "atem3d.zhou2020.reference-stability-manifest/v1",
+        "audit_schema": "atem3d.zhou2020.reference-stability/v1",
+        "status": "inconclusive",
+        "artifacts": {
+            "reference_stability.json": "2" * 64,
+            "reference_stability.npz": "3" * 64,
+        },
+        "input_sha256": {"case.yaml": "0" * 64},
+        "code_sha256": {"audit.py": "4" * 64},
+        "methods": {"qwe": {"nquad": 51}},
+        "qwe": {"converged": False},
+    }
+    canonical = json.dumps(
+        audit_identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    audit_identity["canonical_sha256"] = hashlib.sha256(canonical).hexdigest()
     return {
         "run_id": "test-run",
         "spatial_case": "S1T1B1",
         "input_sha256": {"case.yaml": "0" * 64},
         "reference_audit_status": "inconclusive",
         "qwe_converged": False,
+        "reference_audit": audit_identity,
     }
 
 
@@ -1155,11 +1203,84 @@ def test_main_real_run_publishes_self_validating_bundle(tmp_path):
     )
 
     bundle = tmp_path / plotter.PUBLISHED_BUNDLE_NAME
-    validated = plotter.load_validated_bundle(bundle)
+    validated = plotter.load_validated_bundle(bundle, HARDENED_AUDIT)
     assert validated["manifest"]["metadata"]["run_id"] == FORMAL_RUN.name
+    assert (
+        validated["manifest"]["metadata"]["reference_audit"]
+        == plotter._validated_reference_audit_identity(HARDENED_AUDIT)
+    )
     diagnostic = json.loads(
         (bundle / plotter.DEBYE_JSON_NAME).read_text(encoding="utf-8")
     )
     assert diagnostic["schema"] == "atem3d.zhou2020.debye-order-diagnostic/v2"
     assert not list(bundle.rglob("*.pdf"))
     _assert_no_transaction_debris(bundle)
+
+
+@pytest.mark.parametrize(
+    ("field", "mutate"),
+    [
+        ("manifest", lambda identity: identity.__setitem__(
+            "manifest_sha256", "a" * 64
+        )),
+        ("artifact", lambda identity: identity["artifacts"].__setitem__(
+            "reference_stability.json", "b" * 64
+        )),
+        ("code", lambda identity: identity["code_sha256"].__setitem__(
+            next(iter(identity["code_sha256"])), "c" * 64
+        )),
+        ("method", lambda identity: identity["methods"][
+            "direct_frequency_qwe"
+        ]["ftarg"].__setitem__("nquad", 53)),
+        ("qwe", lambda identity: identity["qwe"].__setitem__(
+            "direct_difference_qwe_converged", True
+        )),
+    ],
+)
+def test_loader_rejects_same_inputs_but_different_audit_generation(
+    tmp_path,
+    monkeypatch,
+    field,
+    mutate,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    audit_identity = plotter._validated_reference_audit_identity(
+        HARDENED_AUDIT
+    )
+    metadata = _bundle_metadata()
+    metadata["input_sha256"] = dict(audit_identity["input_sha256"])
+    metadata["reference_audit"] = audit_identity
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        metadata,
+        reference_audit=HARDENED_AUDIT,
+    )
+    stored_manifest = (
+        target / plotter.COMPLETION_MANIFEST_NAME
+    ).read_bytes()
+    different_identity = json.loads(json.dumps(audit_identity))
+    mutate(different_identity)
+    different_identity["canonical_sha256"] = plotter._canonical_identity_digest(
+        {
+            key: value
+            for key, value in different_identity.items()
+            if key != "canonical_sha256"
+        }
+    )
+    assert different_identity["input_sha256"] == audit_identity["input_sha256"]
+
+    monkeypatch.setattr(
+        plotter,
+        "_validated_reference_audit_identity",
+        lambda _path: different_identity,
+    )
+
+    with pytest.raises(ValueError, match="audit generation identity mismatch"):
+        plotter.load_validated_bundle(target, tmp_path / f"different-{field}")
+
+    assert (
+        target / plotter.COMPLETION_MANIFEST_NAME
+    ).read_bytes() == stored_manifest
+    plotter.load_validated_bundle(target)

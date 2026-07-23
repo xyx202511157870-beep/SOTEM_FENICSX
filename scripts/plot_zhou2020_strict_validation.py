@@ -29,6 +29,10 @@ DEBYE_JSON_NAME = "debye_order_diagnostic.json"
 COMPLETION_MANIFEST_NAME = "completion_manifest.json"
 PUBLISHED_BUNDLE_NAME = "publication_bundle"
 BUNDLE_SCHEMA = "atem3d.zhou2020.figure-bundle/v1"
+REFERENCE_AUDIT_ARTIFACT_NAMES = (
+    "reference_stability.json",
+    "reference_stability.npz",
+)
 BUNDLE_ARTIFACT_NAMES = tuple(
     f"{stem}{suffix}"
     for stem in FIGURE_STEMS
@@ -395,9 +399,173 @@ def _validate_bundle_metadata(metadata: Any) -> None:
             or any(character not in "0123456789abcdefABCDEF" for character in value)
         ):
             raise ValueError("figure bundle input hash record is invalid")
+    reference_audit = metadata.get("reference_audit")
+    _validate_reference_audit_identity(reference_audit)
+    if (
+        reference_audit["input_sha256"] != input_hashes
+        or reference_audit["status"] != metadata["reference_audit_status"]
+        or reference_audit["qwe"].get("converged") != metadata["qwe_converged"]
+    ):
+        raise ValueError("figure bundle audit metadata is inconsistent")
 
 
-def load_validated_bundle(bundle: Path) -> dict[str, Any]:
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdefABCDEF" for character in value)
+    )
+
+
+def _canonical_identity_digest(identity: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        identity,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_hash_mapping(value: Any, label: str) -> None:
+    if not isinstance(value, dict) or not value:
+        raise ValueError(f"{label} is missing")
+    if any(
+        not isinstance(name, str)
+        or not name
+        or not _is_sha256(digest)
+        for name, digest in value.items()
+    ):
+        raise ValueError(f"{label} is invalid")
+
+
+def _validate_reference_audit_identity(identity: Any) -> None:
+    expected_keys = {
+        "root_relative",
+        "manifest_sha256",
+        "manifest_schema",
+        "audit_schema",
+        "status",
+        "artifacts",
+        "input_sha256",
+        "code_sha256",
+        "methods",
+        "qwe",
+        "canonical_sha256",
+    }
+    if not isinstance(identity, dict) or set(identity) != expected_keys:
+        raise ValueError("reference audit generation identity is invalid")
+    if (
+        not isinstance(identity["root_relative"], str)
+        or not identity["root_relative"]
+        or not _is_sha256(identity["manifest_sha256"])
+        or not isinstance(identity["manifest_schema"], str)
+        or not identity["manifest_schema"]
+        or not isinstance(identity["audit_schema"], str)
+        or not identity["audit_schema"]
+        or not isinstance(identity["status"], str)
+        or not identity["status"]
+        or not isinstance(identity["methods"], dict)
+        or not identity["methods"]
+        or not isinstance(identity["qwe"], dict)
+        or not identity["qwe"]
+    ):
+        raise ValueError("reference audit generation identity is invalid")
+    artifacts = identity["artifacts"]
+    if (
+        not isinstance(artifacts, dict)
+        or set(artifacts) != set(REFERENCE_AUDIT_ARTIFACT_NAMES)
+        or any(not _is_sha256(value) for value in artifacts.values())
+    ):
+        raise ValueError("reference audit artifact identity is invalid")
+    _validate_hash_mapping(identity["input_sha256"], "reference audit input identity")
+    _validate_hash_mapping(identity["code_sha256"], "reference audit code identity")
+    canonical_sha256 = identity["canonical_sha256"]
+    core = {
+        key: value
+        for key, value in identity.items()
+        if key != "canonical_sha256"
+    }
+    if (
+        not _is_sha256(canonical_sha256)
+        or _canonical_identity_digest(core) != canonical_sha256
+    ):
+        raise ValueError("reference audit canonical identity mismatch")
+
+
+def _reference_audit_relative_path(path: Path) -> str:
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _reference_audit_identity(
+    path: Path,
+    validated_audit: dict[str, Any],
+) -> dict[str, Any]:
+    path = Path(path)
+    manifest_path = path / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"reference audit manifest is missing: {manifest_path}")
+    manifest = validated_audit.get("manifest")
+    audit = validated_audit.get("audit")
+    if not isinstance(manifest, dict) or not isinstance(audit, dict):
+        raise ValueError("validated reference audit payload is incomplete")
+    manifest_bytes = manifest_path.read_bytes()
+    if json.loads(manifest_bytes.decode("utf-8")) != manifest:
+        raise ValueError("reference audit manifest changed during validation")
+    for key in ("status", "input_sha256", "code_sha256", "methods", "qwe"):
+        if manifest.get(key) != audit.get(key):
+            raise ValueError(f"reference audit manifest/audit mismatch: {key}")
+    artifact_records = manifest.get("artifacts")
+    if (
+        not isinstance(artifact_records, dict)
+        or set(artifact_records) != set(REFERENCE_AUDIT_ARTIFACT_NAMES)
+    ):
+        raise ValueError("reference audit manifest artifact set is invalid")
+    artifact_hashes: dict[str, str] = {}
+    for name in REFERENCE_AUDIT_ARTIFACT_NAMES:
+        record = artifact_records[name]
+        path_to_artifact = path / name
+        if (
+            not isinstance(record, dict)
+            or not _is_sha256(record.get("sha256"))
+            or not path_to_artifact.is_file()
+            or _sha256_file(path_to_artifact) != record["sha256"]
+        ):
+            raise ValueError(f"reference audit artifact identity mismatch: {name}")
+        artifact_hashes[name] = record["sha256"]
+    core = {
+        "root_relative": _reference_audit_relative_path(path),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "manifest_schema": manifest.get("schema"),
+        "audit_schema": audit.get("schema"),
+        "status": manifest.get("status"),
+        "artifacts": artifact_hashes,
+        "input_sha256": manifest.get("input_sha256"),
+        "code_sha256": manifest.get("code_sha256"),
+        "methods": manifest.get("methods"),
+        "qwe": manifest.get("qwe"),
+    }
+    identity = json.loads(
+        json.dumps(core, ensure_ascii=False, allow_nan=False)
+    )
+    identity["canonical_sha256"] = _canonical_identity_digest(identity)
+    _validate_reference_audit_identity(identity)
+    return identity
+
+
+def _validated_reference_audit_identity(path: Path) -> dict[str, Any]:
+    return _reference_audit_identity(path, load_reference_audit(Path(path)))
+
+
+def load_validated_bundle(
+    bundle: Path,
+    reference_audit: Path | None = None,
+) -> dict[str, Any]:
     """Load a complete generation only after exact-set and hash validation."""
 
     bundle = Path(bundle)
@@ -416,6 +584,10 @@ def load_validated_bundle(bundle: Path) -> dict[str, Any]:
     ):
         raise ValueError("figure bundle completion metadata is invalid")
     _validate_bundle_metadata(manifest.get("metadata"))
+    if reference_audit is not None:
+        current_identity = _validated_reference_audit_identity(reference_audit)
+        if manifest["metadata"]["reference_audit"] != current_identity:
+            raise ValueError("audit generation identity mismatch")
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict) or set(artifacts) != set(
         BUNDLE_ARTIFACT_NAMES
@@ -461,7 +633,11 @@ def load_validated_bundle(bundle: Path) -> dict[str, Any]:
     return {"manifest": manifest, "diagnostic": diagnostic}
 
 
-def _replace_bundle_directory(staging: Path, target: Path) -> None:
+def _replace_bundle_directory(
+    staging: Path,
+    target: Path,
+    reference_audit: Path | None = None,
+) -> None:
     """Replace one complete directory generation and roll back on failure."""
 
     staging = Path(staging)
@@ -487,7 +663,7 @@ def _replace_bundle_directory(staging: Path, target: Path) -> None:
         os.replace(staging, target)
         new_published = True
         _fsync_directory(target.parent)
-        load_validated_bundle(target)
+        load_validated_bundle(target, reference_audit)
     except BaseException:
         rollback_failure: BaseException | None = None
         try:
@@ -522,6 +698,7 @@ def _publish_bundle(
     target: Path,
     build_artifacts: Callable[[Path], None],
     metadata: dict[str, Any],
+    reference_audit: Path | None = None,
 ) -> dict[str, Any]:
     """Build, finalize, validate, and expose one indivisible figure generation."""
 
@@ -552,9 +729,9 @@ def _publish_bundle(
         _write_completion_manifest(staging, metadata)
         _fsync_file(staging / COMPLETION_MANIFEST_NAME)
         _fsync_directory(staging)
-        load_validated_bundle(staging)
-        _replace_bundle_directory(staging, target)
-        result = load_validated_bundle(target)
+        load_validated_bundle(staging, reference_audit)
+        _replace_bundle_directory(staging, target, reference_audit)
+        result = load_validated_bundle(target, reference_audit)
     except BaseException:
         failure = sys.exc_info()
     try:
@@ -1242,6 +1419,10 @@ def main(argv: list[str] | None = None) -> None:
     _cross_bind_run_to_audit(run, validated_audit)
     audit = validated_audit["audit"]
     audit_arrays = validated_audit["arrays"]
+    reference_audit_identity = _reference_audit_identity(
+        args.reference_audit,
+        validated_audit,
+    )
 
     formal = run / "fenicsx"
     noip_fem = _read_csv(formal / "noip" / "S1T1B1" / "predictions.csv")
@@ -1285,11 +1466,13 @@ def main(argv: list[str] | None = None) -> None:
         "input_sha256": validated_audit["manifest"]["input_sha256"],
         "reference_audit_status": audit["status"],
         "qwe_converged": bool(audit["qwe"]["converged"]),
+        "reference_audit": reference_audit_identity,
     }
     _publish_bundle(
         args.output / PUBLISHED_BUNDLE_NAME,
         build_artifacts,
         metadata,
+        reference_audit=args.reference_audit,
     )
 
 
