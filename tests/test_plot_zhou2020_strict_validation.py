@@ -552,11 +552,15 @@ def test_scale_safe_relative_l2_avoids_overflow():
     assert plotter._relative_l2(numerator, denominator) == pytest.approx(0.1)
 
 
-def _write_minimal_bundle_artifacts(plotter, staging: Path) -> None:
+def _write_minimal_bundle_artifacts(
+    plotter,
+    staging: Path,
+    marker: str = "default",
+) -> None:
     for stem in plotter.FIGURE_STEMS:
         for suffix in plotter.EXPORT_FORMATS:
             (staging / f"{stem}{suffix}").write_bytes(
-                f"{stem}{suffix}".encode()
+                f"{marker}:{stem}{suffix}".encode()
             )
     plotter._write_json(
         staging / plotter.DEBYE_JSON_NAME,
@@ -1016,6 +1020,88 @@ def test_bundle_publish_never_deletes_legacy_parent_files(tmp_path):
 
     assert legacy.read_bytes() == b"legacy-parent-file"
     plotter.load_validated_bundle(target)
+
+
+def test_post_commit_partial_backup_cleanup_never_rolls_back_new_target(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(
+            plotter,
+            staging,
+            "old",
+        ),
+        _bundle_metadata(),
+    )
+    original_rmtree = plotter.shutil.rmtree
+
+    def partially_delete_backup_then_interrupt(path, *args, **kwargs):
+        path = Path(path)
+        if ".backup-" in path.name:
+            victim = next(item for item in path.iterdir() if item.is_file())
+            victim.unlink()
+            raise KeyboardInterrupt("partial backup cleanup interrupt")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        plotter.shutil,
+        "rmtree",
+        partially_delete_backup_then_interrupt,
+    )
+
+    with pytest.raises(plotter.PublicationCleanupError) as caught:
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(
+                plotter,
+                staging,
+                "new",
+            ),
+            _bundle_metadata(),
+        )
+
+    error = caught.value
+    assert error.publication_committed is True
+    assert error.backup_path.exists()
+    assert ".backup-" in error.backup_path.name
+    validated = plotter.load_validated_bundle(target)
+    assert validated["manifest"]["status"] == "complete"
+    first_artifact = target / plotter.BUNDLE_ARTIFACT_NAMES[0]
+    assert first_artifact.read_bytes().startswith(b"new:")
+    committed_manifest = (
+        target / plotter.COMPLETION_MANIFEST_NAME
+    ).read_bytes()
+    residual_names = {
+        path.name
+        for path in target.parent.glob(f".{target.name}.backup-*")
+    }
+    assert residual_names == {error.backup_path.name}
+    assert not plotter._bundle_lock_path(target).exists()
+    assert not list(target.parent.glob(f".{target.name}.staging-*"))
+
+    with pytest.raises(plotter.PublicationDebrisError) as debris_error:
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(
+                plotter,
+                staging,
+                "third",
+            ),
+            _bundle_metadata(),
+        )
+
+    assert error.backup_path in debris_error.value.backup_paths
+    assert (
+        target / plotter.COMPLETION_MANIFEST_NAME
+    ).read_bytes() == committed_manifest
+    assert first_artifact.read_bytes().startswith(b"new:")
+    assert error.backup_path.exists()
+    assert not plotter._bundle_lock_path(target).exists()
+    assert not list(target.parent.glob(f".{target.name}.staging-*"))
 
 
 def test_bundle_loader_rejects_tampered_artifact(tmp_path):

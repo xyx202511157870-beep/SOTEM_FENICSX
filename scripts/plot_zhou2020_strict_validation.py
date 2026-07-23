@@ -83,6 +83,31 @@ class _BundleLock:
         self.payload = payload
 
 
+class PublicationCleanupError(RuntimeError):
+    """A new bundle is committed, but its superseded backup remains."""
+
+    publication_committed = True
+
+    def __init__(self, backup_path: Path) -> None:
+        self.backup_path = Path(backup_path)
+        super().__init__(
+            "figure bundle publication committed, but post-commit backup "
+            f"cleanup failed: {self.backup_path}"
+        )
+
+
+class PublicationDebrisError(RuntimeError):
+    """A prior post-commit backup must be reviewed before another publish."""
+
+    def __init__(self, backup_paths: tuple[Path, ...]) -> None:
+        self.backup_paths = backup_paths
+        joined = ", ".join(str(path) for path in backup_paths)
+        super().__init__(
+            "prior figure-bundle backup debris requires manual review; "
+            f"publication refused: {joined}"
+        )
+
+
 def _read_csv(path: Path) -> dict[str, np.ndarray]:
     data = np.genfromtxt(path, delimiter=",", names=True)
     return {name: np.asarray(data[name], dtype=float) for name in data.dtype.names}
@@ -200,6 +225,13 @@ def _fsync_directory(path: Path) -> None:
 def _bundle_lock_path(target: Path) -> Path:
     target = Path(target)
     return target.with_name(f".{target.name}.lock")
+
+
+def _bundle_backup_debris(target: Path) -> tuple[Path, ...]:
+    target = Path(target)
+    return tuple(
+        sorted(target.parent.glob(f".{target.name}.backup-*"))
+    )
 
 
 def _acquire_bundle_lock(target: Path) -> _BundleLock:
@@ -482,12 +514,8 @@ def _replace_bundle_directory(staging: Path, target: Path) -> None:
             if backup.exists():
                 _remove_tree_with_retry(backup)
                 _fsync_directory(target.parent)
-        except BaseException:
-            if backup.exists() and target.exists():
-                _remove_tree_with_retry(target)
-                os.replace(backup, target)
-                _fsync_directory(target.parent)
-            raise
+        except BaseException as exc:
+            raise PublicationCleanupError(backup) from exc
 
 
 def _publish_bundle(
@@ -505,6 +533,9 @@ def _publish_bundle(
     failure: tuple[type[BaseException], BaseException, Any] | None = None
     cleanup_failure: BaseException | None = None
     try:
+        backup_debris = _bundle_backup_debris(target)
+        if backup_debris:
+            raise PublicationDebrisError(backup_debris)
         staging = Path(
             tempfile.mkdtemp(
                 prefix=f".{target.name}.staging-",
