@@ -121,6 +121,75 @@ def build_empymod_survey_from_config(
     return survey, names
 
 
+def make_exact_pelton_resistivity_model(
+    *,
+    rho0: Sequence[float],
+    chargeability: Sequence[float],
+    tau: Sequence[float],
+    c: Sequence[float],
+) -> dict[str, Any]:
+    """Return an exact Pelton complex-resistivity model for empymod.
+
+    ``rho0`` is the zero-frequency resistivity.  The ``func_eta`` callback
+    returns the exact complex conductivity and does not use a Debye fit.
+    """
+
+    rho0_values = np.asarray(rho0, dtype=float)
+    chargeability_values = np.asarray(chargeability, dtype=float)
+    tau_values = np.asarray(tau, dtype=float)
+    c_values = np.asarray(c, dtype=float)
+    arrays = (
+        rho0_values,
+        chargeability_values,
+        tau_values,
+        c_values,
+    )
+    if any(values.ndim != 1 for values in arrays):
+        raise ValueError("Pelton layer parameters must be one-dimensional")
+    if any(values.shape != rho0_values.shape for values in arrays[1:]):
+        raise ValueError("Pelton layer parameters must have matching shapes")
+    if rho0_values.size == 0:
+        raise ValueError("Pelton model must contain at least one layer")
+    if np.any(~np.isfinite(rho0_values)) or np.any(rho0_values <= 0.0):
+        raise ValueError("rho0 must be finite and positive")
+    if np.any(~np.isfinite(chargeability_values)) or np.any(
+        (chargeability_values < 0.0) | (chargeability_values >= 1.0)
+    ):
+        raise ValueError("chargeability must satisfy 0 <= m < 1")
+    if np.any(~np.isfinite(tau_values)) or np.any(tau_values <= 0.0):
+        raise ValueError("tau must be finite and positive")
+    if np.any(~np.isfinite(c_values)) or np.any(
+        (c_values <= 0.0) | (c_values > 1.0)
+    ):
+        raise ValueError("c must satisfy 0 < c <= 1")
+
+    high_frequency_resistivity = rho0_values * (1.0 - chargeability_values)
+
+    def func_eta(
+        _model: dict[str, Any],
+        context: dict[str, Any],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        frequencies = np.asarray(context["freq"], dtype=float)
+        if frequencies.ndim != 1 or np.any(~np.isfinite(frequencies)):
+            raise ValueError("empymod frequencies must be a finite 1D array")
+        if np.any(frequencies < 0.0):
+            raise ValueError("empymod frequencies must be non-negative")
+        omega = 2.0 * np.pi * frequencies[:, None]
+        relaxation = (1j * omega * tau_values[None, :]) ** c_values[None, :]
+        complex_resistivity = rho0_values[None, :] * (
+            1.0
+            - chargeability_values[None, :]
+            * (1.0 - 1.0 / (1.0 + relaxation))
+        )
+        conductivity = 1.0 / complex_resistivity
+        return conductivity, conductivity.copy()
+
+    return {
+        "res": high_frequency_resistivity.tolist(),
+        "func_eta": func_eta,
+    }
+
+
 def make_debye_resistivity_model(
     sigma_infinity: Sequence[float],
     debye_terms: Sequence[dict[str, Any]] | None = None,

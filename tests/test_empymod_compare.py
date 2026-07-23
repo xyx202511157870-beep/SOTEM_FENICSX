@@ -9,9 +9,11 @@ from atem3d.empymod_compare import (
     build_empymod_survey_from_result,
     make_debye_resistivity_model,
     make_debye_resistivity_model_from_config,
+    make_exact_pelton_resistivity_model,
     run_empymod_reference,
 )
 from atem3d.fit import fit_pelton_resistivity_debye
+from atem3d.materials.cole_cole import PeltonColeColeResistivity
 
 
 class FakeEmpymod:
@@ -174,6 +176,55 @@ def test_make_debye_resistivity_model_builds_frequency_dependent_eta():
     np.testing.assert_allclose(eta_h, expected)
     np.testing.assert_allclose(eta_v, expected)
     np.testing.assert_allclose(model["res"], [1.0e8, 50.0])
+
+
+def test_make_exact_pelton_resistivity_model_preserves_dc_and_high_frequency_limits():
+    model = make_exact_pelton_resistivity_model(
+        rho0=[1.0e8, 100.0, 10.0, 200.0],
+        chargeability=[0.0, 0.0, 0.1, 0.0],
+        tau=[1.0, 1.0, 1.0, 1.0],
+        c=[1.0, 1.0, 0.3, 1.0],
+    )
+
+    eta_dc, eta_v_dc = model["func_eta"](model, {"freq": np.array([0.0])})
+    eta_high, _ = model["func_eta"](model, {"freq": np.array([1.0e30])})
+
+    np.testing.assert_allclose(
+        eta_dc,
+        [[1.0e-8, 0.01, 0.1, 0.005]],
+        rtol=1.0e-12,
+        atol=1.0e-14,
+    )
+    np.testing.assert_allclose(eta_v_dc, eta_dc)
+    np.testing.assert_allclose(
+        eta_high.real,
+        [[1.0e-8, 0.01, 1.0 / 9.0, 0.005]],
+        rtol=1.0e-8,
+        atol=1.0e-14,
+    )
+    np.testing.assert_allclose(model["res"], [1.0e8, 100.0, 9.0, 200.0])
+
+
+def test_make_exact_pelton_resistivity_model_matches_material_evaluation():
+    frequencies = np.array([1.0e-3, 1.0, 1.0e3])
+    model = make_exact_pelton_resistivity_model(
+        rho0=[100.0, 10.0],
+        chargeability=[0.0, 0.1],
+        tau=[1.0, 1.0],
+        c=[1.0, 0.3],
+    )
+
+    eta_h, _ = model["func_eta"](model, {"freq": frequencies})
+    expected_second = PeltonColeColeResistivity(
+        rho0=10.0,
+        chargeability=0.1,
+        tau=1.0,
+        c=0.3,
+    ).complex_conductivity(frequencies)
+
+    np.testing.assert_allclose(eta_h[:, 0], 0.01)
+    np.testing.assert_allclose(eta_h[:, 1], expected_second)
+    np.testing.assert_allclose(model["res"], [100.0, 9.0])
 
 
 def test_run_empymod_reference_accepts_debye_resistivity_model():
