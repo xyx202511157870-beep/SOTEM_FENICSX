@@ -40,6 +40,13 @@ OUTPUT_PATH = (
     / "Song文献模型_FEniCSx_empymod_SimPEG_三维时域正演对比报告.docx"
 )
 WORK_DIR = REPO_ROOT / "tmp" / "docs" / "song_cross_code_report"
+SONG_FIGURE_DIR = REPO_ROOT / "assets" / "reports" / "song2025"
+SONG_PAPER_FIGURES = {
+    "layout": SONG_FIGURE_DIR / "song2025_fig1_layout.png",
+    "model": SONG_FIGURE_DIR / "song2025_fig4_model.png",
+    "ex": SONG_FIGURE_DIR / "song2025_fig7_ex.png",
+    "hz": SONG_FIGURE_DIR / "song2025_fig8_hz.png",
+}
 
 WSL_ROOT = Path(r"\\wsl.localhost\Ubuntu\home\paidaxin")
 FENICSX_DIRS = {
@@ -188,6 +195,7 @@ def verify_variant(variant: VariantData, label: str) -> None:
 
 def load_evidence() -> Evidence:
     required = [SUMMARY_PATH, OVERVIEW_PATH, CASE_PATH]
+    required.extend(SONG_PAPER_FIGURES.values())
     for directory in [*FENICSX_DIRS.values(), *SIMPEG_DIRS.values()]:
         required.append(directory)
     missing = [str(path) for path in required if not path.exists()]
@@ -877,6 +885,54 @@ def build_document(evidence: Evidence, figures: list[Path]) -> Path:
     add_bullet(document, "dBz/dt：垂直磁通密度时间导数，单位T/s；满足dB/dt=-curl(E)。")
     document.add_paragraph(
         "对于法向为z的小型感应线圈，输出电压近似满足V=-N Aeff dBz/dt。因此，本报告中的dBz/dt是与关断后感应电压最直接对应的算法量。报告中的Hz是数值状态/验证量，不意味着本次装置在供电期间测量静态磁场。"
+    )
+
+    document.add_heading("3.1 Song文献原图及与本次算例的对应关系", level=2)
+    document.add_paragraph(
+        "以下四幅图直接摘自Song等（2025）原文，用于说明论文中的SOTEM装置、三维模型及极化响应。"
+        "它们与前面的报告重绘图用途不同：文献原图用于追溯模型出处，报告图1用于清楚表达本次实际计算坐标和参数。"
+        "文献原图均保留论文图号，并在本报告题注中给出出处；不得将其视为FEniCSx、empymod或SimPEG的新计算结果。"
+    )
+    add_figure(
+        document,
+        SONG_PAPER_FIGURES["layout"],
+        "文献原图1  Song等（2025）图1：SOTEM方法示意图。"
+        "该图是论文的通用装置示意，不是本项目真实堤坝装置。"
+        "来源：Journal of Applied Geophysics 233 (2025) 105613，"
+        "DOI: 10.1016/j.jappgeo.2024.105613。",
+        width_cm=11.5,
+    )
+    document.add_page_break()
+    add_figure(
+        document,
+        SONG_PAPER_FIGURES["model"],
+        "文献原图2  Song等（2025）图4：三维正演模型网格，中间层为极化层。"
+        "本次交叉验证采用该组层状极化模型框架，并通过算例文件固定实际坐标和参数。"
+        "来源同上。",
+        width_cm=13.5,
+    )
+    document.add_page_break()
+    add_figure(
+        document,
+        SONG_PAPER_FIGURES["ex"],
+        "文献原图3  Song等（2025）图7：有极化与无极化条件下的Ex响应及相对极化效应。"
+        "论文图覆盖10 μs-1 s；本报告的正式数值验收只覆盖10 μs-1 ms。"
+        "来源同上。",
+        width_cm=16.2,
+    )
+    document.add_page_break()
+    add_figure(
+        document,
+        SONG_PAPER_FIGURES["hz"],
+        "文献原图4  Song等（2025）图8：有极化与无极化条件下的Hz响应及相对极化效应。"
+        "论文图覆盖10 μs-1 s；本报告的正式数值验收只覆盖10 μs-1 ms。"
+        "来源同上。",
+        width_cm=16.2,
+    )
+    document.add_paragraph(
+        "文献图7和图8用于核对响应形态、符号变化和极化效应随时间的总体规律，不作为本报告逐点误差的数字化数据源。"
+        "本报告的empymod参考值由同一有限线源、层状电阻率和Cole-Cole参数独立计算。"
+        "此外，Song文献图7和图8直接给出Ex与Hz；与感应线圈电压成正比的dBz/dt由Faraday关系独立计算并在后文对比。"
     )
 
     add_method_parameter_tables(document, evidence)

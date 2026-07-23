@@ -29,6 +29,12 @@ REQUIRED_TEXT = (
     "Ey",
     "仅作为数值对称性诊断",
     "不包含尚未计算的真实堤坝装置方案",
+    "Song文献原图及与本次算例的对应关系",
+    "文献原图1",
+    "文献原图4",
+    "10.1016/j.jappgeo.2024.105613",
+    "不是本项目真实堤坝装置",
+    "论文图覆盖10 μs-1 s",
 )
 
 FORBIDDEN_DRAFT_MARKERS = ("<<replace", "[placeholder]", "待补充内容", "待插图")
@@ -66,10 +72,10 @@ def verify(path: Path) -> dict[str, int]:
         1 for paragraph in document.paragraphs if paragraph.style.name == "Caption"
     )
 
-    if figure_count < 8:
-        raise AssertionError(f"Expected at least 8 figures, found {figure_count}")
-    if caption_count < 8:
-        raise AssertionError(f"Expected at least 8 captions, found {caption_count}")
+    if figure_count < 12:
+        raise AssertionError(f"Expected at least 12 figures, found {figure_count}")
+    if caption_count < 12:
+        raise AssertionError(f"Expected at least 12 captions, found {caption_count}")
     if table_count < 9:
         raise AssertionError(f"Expected at least 9 tables, found {table_count}")
     if heading_count < 15:
