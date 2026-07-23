@@ -11,10 +11,14 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REFERENCE_AUDIT = (
-    ROOT
-    / "output/zhou2020_strict_validation/reference_audit_hardened_v2"
-)
+EXPORT_FORMATS = (".svg", ".png", ".tiff")
+EXPORT_POLICY = {
+    "pdf": "forbidden_by_user",
+    "known_waiver": (
+        "The static Nature-figure preflight requires PDF, but the user's "
+        "explicit no-PDF constraint takes precedence."
+    ),
+}
 COMPONENTS = (
     ("Ex", "Ex (V/m)"),
     ("Hz", "Hz (A/m)"),
@@ -232,8 +236,8 @@ def plot_total_fields(
             if row == 0 and col == 0:
                 ax.legend(loc="best")
     fig.suptitle(
-        "Absolute magnitude total fields (log-log); absolute magnitude "
-        "does not contain sign information",
+        "Absolute magnitude total fields: literature-style log-log; "
+        "absolute magnitude does not contain sign information",
         y=0.995,
     )
     return _finish_or_save(fig, stem, rect=(0.0, 0.0, 1.0, 0.96))
@@ -264,7 +268,7 @@ def plot_reference_stability(
         if values.shape != times.shape:
             raise ValueError(f"audit array shape mismatch: {key}")
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.0), sharex=True)
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.0))
     for ax in axes:
         ax.axvspan(
             times[0],
@@ -293,6 +297,22 @@ def plot_reference_stability(
 
     axes[1].axhline(0.0, color="#222222", lw=0.8, zorder=1)
     axes[1].set_yscale("linear")
+    early_count = min(20, times.size)
+    early_end = float(times[early_count - 1])
+    axes[1].set_xlim(float(times[0]), max(early_end, unstable_end))
+    early_values = np.concatenate(
+        [
+            np.asarray(arrays[name], dtype=float)[:early_count]
+            for name, *_ in series
+        ]
+    )
+    early_low = min(0.0, float(np.min(early_values)))
+    early_high = max(0.0, float(np.max(early_values)))
+    early_span = early_high - early_low
+    if early_span == 0.0:
+        early_span = max(abs(early_low), np.finfo(float).tiny)
+    early_padding = 0.08 * early_span
+    axes[1].set_ylim(early_low - early_padding, early_high + early_padding)
     axes[1].set_title("(b) Signed diagnostic")
     axes[1].set_ylabel("IP increment dBz/dt (T/s)")
     axes[1].ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
@@ -524,7 +544,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--reference-audit",
         type=Path,
-        default=DEFAULT_REFERENCE_AUDIT,
+        required=True,
         help="Manifest-bound reference-transform audit directory.",
     )
     return parser.parse_args(argv)

@@ -118,6 +118,7 @@ def test_total_field_axes_are_log_log_and_never_symlog():
     assert all(ax.get_yscale() == "log" for ax in fig.axes)
     title = fig._suptitle.get_text().lower()
     assert "absolute magnitude" in title
+    assert "literature-style log-log" in title
     assert "sign" in title
     for ax in fig.axes:
         for line in ax.lines:
@@ -161,13 +162,16 @@ def test_model_contract_callouts_do_not_overlap_adjacent_labels():
 
 def test_signed_reference_panel_uses_linear_y_and_shades_unstable_window():
     plotter = _load_plotter()
-    times = np.geomspace(1.0e-4, 1.0e-2, 8)
+    times = np.geomspace(1.0e-4, 1.0e-1, 25)
     arrays = {
         "time_s": times,
-        "default_dlf": np.array([1, -1, 1, 2, 3, 4, 5, 6]) * 1.0e-10,
-        "separate_total_qwe": np.geomspace(0.8e-13, 0.8e-9, 8),
-        "direct_frequency_qwe": np.geomspace(1.0e-13, 1.0e-9, 8),
-        "fenicsx_increment": np.geomspace(1.1e-13, 1.1e-9, 8),
+        "default_dlf": np.resize(
+            np.array([1.0, -1.0, 1.0, -1.0, 2.0]) * 1.0e-10,
+            times.size,
+        ),
+        "separate_total_qwe": np.geomspace(0.8e-13, 0.8e-9, times.size),
+        "direct_frequency_qwe": np.geomspace(1.0e-13, 1.0e-9, times.size),
+        "fenicsx_increment": np.geomspace(1.1e-13, 1.1e-9, times.size),
     }
 
     fig = plotter.plot_reference_stability(arrays, _audit(times), None)
@@ -176,6 +180,23 @@ def test_signed_reference_panel_uses_linear_y_and_shades_unstable_window():
     assert fig.axes[0].get_yscale() == "log"
     assert fig.axes[1].get_yscale() == "linear"
     assert fig.axes[1].get_xscale() == "log"
+    np.testing.assert_allclose(fig.axes[1].get_xlim(), (times[0], times[19]))
+    assert fig.axes[0].get_xlim()[1] >= times[-1]
+    early_values = np.concatenate(
+        [
+            np.asarray(arrays[name])[:20]
+            for name in (
+                "default_dlf",
+                "separate_total_qwe",
+                "direct_frequency_qwe",
+                "fenicsx_increment",
+            )
+        ]
+    )
+    signed_ylim = fig.axes[1].get_ylim()
+    assert signed_ylim[0] < min(0.0, float(np.min(early_values)))
+    assert signed_ylim[1] > max(0.0, float(np.max(early_values)))
+    assert signed_ylim[1] < float(np.max(arrays["fenicsx_increment"]))
     assert all(len(ax.patches) >= 1 for ax in fig.axes)
     assert "signed diagnostic" in fig.axes[1].get_title().lower()
     assert any(np.allclose(line.get_ydata(), 0.0) for line in fig.axes[1].lines)
@@ -277,7 +298,7 @@ def test_reference_audit_loader_rejects_unmanifested_files(tmp_path):
         plotter.load_reference_audit(tmp_path)
 
 
-def test_cli_default_reference_audit_targets_hardened_v2(monkeypatch):
+def test_cli_requires_reference_audit(monkeypatch):
     plotter = _load_plotter()
     monkeypatch.setattr(
         "sys.argv",
@@ -292,6 +313,36 @@ def test_cli_default_reference_audit_targets_hardened_v2(monkeypatch):
         ],
     )
 
+    with pytest.raises(SystemExit):
+        plotter._parse_args()
+
+
+def test_cli_accepts_explicit_reference_audit(monkeypatch):
+    plotter = _load_plotter()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            str(SCRIPT),
+            "--run",
+            "run",
+            "--compute-root",
+            "compute",
+            "--output",
+            "output",
+            "--reference-audit",
+            "audit",
+        ],
+    )
+
     args = plotter._parse_args()
 
-    assert args.reference_audit.name == "reference_audit_hardened_v2"
+    assert args.reference_audit == Path("audit")
+
+
+def test_no_pdf_preflight_waiver_is_explicit_and_does_not_enable_pdf():
+    plotter = _load_plotter()
+
+    assert plotter.EXPORT_POLICY["pdf"] == "forbidden_by_user"
+    assert "preflight" in plotter.EXPORT_POLICY["known_waiver"].lower()
+    assert "pdf" in plotter.EXPORT_POLICY["known_waiver"].lower()
+    assert ".pdf" not in plotter.EXPORT_FORMATS
