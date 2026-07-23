@@ -26,6 +26,20 @@ FIGURE_NAMES = (
     "fig04_gate_summary.png",
     "fig05_debye_order_diagnostic.png",
 )
+CONSUMED_INPUT_NAMES = {
+    "case.yaml",
+    "run_manifest.json",
+    "reference_manifest.json",
+    "empymod_metadata.json",
+    "strict_comparison.json",
+    "empymod_noip.csv",
+    "empymod_ip.csv",
+    "fenicsx_noip_predictions.csv",
+    "fenicsx_ip_predictions.csv",
+    "debye_noip_verification_data.npz",
+    "debye_ip_n4_verification_data.npz",
+    "debye_ip_n16_verification_data.npz",
+}
 
 
 def _load_report_script():
@@ -228,6 +242,39 @@ def _make_report_fixture(tmp_path: Path):
     audit_identity = dict(audit_identity_core)
     audit_identity["canonical_sha256"] = _canonical_digest(audit_identity_core)
     manifest["metadata"]["reference_audit"] = audit_identity
+    manifest["metadata"]["consumed_inputs"] = {
+        name: {
+            "path_relative_to_root": f"synthetic/{name}",
+            "bytes": 1,
+            "sha256": hashlib.sha256(name.encode("utf-8")).hexdigest(),
+            "schema": f"synthetic.{name}/v1",
+            "run_identity": run_id,
+            "role": f"synthetic:{name}",
+        }
+        for name in sorted(CONSUMED_INPUT_NAMES)
+    }
+    producer_core = {
+        "schema": "atem3d.zhou2020.plot-producer/v1",
+        "sources": {
+            "scripts/plot_zhou2020_strict_validation.py": {
+                "path_relative_to_root": (
+                    "scripts/plot_zhou2020_strict_validation.py"
+                ),
+                "bytes": 123,
+                "sha256": "e" * 64,
+            }
+        },
+        "git": {"head": "1" * 40, "dirty": False},
+        "runtime": {
+            "python": "3.test",
+            "numpy": "test",
+            "matplotlib": "test",
+            "pillow": "test",
+        },
+    }
+    producer = json.loads(json.dumps(producer_core))
+    producer["canonical_sha256"] = _canonical_digest(producer_core)
+    manifest["metadata"]["producer"] = producer
     manifest["artifacts"] = {
         name: {
             "sha256": _sha256(bundle / name),
@@ -235,6 +282,11 @@ def _make_report_fixture(tmp_path: Path):
         }
         for name in FIGURE_NAMES
     }
+    manifest_path = bundle / "completion_manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
 
     fixture = {
         "root": tmp_path,
@@ -251,6 +303,8 @@ def _make_report_fixture(tmp_path: Path):
             "arrays": {},
         },
         "audit_identity": audit_identity,
+        "bundle_manifest_sha256": _sha256(manifest_path),
+        "producer_identity": producer,
     }
     return fixture
 
@@ -271,7 +325,7 @@ def _patch_validators(report, fixture, monkeypatch) -> None:
     monkeypatch.setattr(
         report,
         "_load_validated_bundle",
-        lambda path, audit_path: fixture["validated_bundle"],
+        lambda path, audit_path, **kwargs: fixture["validated_bundle"],
     )
     monkeypatch.setattr(
         report,
@@ -286,6 +340,75 @@ def _patch_validators(report, fixture, monkeypatch) -> None:
     monkeypatch.setattr(report, "_git_state", lambda root: ("test-commit", False))
 
 
+def test_report_bundle_loader_verifies_all_inputs_and_current_producer(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    run = tmp_path / "formal-run"
+    compute_root = tmp_path / "compute"
+    bundle = tmp_path / "publication-bundle"
+    audit = tmp_path / "audit"
+    consumed_paths = {
+        name: tmp_path / "inputs" / name
+        for name in sorted(CONSUMED_INPUT_NAMES)
+    }
+    calls = {}
+
+    class PlotModule:
+        AUDIT_BOUND_INPUTS = {
+            name: Path(name)
+            for name in CONSUMED_INPUT_NAMES
+            if not name.startswith("debye_")
+        }
+        DEBYE_BOUND_INPUTS = {
+            name: Path(name)
+            for name in CONSUMED_INPUT_NAMES
+            if name.startswith("debye_")
+        }
+
+        @staticmethod
+        def _publication_input_paths(actual_run, actual_compute_root):
+            assert Path(actual_run) == run
+            assert Path(actual_compute_root) == compute_root
+            return consumed_paths
+
+        @staticmethod
+        def load_validated_bundle(
+            actual_bundle,
+            actual_audit,
+            *,
+            consumed_input_paths=None,
+            verify_producer=False,
+        ):
+            calls.update(
+                {
+                    "bundle": Path(actual_bundle),
+                    "audit": Path(actual_audit),
+                    "consumed_input_paths": consumed_input_paths,
+                    "verify_producer": verify_producer,
+                }
+            )
+            return {"manifest": {}, "diagnostic": {}}
+
+    monkeypatch.setattr(report, "_load_module", lambda name, path: PlotModule)
+
+    report._load_validated_bundle(
+        bundle,
+        audit,
+        run=run,
+        compute_root=compute_root,
+    )
+
+    assert calls == {
+        "bundle": bundle,
+        "audit": audit,
+        "consumed_input_paths": consumed_paths,
+        "verify_producer": True,
+    }
+    assert set(calls["consumed_input_paths"]) == CONSUMED_INPUT_NAMES
+
+
 def test_report_consumes_validated_publication_bundle_and_audit(
     tmp_path,
     monkeypatch,
@@ -294,7 +417,7 @@ def test_report_consumes_validated_publication_bundle_and_audit(
     fixture = _make_report_fixture(tmp_path)
     calls: list[tuple[str, Path]] = []
 
-    def load_bundle(path: Path, audit_path: Path):
+    def load_bundle(path: Path, audit_path: Path, **kwargs):
         calls.append(("bundle", Path(path)))
         assert Path(audit_path) == fixture["audit_dir"]
         return fixture["validated_bundle"]
@@ -336,7 +459,7 @@ def test_report_language_and_package_are_scientifically_fail_closed(
     monkeypatch.setattr(
         report,
         "_load_validated_bundle",
-        lambda path, audit_path: fixture["validated_bundle"],
+        lambda path, audit_path, **kwargs: fixture["validated_bundle"],
     )
     monkeypatch.setattr(
         report,
@@ -423,6 +546,75 @@ def test_report_language_and_package_are_scientifically_fail_closed(
         assert len(drawing_nodes) == 5
 
 
+def test_report_records_exact_bundle_and_producer_identities(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    _patch_validators(report, fixture, monkeypatch)
+    output = tmp_path / "report.docx"
+
+    report.build_report(
+        fixture["root"],
+        fixture["run"],
+        fixture["bundle"],
+        fixture["audit_dir"],
+        output,
+    )
+
+    text = _document_text(output)
+    expected = (
+        "bundle manifest SHA-256",
+        fixture["bundle_manifest_sha256"],
+        "plot producer canonical",
+        fixture["producer_identity"]["canonical_sha256"],
+        "audit canonical",
+        fixture["audit_identity"]["canonical_sha256"],
+        "report producer Git HEAD",
+        "test-commit",
+        "report script SHA-256",
+        _sha256(SCRIPT),
+        "consumed input count",
+        "12",
+    )
+    for value in expected:
+        assert value in text
+
+
+def test_report_rejects_invalid_plot_producer_canonical(
+    tmp_path,
+    monkeypatch,
+):
+    report = _load_report_script()
+    fixture = _make_report_fixture(tmp_path)
+    fixture["validated_bundle"]["manifest"]["metadata"]["producer"][
+        "canonical_sha256"
+    ] = "0" * 64
+    (fixture["bundle"] / "completion_manifest.json").write_text(
+        json.dumps(
+            fixture["validated_bundle"]["manifest"],
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _patch_validators(report, fixture, monkeypatch)
+    output = tmp_path / "invalid-producer.docx"
+
+    with pytest.raises(ValueError, match="producer canonical"):
+        report.build_report(
+            fixture["root"],
+            fixture["run"],
+            fixture["bundle"],
+            fixture["audit_dir"],
+            output,
+        )
+
+    assert not output.exists()
+
+
 def test_report_refuses_changed_reference_audit_state(tmp_path, monkeypatch):
     report = _load_report_script()
     fixture = _make_report_fixture(tmp_path)
@@ -432,7 +624,7 @@ def test_report_refuses_changed_reference_audit_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report,
         "_load_validated_bundle",
-        lambda path, audit_path: fixture["validated_bundle"],
+        lambda path, audit_path, **kwargs: fixture["validated_bundle"],
     )
     monkeypatch.setattr(
         report,
@@ -578,7 +770,7 @@ def test_report_rejects_same_inputs_but_different_audit_generation(
     monkeypatch.setattr(
         report,
         "_load_validated_bundle",
-        lambda path, audit_path: fixture["validated_bundle"],
+        lambda path, audit_path, **kwargs: fixture["validated_bundle"],
     )
     monkeypatch.setattr(
         report,
@@ -612,7 +804,7 @@ def test_report_rejects_png_tampered_after_bundle_validation(
     report = _load_report_script()
     fixture = _make_report_fixture(tmp_path)
 
-    def load_bundle(path, audit_path):
+    def load_bundle(path, audit_path, **kwargs):
         (fixture["bundle"] / FIGURE_NAMES[2]).write_bytes(b"post-validation tamper")
         return fixture["validated_bundle"]
 

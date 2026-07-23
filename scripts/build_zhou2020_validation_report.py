@@ -34,6 +34,20 @@ REPORT_REQUIRED_TEXT = (
     "reference-transform unstable",
     "inconclusive",
 )
+REPORT_CONSUMED_INPUT_NAMES = {
+    "case.yaml",
+    "run_manifest.json",
+    "reference_manifest.json",
+    "empymod_metadata.json",
+    "strict_comparison.json",
+    "empymod_noip.csv",
+    "empymod_ip.csv",
+    "fenicsx_noip_predictions.csv",
+    "fenicsx_ip_predictions.csv",
+    "debye_noip_verification_data.npz",
+    "debye_ip_n4_verification_data.npz",
+    "debye_ip_n16_verification_data.npz",
+}
 NAVY = "17365D"
 TEAL = "167D8D"
 PALE_BLUE = "EAF0F8"
@@ -78,14 +92,31 @@ def _load_module(name: str, path: Path):
 def _load_validated_bundle(
     path: Path,
     reference_audit: Path,
+    *,
+    run: Path,
+    compute_root: Path,
 ) -> dict[str, Any]:
     module = _load_module(
         "zhou_publication_bundle_validator",
         ROOT / "scripts/plot_zhou2020_strict_validation.py",
     )
+    consumed_input_paths = module._publication_input_paths(
+        Path(run),
+        Path(compute_root),
+    )
+    expected_inputs = set(module.AUDIT_BOUND_INPUTS) | set(
+        module.DEBYE_BOUND_INPUTS
+    )
+    if (
+        len(expected_inputs) != 12
+        or set(consumed_input_paths) != expected_inputs
+    ):
+        raise ValueError("publication bundle consumed input set is not exact")
     return module.load_validated_bundle(
         Path(path),
         Path(reference_audit),
+        consumed_input_paths=consumed_input_paths,
+        verify_producer=True,
     )
 
 
@@ -723,6 +754,75 @@ def _validate_evidence(
     return manifest, diagnostic, audit
 
 
+def _validated_report_provenance(
+    publication_bundle: Path,
+    manifest: dict[str, Any],
+    audit_identity: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = manifest.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("publication bundle metadata is missing")
+    consumed_inputs = metadata.get("consumed_inputs")
+    if (
+        not isinstance(consumed_inputs, dict)
+        or set(consumed_inputs) != REPORT_CONSUMED_INPUT_NAMES
+    ):
+        raise ValueError("publication bundle consumed input set is not exact")
+
+    producer = metadata.get("producer")
+    if (
+        not isinstance(producer, dict)
+        or set(producer)
+        != {
+            "schema",
+            "sources",
+            "git",
+            "runtime",
+            "canonical_sha256",
+        }
+        or producer.get("schema") != "atem3d.zhou2020.plot-producer/v1"
+        or not isinstance(producer.get("sources"), dict)
+        or not producer["sources"]
+        or not isinstance(producer.get("git"), dict)
+        or not isinstance(producer.get("runtime"), dict)
+    ):
+        raise ValueError("plot producer identity is invalid")
+    producer_core = {
+        key: value
+        for key, value in producer.items()
+        if key != "canonical_sha256"
+    }
+    producer_canonical = producer.get("canonical_sha256")
+    if (
+        not isinstance(producer_canonical, str)
+        or _sha256_bytes(
+            json.dumps(
+                producer_core,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        != producer_canonical
+    ):
+        raise ValueError("plot producer canonical identity mismatch")
+
+    manifest_path = Path(publication_bundle) / "completion_manifest.json"
+    manifest_bytes = manifest_path.read_bytes()
+    if json.loads(manifest_bytes.decode("utf-8")) != manifest:
+        raise ValueError("publication bundle manifest changed after validation")
+    return {
+        "bundle_manifest_sha256": _sha256_bytes(manifest_bytes),
+        "plot_producer_canonical": producer_canonical,
+        "plot_producer_git_head": producer["git"].get("head"),
+        "plot_producer_git_dirty": producer["git"].get("dirty"),
+        "audit_canonical": audit_identity["canonical_sha256"],
+        "consumed_input_count": len(consumed_inputs),
+        "report_script_sha256": _sha256_file(Path(__file__)),
+    }
+
+
 def _metric_rows(metrics: dict[str, Any]) -> list[list[str]]:
     rows: list[list[str]] = []
     for variant in ("noip", "ip"):
@@ -770,6 +870,7 @@ def _write_report(
     manifest: dict[str, Any],
     diagnostic: dict[str, Any],
     audit: dict[str, Any],
+    provenance: dict[str, Any],
     git_commit: str,
     git_dirty: bool,
 ) -> None:
@@ -1015,6 +1116,35 @@ def _write_report(
             ["bundle run_id", str(metadata.get("run_id"))],
             ["bundle reference status", str(metadata.get("reference_audit_status"))],
             [
+                "bundle manifest SHA-256",
+                str(provenance["bundle_manifest_sha256"]),
+            ],
+            [
+                "plot producer canonical",
+                str(provenance["plot_producer_canonical"]),
+            ],
+            [
+                "plot producer Git HEAD",
+                str(provenance["plot_producer_git_head"]),
+            ],
+            [
+                "plot producer Git dirty",
+                str(provenance["plot_producer_git_dirty"]),
+            ],
+            ["audit canonical", str(provenance["audit_canonical"])],
+            [
+                "report producer Git HEAD",
+                str(git_commit),
+            ],
+            [
+                "report script SHA-256",
+                str(provenance["report_script_sha256"]),
+            ],
+            [
+                "consumed input count",
+                str(provenance["consumed_input_count"]),
+            ],
+            [
                 "DOCX QA",
                 "layout rendering not performed / LibreOffice unavailable；"
                 "ZIP/XML package、五张媒体及内部图片关系已检查。"
@@ -1050,6 +1180,11 @@ def build_report(
     bundle = _load_validated_bundle(
         publication_bundle,
         reference_audit,
+        run=run,
+        compute_root=(
+            root
+            / "generated/validation/zhou2020_grounded_wire/compute"
+        ),
     )
     validated_audit = _load_validated_reference_audit(reference_audit)
     audit_identity = _load_validated_audit_identity(
@@ -1059,6 +1194,11 @@ def build_report(
     manifest, diagnostic, audit = _validate_evidence(
         bundle,
         validated_audit,
+        audit_identity,
+    )
+    provenance = _validated_report_provenance(
+        publication_bundle,
+        manifest,
         audit_identity,
     )
     publication_pngs = _snapshot_publication_pngs(
@@ -1087,6 +1227,7 @@ def build_report(
             manifest=manifest,
             diagnostic=diagnostic,
             audit=audit,
+            provenance=provenance,
             git_commit=git_commit,
             git_dirty=git_dirty,
         ),
