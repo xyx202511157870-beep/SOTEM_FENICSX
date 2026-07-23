@@ -295,6 +295,41 @@ def test_reference_evidence_box_does_not_overlap_signed_data_region():
     plt.close(fig)
 
 
+def test_reference_legend_is_outside_absolute_data_region_and_inside_figure():
+    plotter = _load_plotter()
+    times = np.geomspace(1.0e-4, 3.0, 101)
+    arrays = {
+        "time_s": times,
+        "default_dlf": np.geomspace(2.0e-10, 2.0e-14, times.size),
+        "separate_total_qwe": np.geomspace(1.0e-13, 1.0e-9, times.size),
+        "direct_frequency_qwe": np.geomspace(1.2e-13, 1.2e-9, times.size),
+        "fenicsx_increment": np.geomspace(1.1e-13, 1.1e-9, times.size),
+    }
+
+    fig = plotter.plot_reference_stability(arrays, _audit(times), None)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    absolute_ax = fig.axes[0]
+    legend = (
+        fig.legends[0]
+        if fig.legends
+        else absolute_ax.get_legend()
+    )
+    legend_bbox = legend.get_window_extent(renderer)
+    axes_bbox = absolute_ax.get_window_extent(renderer)
+    figure_bbox = fig.get_window_extent(renderer)
+
+    assert not legend_bbox.overlaps(axes_bbox)
+    assert not legend_bbox.overlaps(
+        absolute_ax.xaxis.label.get_window_extent(renderer)
+    )
+    assert legend_bbox.x0 >= figure_bbox.x0
+    assert legend_bbox.y0 >= figure_bbox.y0
+    assert legend_bbox.x1 <= figure_bbox.x1
+    assert legend_bbox.y1 <= figure_bbox.y1
+    plt.close(fig)
+
+
 def test_gate_summary_uses_only_total_fields_as_formal_bars():
     plotter = _load_plotter()
     audit = _audit(np.geomspace(1.0e-4, 1.0e-2, 8))

@@ -1081,7 +1081,17 @@ def plot_reference_stability(
     axes[0].set_yscale("log")
     axes[0].set_title("(a) Absolute magnitude")
     axes[0].set_ylabel("|IP increment dBz/dt| (T/s)")
-    axes[0].legend(loc="upper right")
+    legend_handles, legend_labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.89),
+        ncol=4,
+        borderaxespad=0.0,
+        columnspacing=1.1,
+        handlelength=1.8,
+    )
 
     axes[1].axhline(0.0, color="#222222", lw=0.8, zorder=1)
     axes[1].set_yscale("linear")
