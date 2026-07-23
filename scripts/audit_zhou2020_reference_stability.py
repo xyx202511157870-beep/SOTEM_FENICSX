@@ -167,6 +167,89 @@ def _verify_input_hashes(
         )
 
 
+def _audit_code_paths() -> dict[str, Path]:
+    """Return the executed script and every imported local atem3d source."""
+
+    paths = {
+        Path(__file__).resolve().relative_to(ROOT).as_posix(): Path(
+            __file__
+        ).resolve()
+    }
+    for module_name, module in sorted(sys.modules.items()):
+        if module_name != "atem3d" and not module_name.startswith("atem3d."):
+            continue
+        module_file = getattr(module, "__file__", None)
+        if module_file is None:
+            continue
+        path = Path(module_file).resolve()
+        try:
+            relative = path.relative_to(ROOT)
+        except ValueError:
+            continue
+        if path.suffix == ".py" and path.is_file():
+            paths[relative.as_posix()] = path
+    required = {
+        "scripts/audit_zhou2020_reference_stability.py",
+        "src/atem3d/empymod_compare.py",
+        "src/atem3d/zhou2020_reference.py",
+        "src/atem3d/zhou2020_reference_stability.py",
+    }
+    if not required <= set(paths):
+        missing = ", ".join(sorted(required - set(paths)))
+        raise RuntimeError(f"local audit code dependency discovery failed: {missing}")
+    return dict(sorted(paths.items()))
+
+
+def _validate_code_path_keys(paths: Mapping[str, Path]) -> None:
+    if not paths:
+        raise ValueError("at least one local audit code file is required")
+    for name, path in paths.items():
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts or name != relative.as_posix():
+            raise ValueError(f"invalid local audit code path key: {name}")
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"local audit code file does not exist: {path}")
+
+
+def _hash_code_paths(paths: Mapping[str, Path]) -> dict[str, str]:
+    _validate_code_path_keys(paths)
+    return {name: sha256_file(path) for name, path in sorted(paths.items())}
+
+
+def _verify_code_hashes(
+    paths: Mapping[str, Path],
+    expected: Mapping[str, str],
+) -> None:
+    actual = _hash_code_paths(paths)
+    if actual != dict(expected):
+        changed = sorted(
+            name
+            for name in set(actual) | set(expected)
+            if actual.get(name) != expected.get(name)
+        )
+        raise RuntimeError(
+            "audit code changed during computation: " + ", ".join(changed)
+        )
+
+
+def _manifest_code_paths(
+    code_sha256: Mapping[str, str],
+) -> dict[str, Path]:
+    paths: dict[str, Path] = {}
+    root = ROOT.resolve()
+    for name in code_sha256:
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts or name != relative.as_posix():
+            raise ValueError(f"invalid manifested code path: {name}")
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"manifested code path leaves repository: {name}") from exc
+        paths[name] = path
+    return paths
+
+
 def _lock_path(output: Path) -> Path:
     return output.with_name(f".{output.name}.lock")
 
@@ -232,7 +315,11 @@ def _load_json_object(path: Path) -> dict[str, Any]:
     return payload
 
 
-def load_validated_audit(output: str | Path) -> dict[str, Any]:
+def load_validated_audit(
+    output: str | Path,
+    *,
+    code_paths: Mapping[str, Path] | None = None,
+) -> dict[str, Any]:
     """Load an audit directory only when its manifest binds every artifact."""
 
     directory = Path(output)
@@ -264,6 +351,20 @@ def load_validated_audit(output: str | Path) -> dict[str, Any]:
         raise ValueError("audit and manifest status differ")
     if audit.get("input_sha256") != manifest.get("input_sha256"):
         raise ValueError("audit and manifest input hashes differ")
+    code_sha256 = manifest.get("code_sha256")
+    if not isinstance(code_sha256, dict) or not code_sha256:
+        raise ValueError("audit manifest code hashes are missing")
+    if audit.get("code_sha256") != code_sha256:
+        raise ValueError("audit and manifest code hashes differ")
+    selected_code_paths = dict(
+        code_paths or _manifest_code_paths(code_sha256)
+    )
+    if set(selected_code_paths) != set(code_sha256):
+        raise ValueError("loader code paths and manifested code hashes differ")
+    try:
+        _verify_code_hashes(selected_code_paths, code_sha256)
+    except RuntimeError as exc:
+        raise ValueError("audit code hash mismatch") from exc
     if audit.get("methods", {}) != manifest.get("methods", {}):
         raise ValueError("audit and manifest method metadata differ")
     if audit.get("qwe") != manifest.get("qwe"):
@@ -303,6 +404,8 @@ def publish_audit(
     method_metadata: Mapping[str, Any] | None = None,
     input_paths: Mapping[str, Path] | None = None,
     input_sha256: Mapping[str, str] | None = None,
+    code_paths: Mapping[str, Path] | None = None,
+    code_sha256: Mapping[str, str] | None = None,
     runtime_metadata: Mapping[str, Any] | None = None,
     qwe_convergence: Mapping[str, bool] | None = None,
 ) -> dict[str, Any]:
@@ -319,6 +422,12 @@ def publish_audit(
         raise ValueError("strict_comparison.json input path must match the formal run")
     if set(expected_hashes) != set(immutable_inputs):
         raise ValueError("input paths and SHA-256 records must have identical keys")
+    local_code_paths = dict(code_paths or _audit_code_paths())
+    expected_code_hashes = dict(
+        code_sha256 or _hash_code_paths(local_code_paths)
+    )
+    if set(expected_code_hashes) != set(local_code_paths):
+        raise ValueError("code paths and SHA-256 records must have identical keys")
 
     audit = build_reference_stability_audit(
         times=times,
@@ -330,6 +439,7 @@ def publish_audit(
         consecutive=consecutive,
     )
     audit["input_sha256"] = expected_hashes
+    audit["code_sha256"] = expected_code_hashes
     if method_metadata is not None:
         audit["methods"] = dict(method_metadata)
     if qwe_convergence is not None:
@@ -371,6 +481,7 @@ def publish_audit(
         )
         _atomic_write_json(staging / "reference_stability.json", audit)
         _verify_input_hashes(immutable_inputs, expected_hashes)
+        _verify_code_hashes(local_code_paths, expected_code_hashes)
         artifact_hashes = {
             name: {"sha256": sha256_file(staging / name)}
             for name in ARTIFACT_NAMES
@@ -380,13 +491,15 @@ def publish_audit(
             "status": audit["status"],
             "artifacts": artifact_hashes,
             "input_sha256": expected_hashes,
+            "code_sha256": expected_code_hashes,
             "methods": dict(method_metadata or {}),
             "qwe": audit["qwe"],
             "runtime": dict(runtime_metadata or {}),
         }
         _atomic_write_json(staging / "manifest.json", manifest)
         _verify_input_hashes(immutable_inputs, expected_hashes)
-        load_validated_audit(staging)
+        _verify_code_hashes(local_code_paths, expected_code_hashes)
+        load_validated_audit(staging, code_paths=local_code_paths)
         _fsync_directory(staging)
         if output.exists():
             raise FileExistsError(f"audit output already exists: {output}")
@@ -779,6 +892,8 @@ def run_audit(
     output = Path(output)
     input_paths = _audit_input_paths(run, case)
     input_hashes = _hash_inputs(input_paths)
+    code_paths = _audit_code_paths()
+    code_hashes = _hash_code_paths(code_paths)
     _validate_run_identity(run, input_hashes)
 
     reference = run / "reference"
@@ -891,6 +1006,8 @@ def run_audit(
         method_metadata=methods,
         input_paths=input_paths,
         input_sha256=input_hashes,
+        code_paths=code_paths,
+        code_sha256=code_hashes,
         runtime_metadata=_runtime_metadata(),
         qwe_convergence=qwe_convergence,
     )

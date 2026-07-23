@@ -109,7 +109,10 @@ def test_publish_audit_writes_json_and_npz_without_modifying_strict_json(tmp_pat
     assert manifest["schema"] == "atem3d.zhou2020.reference-stability-manifest/v1"
     assert manifest["status"] == "inconclusive"
     assert manifest["input_sha256"] == payload["input_sha256"]
+    assert manifest["code_sha256"] == payload["code_sha256"]
     assert manifest["methods"] == arguments["method_metadata"]
+    for relative_path, expected_hash in manifest["code_sha256"].items():
+        assert expected_hash == module.sha256_file(ROOT / relative_path)
     for name in ("reference_stability.json", "reference_stability.npz"):
         assert manifest["artifacts"][name]["sha256"] == module.sha256_file(
             output / name
@@ -202,7 +205,7 @@ def test_publish_audit_staged_postcondition_failure_is_not_publishable(
     _, arguments = _publisher_inputs(tmp_path)
     output = arguments["output"]
 
-    def fail_validation(path):
+    def fail_validation(path, **kwargs):
         raise RuntimeError("injected staged postcondition failure")
 
     monkeypatch.setattr(module, "load_validated_audit", fail_validation)
@@ -239,6 +242,62 @@ def test_publish_audit_post_input_hash_failure_is_not_publishable(
     assert calls == 2
     assert not output.exists()
     _assert_no_transaction_debris(output)
+
+
+def test_publish_audit_code_change_is_not_publishable(tmp_path, monkeypatch):
+    module = _load_script()
+    _, arguments = _publisher_inputs(tmp_path)
+    output = arguments["output"]
+    code = tmp_path / "code/audit_code.py"
+    code.parent.mkdir()
+    code.write_text("VALUE = 1\n", encoding="utf-8")
+    arguments["code_paths"] = {"audit_code.py": code}
+    arguments["code_sha256"] = {
+        "audit_code.py": module.sha256_file(code),
+    }
+    original = module._verify_code_hashes
+    calls = 0
+
+    def mutate_before_second_check(paths, expected):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            code.write_text("VALUE = 2\n", encoding="utf-8")
+        return original(paths, expected)
+
+    monkeypatch.setattr(
+        module,
+        "_verify_code_hashes",
+        mutate_before_second_check,
+    )
+
+    with pytest.raises(RuntimeError, match="audit code changed"):
+        module.publish_audit(**arguments)
+
+    assert calls == 2
+    assert not output.exists()
+    _assert_no_transaction_debris(output)
+
+
+def test_loader_rejects_local_code_hash_tampering(tmp_path):
+    module = _load_script()
+    _, arguments = _publisher_inputs(tmp_path)
+    output = arguments["output"]
+    code = tmp_path / "code/audit_code.py"
+    code.parent.mkdir()
+    code.write_text("VALUE = 1\n", encoding="utf-8")
+    code_paths = {"audit_code.py": code}
+    arguments["code_paths"] = code_paths
+    arguments["code_sha256"] = {
+        "audit_code.py": module.sha256_file(code),
+    }
+    module.publish_audit(**arguments)
+    module.load_validated_audit(output, code_paths=code_paths)
+
+    code.write_text("VALUE = 2\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="code hash mismatch"):
+        module.load_validated_audit(output, code_paths=code_paths)
 
 
 def test_atomic_json_rejects_nan_and_cleans_up_temporary_file(tmp_path):
@@ -431,6 +490,17 @@ def test_run_audit_loads_formal_inputs_and_aggregates_all_qwe_convergence(
         "fenicsx_ip_predictions.csv",
     }
     assert manifest["input_sha256"]["case.yaml"] == module.sha256_file(CASE)
+    assert manifest["code_sha256"] == audit["code_sha256"]
+    expected_code_paths = module._audit_code_paths()
+    assert set(manifest["code_sha256"]) == set(expected_code_paths)
+    assert {
+        "scripts/audit_zhou2020_reference_stability.py",
+        "src/atem3d/empymod_compare.py",
+        "src/atem3d/zhou2020_reference.py",
+        "src/atem3d/zhou2020_reference_stability.py",
+    } <= set(manifest["code_sha256"])
+    for relative_path, path in expected_code_paths.items():
+        assert manifest["code_sha256"][relative_path] == module.sha256_file(path)
     assert manifest["methods"]["qwe_convergence"] == audit["qwe"]
     assert manifest["methods"]["separate_total_qwe"]["srcpts"] == 17
     assert manifest["methods"]["separate_total_qwe"]["ftarg"] == module.QWE
