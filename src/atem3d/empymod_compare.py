@@ -47,22 +47,25 @@ def run_empymod_reference(survey: EmpymodSurvey, backend=None, **kwargs) -> np.n
     responses: list[np.ndarray] = []
     for location, component in _iter_receiver_components(survey):
         rec, mrec = _receiver_mapping(location, component, survey.coordinate_system)
+        component_signal, component_scale = _component_signal_and_scale(
+            component,
+            survey.signal,
+            survey.coordinate_system,
+        )
         response = backend.bipole(
             src=_source_mapping(survey.source_start, survey.source_end, survey.coordinate_system),
             rec=rec,
             depth=list(survey.depths),
             res=_resistivity_model(survey.resistivities),
             freqtime=times,
-            signal=survey.signal,
+            signal=component_signal,
             strength=survey.strength,
             mrec=mrec,
             verb=0,
             **kwargs,
         )
         values = np.asarray(response, dtype=float).reshape(-1)
-        if component in {"Bx", "By", "Bz"}:
-            values = mu_0 * values
-        values = _component_coordinate_factor(component, survey.coordinate_system) * values
+        values = component_scale * values
         responses.append(values)
     return np.column_stack(responses)
 
@@ -410,12 +413,27 @@ def _receiver_mapping(
     if component == "Hz" or component == "Bz":
         return [x, y, z, 0.0, magnetic_vertical_dip], True
     if component == "dBxdt":
-        return [x, y, z, 0.0, 0.0], "b"
+        return [x, y, z, 0.0, 0.0], True
     if component == "dBydt":
-        return [x, y, z, 90.0, 0.0], "b"
+        return [x, y, z, 90.0, 0.0], True
     if component == "dBzdt":
-        return [x, y, z, 0.0, magnetic_vertical_dip], "b"
+        return [x, y, z, 0.0, magnetic_vertical_dip], True
     raise ValueError("unsupported receiver component")
+
+
+def _component_signal_and_scale(
+    component: str,
+    survey_signal: int | None,
+    coordinate_system: str,
+) -> tuple[int | None, float]:
+    coordinate_factor = _component_coordinate_factor(component, coordinate_system)
+    if component in {"dBxdt", "dBydt", "dBzdt"}:
+        if survey_signal != -1:
+            raise ValueError("dB/dt receivers require a step-off survey (signal=-1)")
+        return 0, -mu_0 * coordinate_factor
+    if component in {"Bx", "By", "Bz"}:
+        return survey_signal, mu_0 * coordinate_factor
+    return survey_signal, coordinate_factor
 
 
 def _receiver_depth(z: float, coordinate_system: str) -> float:

@@ -51,7 +51,7 @@ def test_empymod_reference_maps_finite_wire_and_components_to_bipole_calls():
     assert backend.calls[2]["strength"] == 2.0
 
 
-def test_empymod_reference_maps_db_dt_to_mrec_b():
+def test_empymod_reference_maps_step_off_db_dt_to_impulse_h():
     backend = FakeEmpymod()
     survey = EmpymodSurvey(
         source_start=(-1.0, 0.0, 0.0),
@@ -63,9 +63,11 @@ def test_empymod_reference_maps_db_dt_to_mrec_b():
         resistivities=[1.0e8, 100.0],
     )
 
-    run_empymod_reference(survey, backend=backend)
+    data = run_empymod_reference(survey, backend=backend)
 
-    assert backend.calls[0]["mrec"] == "b"
+    assert backend.calls[0]["mrec"] is True
+    assert backend.calls[0]["signal"] == 0
+    np.testing.assert_allclose(data[:, 0], -mu_0)
 
 
 def test_empymod_reference_scales_magnetic_flux_density_from_h_field():
@@ -149,7 +151,7 @@ def test_empymod_reference_applies_z_up_axial_vector_signs_to_magnetic_component
 
     np.testing.assert_allclose(
         data[0],
-        [-1.0, -1.0, 1.0, -mu_0, -mu_0, mu_0, -1.0, -1.0, 1.0],
+        [-1.0, -1.0, 1.0, -mu_0, -mu_0, mu_0, mu_0, mu_0, -mu_0],
     )
 
 
