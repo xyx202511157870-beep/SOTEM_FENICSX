@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -81,7 +82,9 @@ def test_publish_audit_writes_json_and_npz_without_modifying_strict_json(tmp_pat
             "fenicsx_increment",
         }
     assert payload["status"] == "inconclusive"
-    assert payload["input_sha256"]["strict_comparison.json"]
+    assert payload["input_sha256"]["strict_comparison.json"] == hashlib.sha256(
+        before
+    ).hexdigest()
     assert not list((tmp_path / "audit").glob(".*.tmp"))
 
 
