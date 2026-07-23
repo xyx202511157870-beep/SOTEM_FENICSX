@@ -580,8 +580,22 @@ def _diffusion_refinement_box(config: PipelineConfig) -> dict[str, float]:
     """Return the late-diffusion mesh box implied by config."""
 
     base_radius = 1000.0
-    layer_depths, _layer_resistivities = _normalise_layer_model(config)
-    base_depth = max(500.0, max(layer_depths, default=0.0))
+    base_depth = 500.0
+    if str(config.polarization).strip().lower() == "cole-cole":
+        cole_layer_top = float(config.cole_layer_top)
+        cole_layer_bottom = float(config.cole_layer_bottom)
+        if math.isfinite(cole_layer_bottom):
+            if (
+                not math.isfinite(cole_layer_top)
+                or cole_layer_top < 0.0
+                or cole_layer_bottom <= cole_layer_top
+                or cole_layer_bottom > float(config.earth_depth)
+            ):
+                raise ValueError(
+                    "finite cole_layer_bottom must be greater than cole_layer_top "
+                    "and inside earth_depth for diffusion refinement"
+                )
+            base_depth = max(base_depth, cole_layer_bottom)
     base_top = 200.0
     factor = float(config.diffusion_refinement_factor)
     if factor > 0.0:
