@@ -743,6 +743,281 @@ def test_bundle_final_replace_failure_rolls_back_existing_target(
     _assert_no_transaction_debris(target)
 
 
+def test_bundle_keyboard_interrupt_during_replace_rolls_back_and_unlocks(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+    original_replace = os.replace
+
+    def interrupt_staging_publish(source, destination):
+        source = Path(source)
+        destination = Path(destination)
+        if ".staging-" in source.name and destination == target:
+            raise KeyboardInterrupt("injected publish interrupt")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(plotter.os, "replace", interrupt_staging_publish)
+
+    with pytest.raises(KeyboardInterrupt, match="publish interrupt"):
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    assert not plotter._bundle_lock_path(target).exists()
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_lock_collision_fails_closed_without_touching_target(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+    lock_path = plotter._bundle_lock_path(target)
+    other_payload = b'{"owner_token":"other","pid":999}\n'
+    lock_path.write_bytes(other_payload)
+
+    with pytest.raises(FileExistsError, match="publication lock"):
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    assert lock_path.read_bytes() == other_payload
+    _assert_no_transaction_debris(target)
+
+
+def test_two_publishers_are_serialized_by_exclusive_lock(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    first_owner = plotter._acquire_bundle_lock(target)
+    lock_record = json.loads(first_owner.payload.decode("utf-8"))
+
+    assert lock_record["owner_token"] == first_owner.owner_token
+    assert lock_record["pid"] == os.getpid()
+    with pytest.raises(FileExistsError, match="publication lock"):
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+            _bundle_metadata(),
+        )
+
+    plotter._release_bundle_lock(first_owner)
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        _bundle_metadata(),
+    )
+
+    assert not plotter._bundle_lock_path(target).exists()
+    plotter.load_validated_bundle(target)
+    _assert_no_transaction_debris(target)
+
+
+def test_owned_lock_is_not_deleted_after_other_owner_replaces_contents(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    lock_path = plotter._bundle_lock_path(target)
+    other_payload = b'{"owner_token":"replacement","pid":123}\n'
+
+    def replace_lock_owner(staging):
+        _write_minimal_bundle_artifacts(plotter, staging)
+        lock_path.write_bytes(other_payload)
+
+    plotter._publish_bundle(target, replace_lock_owner, _bundle_metadata())
+
+    assert lock_path.read_bytes() == other_payload
+    plotter.load_validated_bundle(target)
+    lock_path.unlink()
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_fsyncs_artifacts_manifest_lock_and_rename_directories(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    file_calls = []
+    directory_calls = []
+    original_file_fsync = plotter._fsync_file
+    original_directory_fsync = plotter._fsync_directory
+
+    def record_file(path):
+        file_calls.append(Path(path))
+        return original_file_fsync(path)
+
+    def record_directory(path):
+        directory_calls.append(Path(path))
+        return original_directory_fsync(path)
+
+    monkeypatch.setattr(plotter, "_fsync_file", record_file)
+    monkeypatch.setattr(plotter, "_fsync_directory", record_directory)
+
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        _bundle_metadata(),
+    )
+
+    assert {path.name for path in file_calls} >= set(
+        plotter.BUNDLE_ARTIFACT_NAMES
+    ) | {plotter.COMPLETION_MANIFEST_NAME, plotter._bundle_lock_path(target).name}
+    assert directory_calls.count(target.parent) >= 3
+    assert any(".staging-" in path.name for path in directory_calls)
+    assert not plotter._bundle_lock_path(target).exists()
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_keyboard_interrupt_after_fig03_cleans_stage_and_owned_lock(
+    tmp_path,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+
+    def interrupt_after_fig03(staging):
+        for index in range(1, 4):
+            (staging / f"fig0{index}.png").write_bytes(b"new")
+        raise KeyboardInterrupt("interrupt after fig03")
+
+    with pytest.raises(KeyboardInterrupt, match="after fig03"):
+        plotter._publish_bundle(
+            target,
+            interrupt_after_fig03,
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    assert not plotter._bundle_lock_path(target).exists()
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_stage_cleanup_retries_one_keyboard_interrupt(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+    original_rmtree = plotter.shutil.rmtree
+    interrupted = False
+
+    def interrupt_first_stage_cleanup(path, *args, **kwargs):
+        nonlocal interrupted
+        path = Path(path)
+        if ".staging-" in path.name and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt("cleanup interrupt")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(plotter.shutil, "rmtree", interrupt_first_stage_cleanup)
+
+    with pytest.raises(RuntimeError, match="builder failed"):
+        plotter._publish_bundle(
+            target,
+            lambda _staging: (_ for _ in ()).throw(
+                RuntimeError("builder failed")
+            ),
+            _bundle_metadata(),
+        )
+
+    assert interrupted is True
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    assert not plotter._bundle_lock_path(target).exists()
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_owned_lock_cleanup_retries_one_keyboard_interrupt(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    lock_path = plotter._bundle_lock_path(target)
+    original_unlink = Path.unlink
+    interrupted = False
+
+    def interrupt_first_lock_unlink(path, *args, **kwargs):
+        nonlocal interrupted
+        if Path(path) == lock_path and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt("lock cleanup interrupt")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", interrupt_first_lock_unlink)
+
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        _bundle_metadata(),
+    )
+
+    assert interrupted is True
+    assert not lock_path.exists()
+    plotter.load_validated_bundle(target)
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_artifact_fsync_interrupt_preserves_old_target_and_unlocks(
+    tmp_path,
+    monkeypatch,
+):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    target.mkdir()
+    (target / "old-generation.txt").write_text("old", encoding="utf-8")
+    original_fsync = plotter._fsync_file
+
+    def interrupt_staged_artifact(path):
+        path = Path(path)
+        if (
+            ".staging-" in path.parent.name
+            and path.name == plotter.BUNDLE_ARTIFACT_NAMES[0]
+        ):
+            raise KeyboardInterrupt("artifact fsync interrupt")
+        return original_fsync(path)
+
+    monkeypatch.setattr(plotter, "_fsync_file", interrupt_staged_artifact)
+
+    with pytest.raises(KeyboardInterrupt, match="artifact fsync"):
+        plotter._publish_bundle(
+            target,
+            lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+            _bundle_metadata(),
+        )
+
+    assert (target / "old-generation.txt").read_text(encoding="utf-8") == "old"
+    assert not plotter._bundle_lock_path(target).exists()
+    _assert_no_transaction_debris(target)
+
+
+def test_bundle_publish_never_deletes_legacy_parent_files(tmp_path):
+    plotter = _load_plotter()
+    target = tmp_path / "publication_bundle"
+    legacy = tmp_path / "fig01_model_contract.png"
+    legacy.write_bytes(b"legacy-parent-file")
+
+    plotter._publish_bundle(
+        target,
+        lambda staging: _write_minimal_bundle_artifacts(plotter, staging),
+        _bundle_metadata(),
+    )
+
+    assert legacy.read_bytes() == b"legacy-parent-file"
+    plotter.load_validated_bundle(target)
+
+
 def test_bundle_loader_rejects_tampered_artifact(tmp_path):
     plotter = _load_plotter()
     target = tmp_path / "publication_bundle"

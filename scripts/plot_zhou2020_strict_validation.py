@@ -6,7 +6,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
+import sys
 import tempfile
 from typing import Any, Callable
 
@@ -70,6 +72,15 @@ COLORS = {
     "separate_qwe": "#7A7A7A",
     "warning": "#A32A2A",
 }
+
+
+class _BundleLock:
+    __slots__ = ("path", "owner_token", "payload")
+
+    def __init__(self, path: Path, owner_token: str, payload: bytes) -> None:
+        self.path = path
+        self.owner_token = owner_token
+        self.payload = payload
 
 
 def _read_csv(path: Path) -> dict[str, np.ndarray]:
@@ -149,7 +160,8 @@ def _validated_total_field_time_grid(
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    Path(path).write_text(
+    path = Path(path)
+    encoded = (
         json.dumps(
             payload,
             ensure_ascii=False,
@@ -157,9 +169,137 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
             allow_nan=False,
             sort_keys=True,
         )
-        + "\n",
-        encoding="utf-8",
+        + "\n"
     )
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    _fsync_file(path)
+
+
+def _fsync_file(path: Path) -> None:
+    mode = "rb+" if os.name == "nt" else "rb"
+    with Path(path).open(mode) as stream:
+        os.fsync(stream.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory entries where the platform exposes directory fsync."""
+
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(Path(path), flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _bundle_lock_path(target: Path) -> Path:
+    target = Path(target)
+    return target.with_name(f".{target.name}.lock")
+
+
+def _acquire_bundle_lock(target: Path) -> _BundleLock:
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    path = _bundle_lock_path(target)
+    owner_token = secrets.token_hex(16)
+    payload = (
+        json.dumps(
+            {"owner_token": owner_token, "pid": os.getpid()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_BINARY", 0)
+    )
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError as exc:
+        raise FileExistsError(f"publication lock already exists: {path}") from exc
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("failed to write publication lock")
+            view = view[written:]
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        try:
+            if path.is_file() and path.read_bytes() == payload:
+                path.unlink()
+                _fsync_directory(path.parent)
+        except BaseException:
+            pass
+        raise
+    else:
+        os.close(descriptor)
+    try:
+        _fsync_file(path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        try:
+            if path.is_file() and path.read_bytes() == payload:
+                path.unlink()
+                _fsync_directory(path.parent)
+        except BaseException:
+            pass
+        raise
+    return _BundleLock(path=path, owner_token=owner_token, payload=payload)
+
+
+def _release_bundle_lock(owner: _BundleLock) -> None:
+    try:
+        current = owner.path.read_bytes()
+    except FileNotFoundError:
+        return
+    if current != owner.payload:
+        return
+    failure: tuple[type[BaseException], BaseException, Any] | None = None
+    for _ in range(2):
+        try:
+            owner.path.unlink()
+            failure = None
+            break
+        except FileNotFoundError:
+            failure = None
+            break
+        except BaseException:
+            failure = sys.exc_info()
+    if failure is not None:
+        _, error, traceback = failure
+        raise error.with_traceback(traceback)
+    _fsync_directory(owner.path.parent)
+
+
+def _remove_tree_with_retry(path: Path) -> None:
+    """Remove an owned transaction tree despite one asynchronous interruption."""
+
+    path = Path(path)
+    failure: tuple[type[BaseException], BaseException, Any] | None = None
+    for _ in range(2):
+        if not path.exists():
+            return
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except BaseException:
+            failure = sys.exc_info()
+    if failure is not None:
+        _, error, traceback = failure
+        raise error.with_traceback(traceback)
 
 
 def _completion_manifest(
@@ -311,18 +451,43 @@ def _replace_bundle_directory(staging: Path, target: Path) -> None:
                 raise NotADirectoryError(f"bundle target is not a directory: {target}")
             os.replace(target, backup)
             old_moved = True
+            _fsync_directory(target.parent)
         os.replace(staging, target)
         new_published = True
+        _fsync_directory(target.parent)
         load_validated_bundle(target)
-    except Exception:
-        if new_published and target.exists():
-            shutil.rmtree(target)
-        if old_moved and backup.exists():
-            os.replace(backup, target)
+    except BaseException:
+        rollback_failure: BaseException | None = None
+        try:
+            if (
+                target.exists()
+                and (new_published or not staging.exists())
+            ):
+                _remove_tree_with_retry(target)
+                _fsync_directory(target.parent)
+        except BaseException as exc:
+            rollback_failure = exc
+        try:
+            if old_moved and backup.exists():
+                os.replace(backup, target)
+                _fsync_directory(target.parent)
+        except BaseException as exc:
+            if rollback_failure is None:
+                rollback_failure = exc
+        if rollback_failure is not None:
+            raise RuntimeError("figure bundle rollback failed") from rollback_failure
         raise
     else:
-        if backup.exists():
-            shutil.rmtree(backup)
+        try:
+            if backup.exists():
+                _remove_tree_with_retry(backup)
+                _fsync_directory(target.parent)
+        except BaseException:
+            if backup.exists() and target.exists():
+                _remove_tree_with_retry(target)
+                os.replace(backup, target)
+                _fsync_directory(target.parent)
+            raise
 
 
 def _publish_bundle(
@@ -334,21 +499,51 @@ def _publish_bundle(
 
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(
-        tempfile.mkdtemp(
-            prefix=f".{target.name}.staging-",
-            dir=target.parent,
-        )
-    )
+    owner = _acquire_bundle_lock(target)
+    staging: Path | None = None
+    result: dict[str, Any] | None = None
+    failure: tuple[type[BaseException], BaseException, Any] | None = None
+    cleanup_failure: BaseException | None = None
     try:
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{target.name}.staging-",
+                dir=target.parent,
+            )
+        )
+        _fsync_directory(target.parent)
         build_artifacts(staging)
+        for name in BUNDLE_ARTIFACT_NAMES:
+            artifact = staging / name
+            if artifact.is_file():
+                _fsync_file(artifact)
+        _fsync_directory(staging)
         _write_completion_manifest(staging, metadata)
+        _fsync_file(staging / COMPLETION_MANIFEST_NAME)
+        _fsync_directory(staging)
         load_validated_bundle(staging)
         _replace_bundle_directory(staging, target)
-        return load_validated_bundle(target)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+        result = load_validated_bundle(target)
+    except BaseException:
+        failure = sys.exc_info()
+    try:
+        if staging is not None and staging.exists():
+            _remove_tree_with_retry(staging)
+            _fsync_directory(target.parent)
+    except BaseException as exc:
+        cleanup_failure = exc
+    try:
+        _release_bundle_lock(owner)
+    except BaseException as exc:
+        if cleanup_failure is None:
+            cleanup_failure = exc
+    if failure is not None:
+        _, error, traceback = failure
+        raise error.with_traceback(traceback)
+    if cleanup_failure is not None:
+        raise cleanup_failure
+    assert result is not None
+    return result
 
 
 def _save_all(fig: plt.Figure, stem: Path) -> None:
@@ -375,6 +570,9 @@ def _save_all(fig: plt.Figure, stem: Path) -> None:
             bbox_inches="tight",
             pil_kwargs={"compression": "tiff_lzw"},
         )
+        for suffix in EXPORT_FORMATS:
+            _fsync_file(staged_stem.with_suffix(suffix))
+        _fsync_directory(staging)
 
         for suffix in EXPORT_FORMATS:
             target = stem.with_suffix(suffix)
@@ -382,25 +580,33 @@ def _save_all(fig: plt.Figure, stem: Path) -> None:
                 backup = staging / f"previous{suffix}"
                 os.replace(target, backup)
                 backups[target] = backup
+        if backups:
+            _fsync_directory(stem.parent)
         try:
             for suffix in EXPORT_FORMATS:
                 target = stem.with_suffix(suffix)
                 os.replace(staged_stem.with_suffix(suffix), target)
                 published.append(target)
-        except Exception:
+            _fsync_directory(stem.parent)
+        except BaseException:
             for target in published:
                 target.unlink(missing_ok=True)
             for target, backup in backups.items():
                 if backup.exists():
                     os.replace(backup, target)
+            _fsync_directory(stem.parent)
             raise
-    except Exception:
+    except BaseException:
         for target, backup in backups.items():
             if backup.exists() and not target.exists():
                 os.replace(backup, target)
+        _fsync_directory(stem.parent)
         raise
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            _remove_tree_with_retry(staging)
+        finally:
+            _fsync_directory(stem.parent)
 
 
 def _finish_or_save(
