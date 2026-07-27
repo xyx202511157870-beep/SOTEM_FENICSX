@@ -1,4 +1,9 @@
-"""Grounded-wire source definitions."""
+"""Grounded-wire source definitions.
+
+中文说明：有限长接地导线按真实折线路径进入离散源项，不在近源区用中点
+电偶极近似。源端点、导线方向和电流正方向共同决定 Ex、Hz 与 dB/dt 的
+符号，跨软件比较前必须锁定这些约定。
+"""
 
 from __future__ import annotations
 

@@ -5,6 +5,10 @@ This script is intentionally self-contained.  The default run implements the
 stage-1 non-polarizable air-earth benchmark requested for DOLFINx/PETSc.  The
 Cole-Cole branch is opt-in.  The FEM time-domain memory variables use a gated
 Debye fit, while the production empymod reference evaluates Cole-Cole exactly.
+
+中文说明：主未知量采用 Nédélec 边元电场；接地源先求直流初场，再执行
+关断后的隐式时间推进。磁接收量必须明确区分 H（A/m）、B（T）和
+dB/dt（T/s），并保持源方向、坐标正方向与 empymod 参考完全一致。
 """
 
 from __future__ import annotations

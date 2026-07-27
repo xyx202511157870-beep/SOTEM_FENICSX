@@ -1,4 +1,9 @@
-"""Magnetic receiver recovery from cell-centered conduction currents."""
+"""Magnetic receiver recovery from cell-centered conduction currents.
+
+中文说明：本模块用离散传导电流恢复磁接收响应。Biot–Savart 叉乘顺序、
+接收点到积分点的方向和 H/B 单位必须统一；接收点靠近电流单元时还要通过
+高阶求积、局部加密或近奇异积分检查结果稳定性。
+"""
 
 from __future__ import annotations
 

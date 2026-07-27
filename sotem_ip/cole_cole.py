@@ -1,4 +1,9 @@
-"""Cole-Cole material functions."""
+"""Cole-Cole material functions.
+
+中文说明：参考实现使用明确的复电阻率/复电导率转换。rho0 表示直流
+电阻率；与 empymod 对比时必须同时固定傅里叶号约定、频率单位和
+Cole–Cole 参数定义。
+"""
 
 from __future__ import annotations
 

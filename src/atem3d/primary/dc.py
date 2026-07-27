@@ -1,4 +1,9 @@
-"""Analytic DC primary fields for simple grounded-source backgrounds."""
+"""Analytic DC primary fields for simple grounded-source backgrounds.
+
+中文说明：接地源 step-off 在关断前已达到直流稳态，因此时域正演不能
+从零场开始。这里生成背景直流电势、电场或电流密度，供总场初值及一次场
+校核使用；电极正负号由 A 端注入、B 端回流的约定决定。
+"""
 
 from __future__ import annotations
 

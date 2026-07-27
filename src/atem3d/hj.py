@@ -1,4 +1,9 @@
-"""H/J-form finite-volume assembly helpers for Debye IP prototypes."""
+"""H/J-form finite-volume assembly helpers for Debye IP prototypes.
+
+中文说明：H/J 形式分别保存磁场与电流密度自由度。离散旋度、材料质量
+矩阵和 Debye 历史项的方向约定必须一致，否则会直接造成磁场反号或晚期
+极化尾部错误。
+"""
 
 from __future__ import annotations
 

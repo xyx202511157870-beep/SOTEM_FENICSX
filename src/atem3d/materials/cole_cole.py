@@ -1,4 +1,9 @@
-"""Cole-Cole conductivity materials and Prony conversion helpers."""
+"""Cole-Cole conductivity materials and Prony conversion helpers.
+
+中文说明：这里以复电导率为计算目标，并显式区分直流电阻率 rho0 与
+高频电导率 sigma_inf。文献若给出复电阻率形式，应先严格取倒数，再拟合
+Debye/Prony 项，不能把充电率直接当作单个电导率增量。
+"""
 
 from __future__ import annotations
 

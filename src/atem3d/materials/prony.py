@@ -1,5 +1,9 @@
 """Scalar Debye/Prony conductivity material interface.
 
+中文说明：每个 Debye 项只保存上一个时间步的记忆状态，从而避免保存
+完整历史。下面的符号约定决定极化电流的正负号，必须与 Cole–Cole 拟合、
+直流初值和 Maxwell 方程保持一致。
+
 The time-domain convention is
 
     tau_k d chi_k / dt + chi_k = E

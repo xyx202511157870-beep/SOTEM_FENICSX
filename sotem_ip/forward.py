@@ -1,4 +1,9 @@
-"""Small analytical helpers used by examples and tests."""
+"""Small analytical helpers used by examples and tests.
+
+中文说明：这些解析函数用于量级、符号和回归检查，不代替三维 FEniCSx
+正演。比较曲线时应保留有符号原始响应，并只在参考信号高于数值门限的
+有效时间道计算相对误差。
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,9 @@
-"""Debye/Prony approximation for Cole-Cole conductivity."""
+"""Debye/Prony approximation for Cole-Cole conductivity.
+
+中文说明：用有限个正弛豫时间和权重逼近 Cole–Cole 频散。Debye 项数、
+拟合频带和约束共同控制晚期 IP 尾部；增加项数只能改善本构拟合，不能
+补偿错误的初值、源波形或磁场后处理。
+"""
 
 from __future__ import annotations
 

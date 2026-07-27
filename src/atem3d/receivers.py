@@ -1,4 +1,9 @@
-"""Receiver interpolation helpers."""
+"""Receiver interpolation helpers.
+
+中文说明：接收算子负责把离散场投影为仪器量。点电场、有限电偶极、H、
+B 和 dB/dt 不是同一物理量；输出前必须同时核对接收方向、面积/长度、
+mu0 换算、单位以及时间采样位置。
+"""
 
 from __future__ import annotations
 

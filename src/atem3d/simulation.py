@@ -1,4 +1,9 @@
-"""Implicit finite-volume TDEM solver with Debye IP memory variables."""
+"""Implicit finite-volume TDEM solver with Debye IP memory variables.
+
+中文说明：本模块实现隐式 TDEM 时间推进，并用 Debye 记忆变量表示极化
+历史。直流电导率、高频电导率和记忆变量初值必须采用同一 Cole–Cole
+约定；修改时间步时还应重新检查网格、外边界和接收响应的收敛性。
+"""
 
 from __future__ import annotations
 
