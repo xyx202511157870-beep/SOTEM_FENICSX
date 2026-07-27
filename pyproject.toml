@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "atem3d"
 version = "0.1.0"
-description = "Direct time-domain grounded-wire TDEM solver with Debye IP coupling."
-requires-python = ">=3.11"
+description = "基于FEniCSx的接地电性源三维时域TEM-IP正演与验证工具。"
+requires-python = ">=3.10"
 dependencies = [
   "numpy",
   "scipy",
