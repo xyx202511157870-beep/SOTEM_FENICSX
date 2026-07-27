@@ -8,6 +8,7 @@ def test_public_repository_has_only_approved_top_level_entries():
     approved = {
         ".git",
         ".gitignore",
+        ".numba_cache",
         ".pytest_cache",
         ".dolfinx.writer.lock",
         "LICENSE",

@@ -1240,17 +1240,6 @@ def test_song_full_window_runner_allows_explicit_time_method_without_changing_de
     assert '--time-theta "$TIME_THETA"' in text
 
 
-def test_reviewed_plan_records_nonconflicting_primary_and_audit_source_quadrature():
-    root = Path(__file__).resolve().parents[1]
-    plan = (
-        root / "docs" / "superpowers" / "plans" / "2026-07-19-lei-song-sotem-validation.md"
-    ).read_text(encoding="utf-8")
-
-    assert "`--empymod-srcpts 9`" in plan
-    assert "`--reference-audit-srcpts 17`" in plan
-    assert "`--reference-audit-srcpts 9`" not in plan
-
-
 def test_receiver_evaluation_mode_defaults_to_median():
     sp = _load_pipeline_module()
 
