@@ -40,3 +40,12 @@ def test_public_repository_contains_no_tracked_runtime_artifacts():
         if path.is_dir() and path.name in forbidden
     )
     assert found == []
+
+
+def test_public_documents_are_chinese_and_do_not_overclaim():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert "三维时域" in readme
+    assert "Cole–Cole" in readme
+    assert "不能替代现场工程验证" in readme
+    assert "保留所有权利" in license_text
