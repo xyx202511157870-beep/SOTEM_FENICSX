@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source /home/paidaxin/miniconda3/etc/profile.d/conda.sh
-conda activate fenicsx
+# 请先激活包含 DOLFINx/PETSc 的环境，也可通过 PYTHON 指定解释器。
+PYTHON=${PYTHON:-python}
 
 cd "$(dirname "$0")/.."
-python dolfinx/sotem_pipeline.py \
+"$PYTHON" dolfinx/sotem_pipeline.py \
   --workdir dolfinx/analyticdc_small_smoke \
   --force-mesh \
   --initial-dc-mode analytic_halfspace \

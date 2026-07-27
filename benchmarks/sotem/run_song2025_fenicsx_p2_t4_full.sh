@@ -9,8 +9,9 @@ fi
 OUTPUT_ROOT=$(realpath -m "$1")
 MESH_SEED_DIRECTORY=${2:-}
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-CONDA=${CONDA:-/home/paidaxin/miniconda3/bin/conda}
-PYTHON=${PYTHON:-/home/paidaxin/miniconda3/envs/fenicsx/bin/python}
+CONDA=${CONDA:-conda}
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-fenicsx}
+PYTHON=${PYTHON:-python}
 OUTPUT_INTERVAL_SUBSTEPS=${OUTPUT_INTERVAL_SUBSTEPS:-16}
 MIN_STEPS_BEFORE_FIRST_OBSERVATION=${MIN_STEPS_BEFORE_FIRST_OBSERVATION:-16}
 TIME_METHOD=${TIME_METHOD:-theta}
@@ -107,7 +108,7 @@ run_case() {
 
   echo "[$(date --iso-8601=seconds)] starting $case_name" >> "$OUTPUT_ROOT/runner.log"
   /usr/bin/time -v \
-    "$CONDA" run -n fenicsx --no-capture-output \
+    "$CONDA" run -n "$CONDA_ENV_NAME" --no-capture-output \
     python "$REPO_ROOT/dolfinx/sotem_pipeline.py" \
     --workdir "$workdir" \
     "${COMMON_ARGS[@]}" \

@@ -715,10 +715,11 @@ def check_environment(install_missing: bool = True, *, require_core: bool = True
     """Check interpreter, Python modules, and PETSc/HYPRE support."""
 
     print(f"[environment] Python executable: {sys.executable}", flush=True)
-    expected_prefix = "/home/paidaxin/miniconda3/envs/fenicsx"
-    if not sys.executable.startswith(expected_prefix):
+    expected_prefix = os.environ.get("ATEM3D_EXPECTED_PYTHON_PREFIX")
+    if expected_prefix and not sys.executable.startswith(expected_prefix):
         print(
-            "[environment] WARNING: this is not the requested fenicsx interpreter "
+            "[environment] WARNING: Python does not match "
+            "ATEM3D_EXPECTED_PYTHON_PREFIX "
             f"({expected_prefix}). Continue only if this is intentional.",
             flush=True,
         )

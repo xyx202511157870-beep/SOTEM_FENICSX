@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_public_repository_has_only_approved_top_level_entries():
     approved = {
         ".git",
+        ".gitattributes",
         ".gitignore",
         ".numba_cache",
         ".pytest_cache",
@@ -50,3 +51,29 @@ def test_public_documents_are_chinese_and_do_not_overclaim():
     assert "Cole–Cole" in readme
     assert "不能替代现场工程验证" in readme
     assert "保留所有权利" in license_text
+
+
+def test_public_text_files_do_not_contain_personal_absolute_paths():
+    text_suffixes = {".md", ".py", ".sh", ".toml", ".yaml", ".yml", ".json"}
+    windows_user_path = "C:" + "\\Users\\" + "paidaxin"
+    linux_user_path = "/home/" + "paidaxin/"
+    offending = []
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in text_suffixes:
+            continue
+        if any(part in {".git", ".pytest_cache", ".numba_cache"} for part in path.parts):
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if windows_user_path in text or linux_user_path in text:
+            offending.append(path.relative_to(ROOT).as_posix())
+
+    assert offending == []
+
+
+def test_shell_scripts_use_lf_line_endings():
+    offending = []
+    for path in ROOT.rglob("*.sh"):
+        if b"\r\n" in path.read_bytes():
+            offending.append(path.relative_to(ROOT).as_posix())
+
+    assert offending == []

@@ -143,11 +143,11 @@ SimPEG 0.24.0
 本机FEniCSx Conda环境：
 
 ```bash
-source /home/paidaxin/miniconda3/etc/profile.d/conda.sh
 conda activate fenicsx
 ```
 
-其他机器可以使用自己的FEniCSx环境，但应记录Python、DOLFINx、PETSc、
+若当前终端尚未初始化 Conda，请先按本机 Conda 安装位置执行其
+`etc/profile.d/conda.sh`。其他机器可以使用自己的FEniCSx环境，但应记录Python、DOLFINx、PETSc、
 MPI、Gmsh、empymod和SimPEG的确切版本。
 
 ## 6. 安装

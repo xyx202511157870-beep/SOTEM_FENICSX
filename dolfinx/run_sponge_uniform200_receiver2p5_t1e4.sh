@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source /home/paidaxin/miniconda3/etc/profile.d/conda.sh
-conda activate fenicsx
+# 请先激活包含 DOLFINx/PETSc 的环境，也可通过 PYTHON 指定解释器。
+PYTHON=${PYTHON:-python}
 
-cd /mnt/d/Doctor/codex_app/simpeg自编时域电性源瞬变电磁法求解
+cd "$(dirname "$0")/.."
 
-python dolfinx/sotem_pipeline.py \
+"$PYTHON" dolfinx/sotem_pipeline.py \
   --workdir dolfinx/sponge_uniform200_receiver2p5_t1e3_meshonly \
   --t-min 1e-5 \
   --t-max 1e-4 \
