@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Enforce the production DOLFINx SOTEM pipeline's second-order-only policy.
 
-The production finite-element solver uses N1curl order 2.  First-order
-Nedelec elements remain only in explicitly named legacy/reference files and
-must not be selectable through the production configuration or benchmark
+The production finite-element solver uses N1curl order 2. First-order
+Nédélec elements may remain only in explicitly named legacy/reference files
+and must not be selectable through the production configuration or benchmark
 wrapper.
 """
 
@@ -123,8 +123,6 @@ def _replace_explicit_first_order_tokens() -> list[Path]:
         for path in root.rglob("*"):
             if not path.is_file() or path.suffix.lower() not in suffixes:
                 continue
-            if path.name == "legacy_total_field_baseline.py":
-                continue
             text = path.read_text(encoding="utf-8")
             updated = text
             for old, new in replacements:
@@ -138,10 +136,8 @@ def _replace_explicit_first_order_tokens() -> list[Path]:
 def _apply_readme(text: str) -> str:
     if POLICY_MARKER in text:
         return text
-    appendix = """
-    if not text.endswith("\n"):
-        appendix += "\n"
-    appendix += (
+    separator = "" if text.endswith("\n") else "\n"
+    appendix = (
         "\n## 13. 二阶 Nédélec 生产策略\n\n"
         "DOLFINx 生产正演固定使用二阶 `N1curl(2)` 边元。"
         "`PipelineConfig.nedelec_order` 的默认值为 2，且生产配置若传入"
@@ -149,7 +145,7 @@ def _apply_readme(text: str) -> str:
         "`--nedelec-order=2`。一阶结果仅允许保留在明确标注的"
         "legacy/reference 文件中，不得作为正式坝体弱异常结论。\n"
     )
-    return text + appendix
+    return text + separator + appendix
 
 
 def _write_if_changed(path: Path, updated: str) -> bool:
@@ -162,6 +158,7 @@ def _write_if_changed(path: Path, updated: str) -> bool:
 
 def apply_policy() -> list[Path]:
     changed: list[Path] = []
+
     pipeline_text = PIPELINE.read_text(encoding="utf-8")
     if _write_if_changed(PIPELINE, _apply_pipeline(pipeline_text)):
         changed.append(PIPELINE)
@@ -194,9 +191,7 @@ def check_policy() -> None:
         "strict production validation": (
             "if nedelec_order != REQUIRED_NEDELEC_ORDER:"
         ),
-        "second-order function-space fallback": (
-            "else REQUIRED_NEDELEC_ORDER"
-        ),
+        "second-order function-space fallback": "else REQUIRED_NEDELEC_ORDER",
     }
     missing = [label for label, token in required.items() if token not in pipeline]
     if missing:
@@ -205,9 +200,7 @@ def check_policy() -> None:
     forbidden_pipeline = {
         "first-order dataclass default": "nedelec_order: int = 1",
         "mixed first/second validation": "nedelec_order not in {1, 2}",
-        "first-order function-space fallback": (
-            "if config is not None else 1"
-        ),
+        "first-order function-space fallback": "if config is not None else 1",
     }
     present = [
         label for label, token in forbidden_pipeline.items() if token in pipeline
@@ -226,8 +219,7 @@ def check_policy() -> None:
         re.compile(r"\bnedelec_order\s*=\s*1\b"),
     )
     offenders: list[str] = []
-    scan_roots = [ROOT / "benchmarks", ROOT / "examples"]
-    for root in scan_roots:
+    for root in (ROOT / "benchmarks", ROOT / "examples"):
         if not root.exists():
             continue
         for path in root.rglob("*"):
