@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+import re
 
 import numpy as np
 import pytest
@@ -47,6 +48,15 @@ class ConsistentFakeEmpymod:
         raise AssertionError(kwargs)
 
 
+class LegacyFakeEmpymod(ConsistentFakeEmpymod):
+    __version__ = "2.5.4"
+
+    def bipole(self, **kwargs):
+        if kwargs["mrec"] == "b":
+            raise AssertionError("legacy backend must not receive mrec='b'")
+        return super().bipole(**kwargs)
+
+
 def _survey(coordinate_system="depth_down"):
     z = 0.2 if coordinate_system == "depth_down" else -0.2
     source_z = 0.1 if coordinate_system == "depth_down" else -0.1
@@ -64,6 +74,12 @@ def _survey(coordinate_system="depth_down"):
     )
 
 
+def _version_tuple(version: str) -> tuple[int, int]:
+    match = re.match(r"^(\d+)\.(\d+)", version)
+    assert match is not None
+    return tuple(int(value) for value in match.groups())
+
+
 def test_magnetic6_reference_uses_native_b_and_impulse_audit():
     backend = ConsistentFakeEmpymod()
 
@@ -72,6 +88,7 @@ def test_magnetic6_reference_uses_native_b_and_impulse_audit():
         backend=backend,
         srcpts=7,
         recpts=1,
+        dbdt_reference="auto",
         audit_impulse=True,
         require_audit_pass=True,
     )
@@ -79,36 +96,92 @@ def test_magnetic6_reference_uses_native_b_and_impulse_audit():
     assert result.data.shape == (2, 1, 6)
     assert result.components == MAGNETIC6_COMPONENTS
     assert result.units == MAGNETIC6_UNITS
+    assert result.primary_dbdt_reference == "native_b"
+    assert result.empymod_version == "2.6.0"
     np.testing.assert_allclose(result.data[0, 0, :3], [10.0, 20.0, 30.0])
-    np.testing.assert_allclose(result.data[0, 0, 3:], [1.0e-9, 2.0e-9, 3.0e-9])
+    np.testing.assert_allclose(
+        result.data[0, 0, 3:], [1.0e-9, 2.0e-9, 3.0e-9]
+    )
+    assert result.audit["performed"] is True
     assert result.audit["passed"] is True
     assert len(backend.calls) == 9
     assert all(call["srcpts"] == 7 for call in backend.calls)
-    assert [call["mrec"] for call in backend.calls[:3]] == [True, True, True]
-    assert [call["mrec"] for call in backend.calls[3:6]] == ["b", "b", "b"]
-    assert [call["signal"] for call in backend.calls[3:6]] == [-1, -1, -1]
-    assert [call["mrec"] for call in backend.calls[6:9]] == [True, True, True]
-    assert [call["signal"] for call in backend.calls[6:9]] == [0, 0, 0]
+    assert sum(
+        call["mrec"] is True and call["signal"] == -1
+        for call in backend.calls
+    ) == 3
+    assert sum(
+        call["mrec"] == "b" and call["signal"] == -1
+        for call in backend.calls
+    ) == 3
+    assert sum(
+        call["mrec"] is True and call["signal"] == 0
+        for call in backend.calls
+    ) == 3
+
+
+def test_auto_falls_back_to_impulse_h_for_empymod_254():
+    backend = LegacyFakeEmpymod()
+
+    result = run_empymod_magnetic6_reference(
+        _survey(),
+        backend=backend,
+        dbdt_reference="auto",
+        audit_impulse=True,
+    )
+
+    assert result.primary_dbdt_reference == "impulse_h"
+    assert result.dbdt_native is None
+    assert result.dbdt_impulse is not None
+    assert result.audit["performed"] is False
+    assert result.audit["passed"] is True
+    assert result.audit["native_b_available"] is False
+    np.testing.assert_allclose(result.data[0, 0, :3], [10.0, 20.0, 30.0])
+    np.testing.assert_allclose(
+        result.data[0, 0, 3:], [1.0e-9, 2.0e-9, 3.0e-9]
+    )
+    assert len(backend.calls) == 6
+    assert all(call["mrec"] is True for call in backend.calls)
 
 
 def test_magnetic6_reference_applies_z_up_axial_vector_signs():
     result = run_empymod_magnetic6_reference(
         _survey("z_up"),
         backend=ConsistentFakeEmpymod(),
+        dbdt_reference="auto",
         audit_impulse=True,
     )
 
-    np.testing.assert_allclose(result.data[0, 0, :3], [-10.0, -20.0, 30.0])
-    np.testing.assert_allclose(result.data[0, 0, 3:], [-1.0e-9, -2.0e-9, 3.0e-9])
+    np.testing.assert_allclose(
+        result.data[0, 0, :3], [-10.0, -20.0, 30.0]
+    )
+    np.testing.assert_allclose(
+        result.data[0, 0, 3:], [-1.0e-9, -2.0e-9, 3.0e-9]
+    )
     assert result.audit["passed"] is True
 
 
 def test_native_b_requires_empymod_26_when_version_is_known():
-    backend = ConsistentFakeEmpymod()
-    backend.__version__ = "2.5.4"
-
     with pytest.raises(RuntimeError, match="empymod >= 2.6"):
-        run_empymod_magnetic6_reference(_survey(), backend=backend)
+        run_empymod_magnetic6_reference(
+            _survey(),
+            backend=LegacyFakeEmpymod(),
+            dbdt_reference="native_b",
+        )
+
+
+def test_required_crosscheck_fails_when_native_route_is_unavailable():
+    with pytest.raises(
+        RuntimeError,
+        match="cross-check was required but is unavailable",
+    ):
+        run_empymod_magnetic6_reference(
+            _survey(),
+            backend=LegacyFakeEmpymod(),
+            dbdt_reference="auto",
+            audit_impulse=True,
+            require_audit_pass=True,
+        )
 
 
 def test_build_magnetic6_survey_uses_each_unique_location_once():
@@ -138,9 +211,9 @@ def test_build_magnetic6_survey_uses_each_unique_location_once():
         (5.0, 10.0, -0.2),
     )
     assert len(survey.receiver_components) == 12
-    assert [component for _location, component in survey.receiver_components[:6]] == list(
-        MAGNETIC6_COMPONENTS
-    )
+    assert [
+        component for _location, component in survey.receiver_components[:6]
+    ] == list(MAGNETIC6_COMPONENTS)
 
 
 def test_receiver_line_coordinates_broadcast():
@@ -164,7 +237,12 @@ def test_npz_loader_reorders_components(tmp_path: Path):
     )
     data = np.arange(12.0).reshape(2, 1, 6)
     path = tmp_path / "numerical.npz"
-    np.savez(path, times=np.array([1.0, 2.0]), data=data, components=components)
+    np.savez(
+        path,
+        times=np.array([1.0, 2.0]),
+        data=data,
+        components=components,
+    )
 
     loaded = load_magnetic6_numerical(path)
 
@@ -184,7 +262,10 @@ def test_csv_loader_and_comparison(tmp_path: Path):
             writer.writerow(
                 {
                     "time_obs": time,
-                    **{component: index + 1.0 for index, component in enumerate(MAGNETIC6_COMPONENTS)},
+                    **{
+                        component: index + 1.0
+                        for index, component in enumerate(MAGNETIC6_COMPONENTS)
+                    },
                 }
             )
 
@@ -203,9 +284,10 @@ def test_csv_loader_and_comparison(tmp_path: Path):
     assert numerical.data.shape == (2, 1, 6)
     assert comparison["passed"] is True
     assert comparison["global_max_floor_relative_error"] == 0.0
+    assert comparison["primary_dbdt_reference"] == "native_b"
 
 
-def test_real_empymod_native_b_matches_impulse_h():
+def test_real_empymod_magnetic6_reference_is_finite():
     empymod = pytest.importorskip("empymod")
     survey = EmpymodSurvey(
         source_start=(-20.0, -7.0, 0.1),
@@ -225,10 +307,22 @@ def test_real_empymod_native_b_matches_impulse_h():
         backend=empymod,
         srcpts=3,
         recpts=1,
+        dbdt_reference="auto",
         audit_impulse=True,
         audit_tolerance=0.05,
         audit_floor_fraction=0.01,
     )
 
     assert np.all(np.isfinite(result.data))
-    assert result.audit["passed"] is True
+    version = _version_tuple(empymod.__version__)
+    if version >= (2, 6):
+        assert result.primary_dbdt_reference == "native_b"
+        assert result.dbdt_native is not None
+        assert result.audit["performed"] is True
+        assert result.audit["passed"] is True
+    else:
+        assert result.primary_dbdt_reference == "impulse_h"
+        assert result.dbdt_native is None
+        assert result.dbdt_impulse is not None
+        assert result.audit["performed"] is False
+        assert result.audit["passed"] is True
