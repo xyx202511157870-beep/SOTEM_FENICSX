@@ -193,6 +193,7 @@ def build_pipeline_argv(
         "--initial-dc-mode=fem",
         "--magnetic-receiver-mode=faraday_integrated",
         "--magnetic-dbdt-mode=curl",
+        "--nedelec-order=2",
         _float_flag("source-mesh-size", _SOURCE_MESH_SIZE_M[source_level]),
         _float_flag("receiver-mesh-size", _RECEIVER_MESH_SIZE_M[source_level]),
         f"--output-interval-substeps={_OUTPUT_INTERVAL_SUBSTEPS[time_level]}",

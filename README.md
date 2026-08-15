@@ -282,3 +282,7 @@ python -m pytest -q \
 - Cole–Cole/Debye参数约定；
 - 接收器物理量、方向和单位；
 - 独立验证方法。
+
+## 13. 二阶 Nédélec 生产策略
+
+DOLFINx 生产正演固定使用二阶 `N1curl(2)` 边元。`PipelineConfig.nedelec_order` 的默认值为 2，且生产配置若传入其他阶次会立即报错。公开基准包装器也显式传递`--nedelec-order=2`。一阶结果仅允许保留在明确标注的legacy/reference 文件中，不得作为正式坝体弱异常结论。
