@@ -199,11 +199,12 @@ class PointReceiver:
 
 @dataclass(frozen=True)
 class AverageReceiver:
-    """Average a field over a finite disk or a compact volume stencil.
+    """Average a vector field over a finite disk or compact volume stencil.
 
-    For ``disk_average`` the disk normal defaults to the vector component axis:
-    x-components use a y-z disk, y-components use an x-z disk, and z-components
-    use an x-y disk.  An explicit unit normal can be supplied for a rotated coil.
+    For ``disk_average`` the disk normal and measured vector direction default
+    to the component axis: x-components use a y-z disk, y-components use an
+    x-z disk, and z-components use an x-y disk.  Supplying ``normal`` models a
+    rotated coil and projects the vector field onto that physical normal.
     """
 
     location: tuple[float, float, float]
@@ -245,6 +246,12 @@ class AverageReceiver:
         )
 
     @property
+    def measurement_axis(self) -> np.ndarray:
+        if self.normal is not None:
+            return _normalised_vector(self.normal, "normal")
+        return _component_axis(self.component)
+
+    @property
     def sample_points(self) -> np.ndarray:
         points, _weights = self._quadrature()
         return points
@@ -259,6 +266,23 @@ class AverageReceiver:
         return int(self.sample_points.shape[0])
 
     def point_receivers(self) -> list[PointReceiver]:
+        """Return legacy scalar point receivers for axis-aligned diagnostics.
+
+        Rotated receivers require vector interpolation and therefore cannot be
+        represented as independent scalar point receivers without losing the
+        projection onto the physical coil normal.
+        """
+
+        if not np.allclose(
+            self.measurement_axis,
+            _component_axis(self.component),
+            rtol=0.0,
+            atol=1.0e-14,
+        ):
+            raise RuntimeError(
+                "rotated average receivers require vector sampling; "
+                "legacy scalar point_receivers() is not valid"
+            )
         return [
             PointReceiver(
                 location=tuple(float(value) for value in point),
@@ -281,28 +305,78 @@ class AverageReceiver:
     def sample_magnetic_field_vector(
         self, h_vectors: np.ndarray, mu: float = mu_0
     ) -> float:
+        """Project recovered H vectors onto the physical receiver normal.
+
+        A single ``(3,)`` vector is accepted for legacy Biot recovery paths that
+        currently evaluate only the receiver centre.  A ``(sample_count, 3)``
+        array performs the full finite-area quadrature.
+        """
+
         values = np.asarray(h_vectors, dtype=float)
-        if values.shape != (self.sample_count, 3):
-            raise ValueError("h_vectors must have shape (sample_count, 3)")
-        component_values = values[:, self.vector_component_index]
-        value = float(np.dot(self.sample_weights, component_values))
+        if values.shape == (3,):
+            mean_vector = values
+        elif values.shape == (self.sample_count, 3):
+            mean_vector = self.sample_weights @ values
+        else:
+            raise ValueError(
+                "h_vectors must have shape (3,) or (sample_count, 3)"
+            )
+        value = float(np.dot(mean_vector, self.measurement_axis))
         if self.component.startswith("B"):
             value *= mu
         return value
 
     def sample(self, mesh, e: np.ndarray, b: np.ndarray, mu: float = mu_0) -> float:
-        values = np.asarray(
-            [receiver.sample(mesh, e, b, mu) for receiver in self.point_receivers()],
-            dtype=float,
+        if self.component in _DBDT_COMPONENTS:
+            raise RuntimeError(
+                "dB/dt receivers require sample_time_derivative(); "
+                "a single magnetic state is insufficient"
+            )
+        if self.component in _EDGE_COMPONENTS:
+            vectors = _sample_vector_field(
+                mesh,
+                self.sample_points,
+                e,
+                ("Ex", "Ey", "Ez"),
+            )
+            return self._weighted_projection(vectors)
+
+        vectors = _sample_vector_field(
+            mesh,
+            self.sample_points,
+            b,
+            ("Fx", "Fy", "Fz"),
         )
-        return float(np.dot(self.sample_weights, values))
+        value = self._weighted_projection(vectors)
+        if self.component.startswith("H"):
+            value /= mu
+        return value
 
     def sample_hj(self, mesh, e: np.ndarray, h: np.ndarray, mu: float = mu_0) -> float:
-        values = np.asarray(
-            [receiver.sample_hj(mesh, e, h, mu) for receiver in self.point_receivers()],
-            dtype=float,
+        if self.component in _DBDT_COMPONENTS:
+            raise RuntimeError(
+                "dB/dt receivers require sample_hj_time_derivative(); "
+                "a single magnetic state is insufficient"
+            )
+        if self.component in _HJ_ELECTRIC_COMPONENTS:
+            vectors = _sample_vector_field(
+                mesh,
+                self.sample_points,
+                e,
+                ("Fx", "Fy", "Fz"),
+            )
+            return self._weighted_projection(vectors)
+
+        vectors = _sample_vector_field(
+            mesh,
+            self.sample_points,
+            h,
+            ("Ex", "Ey", "Ez"),
         )
-        return float(np.dot(self.sample_weights, values))
+        value = self._weighted_projection(vectors)
+        if self.component.startswith("B"):
+            value *= mu
+        return value
 
     def sample_time_derivative(
         self,
@@ -313,14 +387,17 @@ class AverageReceiver:
         dt: float,
         mu: float = mu_0,
     ) -> float:
-        values = np.asarray(
-            [
-                receiver.sample_time_derivative(mesh, e, b_new, b_old, dt, mu)
-                for receiver in self.point_receivers()
-            ],
-            dtype=float,
+        if self.component not in _DBDT_COMPONENTS:
+            return self.sample(mesh, e, b_new, mu)
+        if dt <= 0.0:
+            raise ValueError("dt must be positive")
+        vectors = _sample_vector_field(
+            mesh,
+            self.sample_points,
+            (np.asarray(b_new) - np.asarray(b_old)) / dt,
+            ("Fx", "Fy", "Fz"),
         )
-        return float(np.dot(self.sample_weights, values))
+        return self._weighted_projection(vectors)
 
     def sample_hj_time_derivative(
         self,
@@ -331,16 +408,21 @@ class AverageReceiver:
         dt: float,
         mu: float = mu_0,
     ) -> float:
-        values = np.asarray(
-            [
-                receiver.sample_hj_time_derivative(
-                    mesh, e, h_new, h_old, dt, mu
-                )
-                for receiver in self.point_receivers()
-            ],
-            dtype=float,
+        if self.component not in _DBDT_COMPONENTS:
+            return self.sample_hj(mesh, e, h_new, mu)
+        if dt <= 0.0:
+            raise ValueError("dt must be positive")
+        vectors = _sample_vector_field(
+            mesh,
+            self.sample_points,
+            mu * (np.asarray(h_new) - np.asarray(h_old)) / dt,
+            ("Ex", "Ey", "Ez"),
         )
-        return float(np.dot(self.sample_weights, values))
+        return self._weighted_projection(vectors)
+
+    def _weighted_projection(self, vectors: np.ndarray) -> float:
+        projections = np.asarray(vectors, dtype=float) @ self.measurement_axis
+        return float(np.dot(self.sample_weights, projections))
 
     def _quadrature(self) -> tuple[np.ndarray, np.ndarray]:
         center = np.asarray(self.location, dtype=float)
@@ -381,6 +463,20 @@ class AverageReceiver:
                 points.append(center + radial_distance * direction)
                 weights.append(radial_weight / _DISK_AZIMUTH_COUNT)
         return np.asarray(points, dtype=float), np.asarray(weights, dtype=float)
+
+
+def _sample_vector_field(mesh, locations, values, components) -> np.ndarray:
+    locations = np.asarray(locations, dtype=float)
+    if locations.ndim != 2 or locations.shape[1] != 3:
+        raise ValueError("locations must have shape (n_locations, 3)")
+    sampled = [
+        np.asarray(
+            mesh.get_interpolation_matrix(locations, component) @ values,
+            dtype=float,
+        ).reshape(-1)
+        for component in components
+    ]
+    return np.column_stack(sampled)
 
 
 def _component_axis(component: str) -> np.ndarray:
