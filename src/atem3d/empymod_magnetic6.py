@@ -5,16 +5,16 @@ This module defines one canonical six-channel magnetic contract:
     Hx, Hy, Hz              [A/m]
     dBxdt, dBydt, dBzdt     [T/s]
 
-The primary dB/dt reference uses empymod >= 2.6 with ``mrec='b'``.  For an
-ideal switch-off source, an independent audit is available through the time-
-derivative identity
+For an ideal switch-off source, dB/dt can be constructed from the magnetic
+H impulse response through
 
-    dB/dt = -mu0 * h_impulse,
+    dB/dt = -mu0 * H_impulse.
 
-where ``h_impulse`` is the magnetic H impulse response returned by empymod
-with ``mrec=True`` and ``signal=0``.  Comparing both routes catches receiver
-orientation, coordinate-system, sign, and unit mistakes before a numerical
-solver is accepted.
+This route is supported by empymod 2.5.4 and later. empymod 2.6 and later
+also expose a native magnetic-flux receiver mode (``mrec='b'``) that returns
+dB/dt directly. When available, the two routes can be cross-checked to catch
+receiver orientation, coordinate-system, sign, unit, and transform-setting
+errors before a numerical solver is accepted.
 """
 
 from __future__ import annotations
@@ -60,13 +60,15 @@ _DBDT_COMPONENTS = MAGNETIC6_COMPONENTS[3:]
 
 @dataclass(frozen=True)
 class MagneticSixReferenceResult:
-    """empymod six-component reference and independent dB/dt audit."""
+    """empymod six-component reference and optional dB/dt cross-check."""
 
     times: np.ndarray
     receiver_locations: tuple[tuple[float, float, float], ...]
     data: np.ndarray
-    dbdt_native: np.ndarray
+    dbdt_native: np.ndarray | None
     dbdt_impulse: np.ndarray | None
+    primary_dbdt_reference: str
+    empymod_version: str | None
     audit: dict[str, Any]
 
     @property
@@ -103,7 +105,9 @@ def build_magnetic6_survey_from_config(
     """Build a canonical six-component empymod survey from a YAML config."""
 
     if signal != -1:
-        raise ValueError("formal magnetic-six validation requires ideal switch-off signal=-1")
+        raise ValueError(
+            "formal magnetic-six validation requires ideal switch-off signal=-1"
+        )
     source_cfg = config.get("source")
     if not isinstance(source_cfg, dict):
         raise ValueError("config must contain a source mapping")
@@ -138,8 +142,12 @@ def receiver_locations_from_config(
         if not isinstance(line, dict):
             raise ValueError("receiver_line must be a mapping")
         x_values = _as_coordinate_sequence(line.get("x"), "receiver_line.x")
-        y_values = _broadcast_coordinate(line.get("y"), len(x_values), "receiver_line.y")
-        z_values = _broadcast_coordinate(line.get("z"), len(x_values), "receiver_line.z")
+        y_values = _broadcast_coordinate(
+            line.get("y"), len(x_values), "receiver_line.y"
+        )
+        z_values = _broadcast_coordinate(
+            line.get("z"), len(x_values), "receiver_line.z"
+        )
         return tuple(
             (float(x), float(y), float(z))
             for x, y, z in zip(x_values, y_values, z_values)
@@ -168,7 +176,11 @@ def receiver_locations_from_config(
         if isinstance(receiver, dict):
             raw = receiver.get("location")
             if raw is None:
-                raw = (receiver.get("x"), receiver.get("y"), receiver.get("z"))
+                raw = (
+                    receiver.get("x"),
+                    receiver.get("y"),
+                    receiver.get("z"),
+                )
         else:
             raw = receiver
         return (_validated_location(raw),)
@@ -182,7 +194,7 @@ def run_empymod_magnetic6_reference(
     backend=None,
     srcpts: int = 9,
     recpts: int = 1,
-    dbdt_reference: str = "native_b",
+    dbdt_reference: str = "auto",
     audit_impulse: bool = True,
     audit_tolerance: float = 0.01,
     audit_floor_fraction: float = 0.01,
@@ -191,14 +203,9 @@ def run_empymod_magnetic6_reference(
 ) -> MagneticSixReferenceResult:
     """Compute Hx/Hy/Hz and dBxdt/dBydt/dBzdt with empymod.
 
-    Parameters
-    ----------
-    dbdt_reference
-        ``'native_b'`` uses empymod's native ``mrec='b'`` response.  The
-        compatibility option ``'impulse_h'`` uses ``-mu0*H_impulse``.
-    audit_impulse
-        Also compute the independent impulse-H route and compare it against
-        the native dB/dt result.
+    ``auto`` uses native ``mrec='b'`` on empymod >= 2.6 and otherwise falls
+    back to ``-mu0*H_impulse``. ``native_b`` requires empymod >= 2.6, while
+    ``impulse_h`` works with empymod 2.5.4 and later.
     """
 
     if survey.signal != -1:
@@ -208,8 +215,10 @@ def run_empymod_magnetic6_reference(
         raise ValueError("survey.times must be a non-empty 1D array")
     if np.any(~np.isfinite(times)) or np.any(times <= 0.0):
         raise ValueError("survey.times must be finite and positive")
-    if dbdt_reference not in {"native_b", "impulse_h"}:
-        raise ValueError("dbdt_reference must be 'native_b' or 'impulse_h'")
+    if dbdt_reference not in {"auto", "native_b", "impulse_h"}:
+        raise ValueError(
+            "dbdt_reference must be 'auto', 'native_b', or 'impulse_h'"
+        )
     if srcpts <= 0 or recpts <= 0:
         raise ValueError("srcpts and recpts must be positive")
     if audit_tolerance <= 0.0 or audit_floor_fraction <= 0.0:
@@ -218,8 +227,17 @@ def run_empymod_magnetic6_reference(
     if backend is None:
         import empymod as backend  # noqa: PLC0415
 
-    _require_empymod_26_for_native_b(backend, dbdt_reference, audit_impulse)
-    locations = tuple(_validated_location(value) for value in survey.receiver_locations)
+    version_text = _backend_version_text(backend)
+    native_available = _native_b_available(backend)
+    primary_reference = _resolve_dbdt_reference(
+        requested=dbdt_reference,
+        native_available=native_available,
+        version_text=version_text,
+    )
+
+    locations = tuple(
+        _validated_location(value) for value in survey.receiver_locations
+    )
     if not locations:
         raise ValueError("at least one receiver location is required")
 
@@ -235,8 +253,12 @@ def run_empymod_magnetic6_reference(
     resistivity_model = _resistivity_model(survey.resistivities)
 
     h_data = np.zeros((times.size, len(locations), 3), dtype=float)
-    native_dbdt = np.zeros_like(h_data)
-    impulse_dbdt = np.zeros_like(h_data) if audit_impulse or dbdt_reference == "impulse_h" else None
+    need_native = primary_reference == "native_b" or (
+        bool(audit_impulse) and native_available
+    )
+    need_impulse = primary_reference == "impulse_h" or bool(audit_impulse)
+    native_dbdt = np.zeros_like(h_data) if need_native else None
+    impulse_dbdt = np.zeros_like(h_data) if need_impulse else None
 
     for location_index, location in enumerate(locations):
         for component_index, component in enumerate(_H_COMPONENTS):
@@ -260,9 +282,8 @@ def run_empymod_magnetic6_reference(
                 component,
                 survey.coordinate_system,
             )
-            h_data[:, location_index, component_index] = scale * _real_time_values(
-                response,
-                component,
+            h_data[:, location_index, component_index] = (
+                scale * _real_time_values(response, component)
             )
 
         for component_index, component in enumerate(_DBDT_COMPONENTS):
@@ -275,20 +296,21 @@ def run_empymod_magnetic6_reference(
                 component,
                 survey.coordinate_system,
             )
-            native = backend.bipole(
-                src=source,
-                rec=rec,
-                depth=list(survey.depths),
-                res=resistivity_model,
-                freqtime=times,
-                signal=-1,
-                strength=survey.strength,
-                mrec="b",
-                **call_kwargs,
-            )
-            native_dbdt[:, location_index, component_index] = (
-                coordinate_factor * _real_time_values(native, component)
-            )
+            if native_dbdt is not None:
+                native = backend.bipole(
+                    src=source,
+                    rec=rec,
+                    depth=list(survey.depths),
+                    res=resistivity_model,
+                    freqtime=times,
+                    signal=-1,
+                    strength=survey.strength,
+                    mrec="b",
+                    **call_kwargs,
+                )
+                native_dbdt[:, location_index, component_index] = (
+                    coordinate_factor * _real_time_values(native, component)
+                )
 
             if impulse_dbdt is not None:
                 impulse = backend.bipole(
@@ -313,17 +335,34 @@ def run_empymod_magnetic6_reference(
         impulse_dbdt,
         tolerance=float(audit_tolerance),
         floor_fraction=float(audit_floor_fraction),
+        empymod_version=version_text,
+        primary_reference=primary_reference,
+        native_available=native_available,
+        requested=bool(audit_impulse),
     )
-    if require_audit_pass and not bool(audit["passed"]):
-        raise RuntimeError(
-            "empymod native dB/dt and -mu0*H-impulse routes failed the "
-            f"cross-check: max_error={audit['global_max_floor_relative_error']:.6g}, "
-            f"tolerance={audit_tolerance:.6g}"
-        )
+    if require_audit_pass:
+        if not bool(audit["performed"]):
+            raise RuntimeError(
+                "empymod dB/dt cross-check was required but is unavailable: "
+                + str(audit.get("reason", "unknown reason"))
+            )
+        if not bool(audit["passed"]):
+            raise RuntimeError(
+                "empymod native dB/dt and -mu0*H-impulse routes failed the "
+                f"cross-check: max_error="
+                f"{audit['global_max_floor_relative_error']:.6g}, "
+                f"tolerance={audit_tolerance:.6g}"
+            )
 
-    selected_dbdt = (
-        native_dbdt if dbdt_reference == "native_b" else np.asarray(impulse_dbdt)
-    )
+    if primary_reference == "native_b":
+        if native_dbdt is None:  # pragma: no cover
+            raise RuntimeError("native dB/dt reference was not computed")
+        selected_dbdt = native_dbdt
+    else:
+        if impulse_dbdt is None:  # pragma: no cover
+            raise RuntimeError("impulse-H dB/dt reference was not computed")
+        selected_dbdt = impulse_dbdt
+
     data = np.concatenate([h_data, selected_dbdt], axis=2)
     return MagneticSixReferenceResult(
         times=times.copy(),
@@ -331,6 +370,8 @@ def run_empymod_magnetic6_reference(
         data=data,
         dbdt_native=native_dbdt,
         dbdt_impulse=impulse_dbdt,
+        primary_dbdt_reference=primary_reference,
+        empymod_version=version_text,
         audit=audit,
     )
 
@@ -351,10 +392,17 @@ def load_magnetic6_numerical(path: str | Path) -> MagneticSixNumericalData:
             if "data" not in archive:
                 raise ValueError("NPZ must contain 'data'")
             data = np.asarray(archive["data"], dtype=float)
-            components = _decoded_components(archive.get("components"))
+            raw_components = (
+                archive["components"] if "components" in archive else None
+            )
+            components = _decoded_components(raw_components)
             locations = _npz_locations(archive)
         data = _canonicalize_data(data, components)
-        return MagneticSixNumericalData(times=times, data=data, receiver_locations=locations)
+        return MagneticSixNumericalData(
+            times=times,
+            data=data,
+            receiver_locations=locations,
+        )
 
     if suffix == ".csv":
         with path.open("r", encoding="utf-8", newline="") as handle:
@@ -364,9 +412,15 @@ def load_magnetic6_numerical(path: str | Path) -> MagneticSixNumericalData:
         time_key = "time_obs" if "time_obs" in rows[0] else "time_s"
         if time_key not in rows[0]:
             raise ValueError("CSV must contain time_obs or time_s")
-        missing = [component for component in MAGNETIC6_COMPONENTS if component not in rows[0]]
+        missing = [
+            component
+            for component in MAGNETIC6_COMPONENTS
+            if component not in rows[0]
+        ]
         if missing:
-            raise ValueError("CSV is missing magnetic-six columns: " + ", ".join(missing))
+            raise ValueError(
+                "CSV is missing magnetic-six columns: " + ", ".join(missing)
+            )
         times = np.asarray([float(row[time_key]) for row in rows], dtype=float)
         data = np.asarray(
             [
@@ -430,16 +484,20 @@ def compare_magnetic6(
         }
 
     return {
-        "artifact_schema": "atem3d.empymod_magnetic6_validation.v1",
+        "artifact_schema": "atem3d.empymod_magnetic6_validation.v2",
         "components": list(MAGNETIC6_COMPONENTS),
         "units": list(MAGNETIC6_UNITS),
         "n_times": int(reference.times.size),
         "n_locations": int(reference.data.shape[1]),
+        "empymod_version": reference.empymod_version,
+        "primary_dbdt_reference": reference.primary_dbdt_reference,
         "tolerance": float(tolerance),
         "floor_fraction": float(floor_fraction),
         "global_max_floor_relative_error": global_max,
         "component_metrics": component_metrics,
-        "passed": bool(all(item["passed"] for item in component_metrics.values())),
+        "passed": bool(
+            all(item["passed"] for item in component_metrics.values())
+        ),
         "dbdt_reference_audit": reference.audit,
     }
 
@@ -451,7 +509,7 @@ def write_magnetic6_artifacts(
     reference: MagneticSixReferenceResult,
     comparison: dict[str, Any],
 ) -> None:
-    """Write CSV, JSON, and diagnostic plots for the six-component validation."""
+    """Write CSV, JSON, and diagnostic plots for six-component validation."""
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -472,10 +530,18 @@ def write_magnetic6_artifacts(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for time_index, time in enumerate(reference.times):
-            for location_index, location in enumerate(reference.receiver_locations):
-                for component_index, component in enumerate(MAGNETIC6_COMPONENTS):
-                    pred = float(numerical.data[time_index, location_index, component_index])
-                    ref = float(reference.data[time_index, location_index, component_index])
+            for location_index, location in enumerate(
+                reference.receiver_locations
+            ):
+                for component_index, component in enumerate(
+                    MAGNETIC6_COMPONENTS
+                ):
+                    pred = float(
+                        numerical.data[time_index, location_index, component_index]
+                    )
+                    ref = float(
+                        reference.data[time_index, location_index, component_index]
+                    )
                     writer.writerow(
                         {
                             "time_obs": f"{float(time):.16g}",
@@ -492,32 +558,67 @@ def write_magnetic6_artifacts(
                     )
 
     (output_dir / "magnetic6_error_summary.json").write_text(
-        json.dumps(comparison, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+        json.dumps(comparison, ensure_ascii=False, indent=2, allow_nan=False)
+        + "\n",
         encoding="utf-8",
     )
     (output_dir / "empymod_dbdt_crosscheck.json").write_text(
-        json.dumps(reference.audit, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+        json.dumps(reference.audit, ensure_ascii=False, indent=2, allow_nan=False)
+        + "\n",
         encoding="utf-8",
     )
     _write_plots(output_dir, numerical, reference)
 
 
 def _dbdt_audit(
-    native: np.ndarray,
+    native: np.ndarray | None,
     impulse: np.ndarray | None,
     *,
     tolerance: float,
     floor_fraction: float,
+    empymod_version: str | None,
+    primary_reference: str,
+    native_available: bool,
+    requested: bool,
 ) -> dict[str, Any]:
-    if impulse is None:
+    base = {
+        "empymod_version": empymod_version,
+        "primary_dbdt_reference": primary_reference,
+        "native_b_available": bool(native_available),
+        "requested": bool(requested),
+        "tolerance": tolerance,
+        "floor_fraction": floor_fraction,
+    }
+    if not requested:
         return {
+            **base,
             "performed": False,
             "passed": True,
-            "tolerance": tolerance,
-            "floor_fraction": floor_fraction,
+            "reason": "cross-check disabled by caller",
             "global_max_floor_relative_error": 0.0,
             "component_metrics": {},
         }
+    if native is None:
+        return {
+            **base,
+            "performed": False,
+            "passed": True,
+            "reason": (
+                "native mrec='b' dB/dt is unavailable; empymod >= 2.6 is required"
+            ),
+            "global_max_floor_relative_error": 0.0,
+            "component_metrics": {},
+        }
+    if impulse is None:
+        return {
+            **base,
+            "performed": False,
+            "passed": True,
+            "reason": "impulse-H reference was not computed",
+            "global_max_floor_relative_error": 0.0,
+            "component_metrics": {},
+        }
+
     metrics: dict[str, Any] = {}
     global_max = 0.0
     for index, component in enumerate(_DBDT_COMPONENTS):
@@ -543,10 +644,9 @@ def _dbdt_audit(
             "passed": bool(max_error <= tolerance),
         }
     return {
+        **base,
         "performed": True,
         "identity": "native mrec='b' switch-off dB/dt versus -mu0*H impulse",
-        "tolerance": tolerance,
-        "floor_fraction": floor_fraction,
         "global_max_floor_relative_error": global_max,
         "component_metrics": metrics,
         "passed": bool(all(item["passed"] for item in metrics.values())),
@@ -563,11 +663,10 @@ def _write_plots(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    for group_name, component_indices in (
-        ("H3", range(0, 3)),
-        ("dBdt3", range(3, 6)),
-    ):
+    groups = (("H3", (0, 1, 2)), ("dBdt3", (3, 4, 5)))
+    for group_name, component_indices in groups:
         fig, axes = plt.subplots(3, 1, figsize=(8, 10), constrained_layout=True)
+        first_component = component_indices[0]
         for axis, component_index in zip(axes, component_indices):
             component = MAGNETIC6_COMPONENTS[component_index]
             for location_index in range(reference.data.shape[1]):
@@ -575,22 +674,34 @@ def _write_plots(
                     reference.times,
                     np.abs(reference.data[:, location_index, component_index]),
                     "-",
-                    label=f"empymod loc{location_index}" if component_index == component_indices.start else None,
+                    label=(
+                        f"empymod loc{location_index}"
+                        if component_index == first_component
+                        else None
+                    ),
                 )
                 axis.loglog(
                     numerical.times,
                     np.abs(numerical.data[:, location_index, component_index]),
                     "o",
                     markersize=3,
-                    label=f"numerical loc{location_index}" if component_index == component_indices.start else None,
+                    label=(
+                        f"numerical loc{location_index}"
+                        if component_index == first_component
+                        else None
+                    ),
                 )
-            axis.set_title(f"{component} [{MAGNETIC6_UNITS[component_index]}]")
+            axis.set_title(
+                f"{component} [{MAGNETIC6_UNITS[component_index]}]"
+            )
             axis.set_xlabel("time [s]")
             axis.grid(True, which="both", alpha=0.3)
         handles, labels = axes[0].get_legend_handles_labels()
         if handles:
             axes[0].legend(handles, labels)
-        fig.savefig(output_dir / f"magnetic6_{group_name}_comparison.png", dpi=180)
+        fig.savefig(
+            output_dir / f"magnetic6_{group_name}_comparison.png", dpi=180
+        )
         plt.close(fig)
 
 
@@ -602,16 +713,26 @@ def _canonicalize_data(
     if array.ndim == 2:
         array = array[:, None, :]
     if array.ndim != 3:
-        raise ValueError("numerical data must have shape (time, 6) or (time, location, 6)")
+        raise ValueError(
+            "numerical data must have shape (time, 6) or (time, location, 6)"
+        )
     if components is None:
         if array.shape[-1] != 6:
-            raise ValueError("NPZ without components must have six channels in canonical order")
+            raise ValueError(
+                "NPZ without components must have six channels in canonical order"
+            )
         return array
     if len(components) != array.shape[-1]:
         raise ValueError("components length does not match data channels")
-    missing = [component for component in MAGNETIC6_COMPONENTS if component not in components]
+    missing = [
+        component
+        for component in MAGNETIC6_COMPONENTS
+        if component not in components
+    ]
     if missing:
-        raise ValueError("NPZ is missing magnetic-six components: " + ", ".join(missing))
+        raise ValueError(
+            "NPZ is missing magnetic-six components: " + ", ".join(missing)
+        )
     indices = [components.index(component) for component in MAGNETIC6_COMPONENTS]
     return array[..., indices]
 
@@ -626,7 +747,9 @@ def _decoded_components(raw) -> tuple[str, ...] | None:
     )
 
 
-def _npz_locations(archive) -> tuple[tuple[float, float, float], ...] | None:
+def _npz_locations(
+    archive,
+) -> tuple[tuple[float, float, float], ...] | None:
     if "receiver_locations" not in archive:
         return None
     locations = np.asarray(archive["receiver_locations"], dtype=float)
@@ -649,25 +772,44 @@ def _real_time_values(response, component: str) -> np.ndarray:
     return np.asarray(values, dtype=float).reshape(-1)
 
 
-def _require_empymod_26_for_native_b(
-    backend,
-    dbdt_reference: str,
-    audit_impulse: bool,
-) -> None:
-    if dbdt_reference != "native_b" and not audit_impulse:
-        return
+def _backend_version_text(backend) -> str | None:
     version = getattr(backend, "__version__", None)
+    return None if version is None else str(version)
+
+
+def _backend_version_tuple(backend) -> tuple[int, int] | None:
+    version = _backend_version_text(backend)
     if version is None:
-        return
-    match = re.match(r"^(\d+)\.(\d+)", str(version))
+        return None
+    match = re.match(r"^(\d+)\.(\d+)", version)
     if match is None:
-        return
-    major, minor = (int(value) for value in match.groups())
-    if (major, minor) < (2, 6):
+        return None
+    return tuple(int(value) for value in match.groups())
+
+
+def _native_b_available(backend) -> bool:
+    version = _backend_version_tuple(backend)
+    if version is None:
+        return True
+    return version >= (2, 6)
+
+
+def _resolve_dbdt_reference(
+    *,
+    requested: str,
+    native_available: bool,
+    version_text: str | None,
+) -> str:
+    if requested == "auto":
+        return "native_b" if native_available else "impulse_h"
+    if requested == "native_b" and not native_available:
+        found = version_text or "unknown"
         raise RuntimeError(
-            "native mrec='b' dB/dt validation requires empymod >= 2.6; "
-            f"found {version}"
+            "native mrec='b' dB/dt validation requires "
+            f"empymod >= 2.6; found {found}. "
+            "Use dbdt_reference='impulse_h' or 'auto'."
         )
+    return requested
 
 
 def _as_coordinate_sequence(value, name: str) -> list[float]:
