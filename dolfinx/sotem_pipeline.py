@@ -86,6 +86,15 @@ _FORWARD_ARTIFACT_IDENTITY_KEYS = (
 )
 LOCAL_MESH_MAX_ASPECT = 100.0
 REQUIRED_NEDELEC_ORDER = 2
+MAGNETIC6_COMPONENTS = (
+    "Hx",
+    "Hy",
+    "Hz",
+    "dBxdt",
+    "dBydt",
+    "dBzdt",
+)
+MAGNETIC6_UNITS = ("A/m", "A/m", "A/m", "T/s", "T/s", "T/s")
 _CHECKOUT_SHARED_MODULES: dict[str, Any] = {}
 
 
@@ -162,6 +171,7 @@ class PipelineConfig:
     initial_dc_mode: str = "fem"  # fem, analytic_halfspace
     magnetic_receiver_mode: str = "faraday_integrated"  # curl, biot_current, biot_ohmic, faraday_integrated
     magnetic_dbdt_mode: str = "curl"  # curl, biot_rate
+    magnetic_output_contract: str = "legacy"  # legacy, magnetic6
     magnetic_recovery_quadrature_degree: int = 8
     magnetic_recovery_quadrature_audit_degrees: tuple[int, ...] = ()
     receiver_evaluation_mode: str = "median"  # first_cell, mean, median, nearest_center, shallowest
@@ -254,6 +264,9 @@ class PipelineConfig:
 
     def output_npz(self) -> Path:
         return self.workdir / "verification_data.npz"
+
+    def magnetic6_output_npz(self) -> Path:
+        return self.workdir / "magnetic6_numerical.npz"
 
     def forward_partial_npz(self) -> Path:
         return self.workdir / "forward_partial.npz"
@@ -5584,7 +5597,13 @@ def evaluate_receivers(E, dbdt, msh, config: PipelineConfig):
         sample_centers=center_samples,
         sample_points=point_samples,
     )
-    rec = {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "dBzdt": float(dbdt_val[2])}
+    rec = {
+        "Ex": float(e_val[0]),
+        "Ey": float(e_val[1]),
+        "dBxdt": float(dbdt_val[0]),
+        "dBydt": float(dbdt_val[1]),
+        "dBzdt": float(dbdt_val[2]),
+    }
     rec.update(_receiver_candidate_count_stats(candidate_counts))
     rec.update(candidate_geometry_stats)
     return rec
@@ -6020,6 +6039,27 @@ def _write_receiver_reference_error_artifacts(workdir: Path, receiver_rows: list
 
 
 def _forward_components(config: PipelineConfig) -> list[str]:
+    # MAGNETIC6_PRODUCTION_COMPONENT_GATE
+    contract = str(config.magnetic_output_contract).strip().lower()
+    if contract not in {"legacy", "magnetic6"}:
+        raise ValueError("magnetic_output_contract must be 'legacy' or 'magnetic6'")
+    if contract == "magnetic6":
+        formulation = str(config.formulation).strip().lower()
+        receiver_mode = str(config.magnetic_receiver_mode).strip().lower()
+        dbdt_mode = str(config.magnetic_dbdt_mode).strip().lower()
+        if formulation == "e" and receiver_mode != "biot_current":
+            raise ValueError(
+                "E-form magnetic6 output requires magnetic_receiver_mode='biot_current' "
+                "so H includes both conductive and impressed-wire currents"
+            )
+        if formulation not in {"e", "h"}:
+            raise ValueError("magnetic6 output supports formulation='e' or 'h'")
+        if dbdt_mode != "curl":
+            raise ValueError(
+                "formal magnetic6 output requires magnetic_dbdt_mode='curl' for an "
+                "independent Faraday-law dB/dt observable"
+            )
+        return list(MAGNETIC6_COMPONENTS)
     components = ["Ex", "Ey"]
     magnetic_mode = str(config.magnetic_receiver_mode).strip().lower()
     formulation = str(config.formulation).strip().lower()
@@ -7119,9 +7159,14 @@ def _write_faraday_initialization_artifact(
 
 
 def _assign_biot_receiver_hz(receiver_values: dict[str, float], h_receiver) -> None:
-    """Use Biot-Savart for H while preserving instantaneous Faraday dB/dt."""
+    """Assign total Biot-Savart Hx, Hy, Hz without changing curl dB/dt."""
 
-    receiver_values["Hz"] = float(h_receiver[2])
+    values = tuple(float(value) for value in h_receiver)
+    if len(values) != 3:
+        raise ValueError("h_receiver must contain Hx, Hy, Hz")
+    receiver_values["Hx"] = values[0]
+    receiver_values["Hy"] = values[1]
+    receiver_values["Hz"] = values[2]
 
 
 def _advance_faraday_receiver_hz(
@@ -8295,10 +8340,15 @@ def _run_fetd_forward_impl(
             rec["dBzdt_biot_rate"] = float("nan")
             if magnetic_receiver_mode in {"biot_current", "biot_ohmic"}:
                 _assign_biot_receiver_hz(rec, H_new_receiver)
-                biot_rate = float(_biot_receiver_dbdt_from_h(H_new_receiver, H_old_receiver, dt=dt)[2])
-                rec["dBzdt_biot_rate"] = biot_rate
+                biot_rate = _biot_receiver_dbdt_from_h(
+                    H_new_receiver, H_old_receiver, dt=dt
+                )
+                for axis, component in enumerate(("dBxdt", "dBydt", "dBzdt")):
+                    rec[f"{component}_biot_rate"] = float(biot_rate[axis])
+                rec["dBzdt_biot_rate"] = float(biot_rate[2])
                 if magnetic_dbdt_mode == "biot_rate":
-                    rec["dBzdt"] = biot_rate
+                    for axis, component in enumerate(("dBxdt", "dBydt", "dBzdt")):
+                        rec[component] = float(biot_rate[axis])
             if _is_terminal_depth_profile_step(
                 step,
                 output_step_indices,
@@ -8530,7 +8580,16 @@ def _evaluate_h_receivers(E, H_new, H_old, dt: float, msh, config: PipelineConfi
     h_new = np.asarray(H_new.eval(point, cells), dtype=float).reshape(-1)
     h_old = np.asarray(H_old.eval(point, cells), dtype=float).reshape(-1)
     dbdt = mu_0 * (h_new - h_old) / float(dt)
-    return {"Ex": float(e_val[0]), "Ey": float(e_val[1]), "Hz": float(h_new[2]), "dBzdt": float(dbdt[2])}
+    return {
+        "Ex": float(e_val[0]),
+        "Ey": float(e_val[1]),
+        "Hx": float(h_new[0]),
+        "Hy": float(h_new[1]),
+        "Hz": float(h_new[2]),
+        "dBxdt": float(dbdt[0]),
+        "dBydt": float(dbdt[1]),
+        "dBzdt": float(dbdt[2]),
+    }
 
 
 def _h_static_initial_dt(config: PipelineConfig) -> float:
@@ -10323,6 +10382,7 @@ def _resolved_config_yaml(config: PipelineConfig) -> str:
         "outer_boundary_robin_scale": float(config.outer_boundary_robin_scale),
         "magnetic_receiver_mode": str(config.magnetic_receiver_mode),
         "magnetic_dbdt_mode": str(config.magnetic_dbdt_mode),
+        "magnetic_output_contract": str(config.magnetic_output_contract),
         "magnetic_recovery_quadrature_degree": int(config.magnetic_recovery_quadrature_degree),
         "magnetic_recovery_quadrature_audit_degrees": list(
             config.magnetic_recovery_quadrature_audit_degrees
@@ -11634,6 +11694,60 @@ def write_report(
     print(f"[report] saved {config.output_report()}", flush=True)
 
 
+def _write_magnetic6_numerical_npz(config: PipelineConfig, fem_result) -> Path:
+    """Write a canonical single-receiver magnetic-six numerical artifact."""
+
+    import numpy as np
+
+    components = tuple(str(value) for value in fem_result["components"])
+    if components != MAGNETIC6_COMPONENTS:
+        raise ValueError(
+            "magnetic-six artifact requires components "
+            + ",".join(MAGNETIC6_COMPONENTS)
+        )
+    data = np.asarray(fem_result["data"], dtype=float)
+    if data.ndim == 2:
+        data = data[:, None, :]
+    if data.ndim != 3 or data.shape[-1] != len(MAGNETIC6_COMPONENTS):
+        raise ValueError(
+            "magnetic-six data must have shape (time,6) or (time,location,6)"
+        )
+    times = np.asarray(fem_result["times"], dtype=float).reshape(-1)
+    if times.size < data.shape[0]:
+        raise ValueError("magnetic-six time axis is shorter than the data rows")
+    times = times[: data.shape[0]]
+    if data.shape[1] != 1:
+        raise ValueError(
+            "the current DOLFINx production pipeline supports one configured receiver; "
+            "multi-location magnetic-six output must use the array pipeline"
+        )
+    path = config.magnetic6_output_npz()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "artifact_schema": np.asarray("atem3d.dolfinx_magnetic6_numerical.v1"),
+        "times": times,
+        "data": data,
+        "components": np.asarray(MAGNETIC6_COMPONENTS),
+        "units": np.asarray(MAGNETIC6_UNITS),
+        "receiver_locations": np.asarray([config.receiver], dtype=float),
+        "coordinate_system": np.asarray("z_up"),
+        "time_origin": np.asarray(str(config.time_origin)),
+        "ramp_off_time": np.asarray(float(config.ramp_off_time)),
+        "source_current": np.asarray(float(config.source_current)),
+        "nedelec_order": np.asarray(int(config.nedelec_order)),
+        "formulation": np.asarray(str(config.formulation)),
+        "magnetic_receiver_mode": np.asarray(str(config.magnetic_receiver_mode)),
+        "magnetic_dbdt_mode": np.asarray(str(config.magnetic_dbdt_mode)),
+        "magnetic_output_contract": np.asarray(str(config.magnetic_output_contract)),
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("wb") as handle:
+        np.savez_compressed(handle, **payload)
+    tmp_path.replace(path)
+    print(f"[data] saved {path}", flush=True)
+    return path
+
+
 def _save_npz(config: PipelineConfig, fem_result, ref_result, errors) -> None:
     import numpy as np
 
@@ -11668,6 +11782,9 @@ def _save_npz(config: PipelineConfig, fem_result, ref_result, errors) -> None:
     payload["weak_component_passed"] = np.asarray([weak_window["passed"]], dtype=bool)
     np.savez(config.output_npz(), **payload)
     print(f"[data] saved {config.output_npz()}", flush=True)
+    # MAGNETIC6_PRODUCTION_SAVE
+    if tuple(str(value) for value in fem_result["components"]) == MAGNETIC6_COMPONENTS:
+        _write_magnetic6_numerical_npz(config, fem_result)
 
 
 def _receiver_diagnostic_payload(receiver_diagnostic_rows):
@@ -12173,6 +12290,16 @@ def _save_forward_partial(config: PipelineConfig, times, rows, components, solve
     tmp_path.replace(path)
     _write_receiver_diagnostics_csv(config, receiver_diagnostic_rows)
     _plot_receiver_diagnostics(config, receiver_diagnostic_rows)
+    # MAGNETIC6_PRODUCTION_PARTIAL_SAVE
+    if tuple(str(value) for value in components) == MAGNETIC6_COMPONENTS:
+        _write_magnetic6_numerical_npz(
+            config,
+            {
+                "times": times,
+                "data": rows,
+                "components": components,
+            },
+        )
 
 
 def _completed_return_times(return_times, rows):
@@ -12922,6 +13049,15 @@ def _main_locked(argv: list[str]) -> int:
         default="faraday_integrated",
     )
     parser.add_argument("--magnetic-dbdt-mode", choices=["curl", "biot_rate"], default="curl")
+    parser.add_argument(
+        "--magnetic-output-contract",
+        choices=("legacy", "magnetic6"),
+        default="legacy",
+        help=(
+            "Receiver output contract. magnetic6 writes Hx,Hy,Hz and "
+            "dBxdt,dBydt,dBzdt in a fixed NPZ schema."
+        ),
+    )
     parser.add_argument(
         "--magnetic-recovery-quadrature-degree",
         type=int,

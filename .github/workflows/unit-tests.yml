@@ -28,8 +28,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
 
-      - name: Enforce second-order Nedelec production policy
-        run: python tools/second_order_policy.py --check
+      - name: Enforce finite-element production policies
+        run: |
+          python tools/second_order_policy.py --check
+          python tools/apply_magnetic6_production.py --check
 
       - name: Run waveform, receiver, and empymod magnetic-six regression tests
         run: |
@@ -38,4 +40,6 @@ jobs:
             tests/test_receivers.py \
             tests/test_average_receivers.py \
             tests/test_receiver_groups.py \
-            tests/test_empymod_magnetic6.py
+            tests/test_empymod_magnetic6.py \
+            tests/test_empymod_waveform.py \
+            tests/test_magnetic6_production_policy.py
