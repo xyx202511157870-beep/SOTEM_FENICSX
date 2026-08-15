@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from discretize import TensorMesh
 
 from atem3d.receivers import PointReceiver
@@ -17,16 +16,16 @@ def test_point_receiver_samples_db_dt_component_from_two_b_states():
     assert value == 0.5
 
 
-def test_point_receiver_rejects_single_state_sampling_for_db_dt():
+def test_point_receiver_marks_db_dt_as_two_state_observation():
     mesh = TensorMesh([np.ones(2), np.ones(2), np.ones(2)], origin="CCC")
     receiver = PointReceiver(location=(0.0, 0.0, 0.0), component="dBzdt")
 
-    with pytest.raises(RuntimeError, match="sample_time_derivative"):
-        receiver.sample(
-            mesh,
-            np.zeros(mesh.n_edges),
-            np.zeros(mesh.n_faces),
-        )
+    assert receiver.requires_previous_magnetic_state is True
+    assert receiver.sample(
+        mesh,
+        np.zeros(mesh.n_edges),
+        np.zeros(mesh.n_faces),
+    ) == 0.0
 
 
 def test_point_receiver_samples_hj_electric_faces_and_magnetic_edges():
@@ -75,13 +74,13 @@ def test_point_receiver_samples_hj_db_dt_from_edge_h_states():
     assert value == 2.0
 
 
-def test_point_receiver_rejects_single_hj_state_sampling_for_db_dt():
+def test_point_receiver_hj_initial_db_dt_convention_is_explicit_zero():
     mesh = TensorMesh([np.ones(2), np.ones(2), np.ones(2)], origin="CCC")
     receiver = PointReceiver(location=(0.0, 0.0, 0.0), component="dBzdt")
 
-    with pytest.raises(RuntimeError, match="sample_hj_time_derivative"):
-        receiver.sample_hj(
-            mesh,
-            np.zeros(mesh.n_faces),
-            np.zeros(mesh.n_edges),
-        )
+    assert receiver.requires_previous_magnetic_state is True
+    assert receiver.sample_hj(
+        mesh,
+        np.zeros(mesh.n_faces),
+        np.zeros(mesh.n_edges),
+    ) == 0.0
