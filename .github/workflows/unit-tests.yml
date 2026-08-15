@@ -32,4 +32,5 @@ jobs:
           python -m pytest -q \
             tests/test_sources.py \
             tests/test_receivers.py \
-            tests/test_average_receivers.py
+            tests/test_average_receivers.py \
+            tests/test_receiver_groups.py
