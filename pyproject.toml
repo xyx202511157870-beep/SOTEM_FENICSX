@@ -12,7 +12,7 @@ dependencies = [
   "scipy",
   "discretize",
   "simpeg",
-  "empymod>=2.6,<3",
+  "empymod>=2.5.4,<3",
   "pymatsolver",
   "PyYAML",
   "h5py",
