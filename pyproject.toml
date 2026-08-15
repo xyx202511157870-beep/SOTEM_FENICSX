@@ -12,7 +12,7 @@ dependencies = [
   "scipy",
   "discretize",
   "simpeg",
-  "empymod",
+  "empymod>=2.5.4,<3",
   "pymatsolver",
   "PyYAML",
   "h5py",
@@ -27,6 +27,7 @@ atem3d-run = "atem3d.cli:main"
 tdem-ip-forward = "atem3d.cli:main"
 atem3d-compare-empymod = "atem3d.compare_cli:main"
 atem3d-validate-empymod = "atem3d.empymod_validation_cli:main"
+atem3d-validate-empymod-magnetic6 = "atem3d.empymod_magnetic6_cli:main"
 atem3d-boundary-benchmark = "atem3d.benchmark_cli:main"
 atem3d-initial-field-diagnostics = "atem3d.initial_field_diagnostics_cli:main"
 atem3d-source-primary-fit = "atem3d.source_primary_cli:main"
