@@ -11,6 +11,7 @@ import yaml
 
 from .empymod_compare import make_debye_resistivity_model_from_config
 from .empymod_magnetic6 import (
+    MagneticSixNumericalData,
     build_magnetic6_survey_from_config,
     compare_magnetic6,
     load_magnetic6_numerical,
@@ -21,50 +22,75 @@ from .empymod_magnetic6 import (
 
 def _float_list(value: str) -> list[float]:
     try:
-        values = [float(item.strip()) for item in value.split(",") if item.strip()]
+        values = [
+            float(item.strip())
+            for item in value.split(",")
+            if item.strip()
+        ]
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected comma-separated numbers") from exc
+        raise argparse.ArgumentTypeError(
+            "expected comma-separated numbers"
+        ) from exc
     if not values or any(not np.isfinite(item) for item in values):
-        raise argparse.ArgumentTypeError("values must be finite and non-empty")
+        raise argparse.ArgumentTypeError(
+            "values must be finite and non-empty"
+        )
     return values
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("config", type=Path, help="YAML source/model/receiver geometry")
+    parser.add_argument(
+        "config",
+        type=Path,
+        help="YAML source/model/receiver geometry",
+    )
     parser.add_argument(
         "--numerical",
         type=Path,
         required=True,
         help=(
-            "Numerical CSV or NPZ. CSV requires time_obs/time_s plus Hx,Hy,Hz,"
-            "dBxdt,dBydt,dBzdt; NPZ requires times,data and optional components."
+            "Numerical CSV or NPZ. CSV requires time_obs/time_s plus "
+            "Hx,Hy,Hz,dBxdt,dBydt,dBzdt; NPZ requires times,data and "
+            "optional components."
         ),
     )
     parser.add_argument("--depths", type=_float_list, required=True)
     parser.add_argument(
         "--resistivities",
         type=_float_list,
-        help="Comma-separated layered resistivities; length must be len(depths)+1.",
+        help=(
+            "Comma-separated layered resistivities; length must be "
+            "len(depths)+1."
+        ),
     )
     parser.add_argument(
         "--use-config-ip",
         action="store_true",
-        help="Build empymod Debye dispersion directly from the YAML layer model.",
+        help=(
+            "Build empymod Debye dispersion directly from the YAML "
+            "layer model."
+        ),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--srcpts", type=int, default=9)
     parser.add_argument("--recpts", type=int, default=1)
     parser.add_argument(
         "--dbdt-reference",
-        choices=("native_b", "impulse_h"),
-        default="native_b",
-        help="Primary dB/dt route. native_b uses empymod mrec='b'.",
+        choices=("auto", "native_b", "impulse_h"),
+        default="auto",
+        help=(
+            "Primary dB/dt route. auto uses native mrec='b' with "
+            "empymod>=2.6 and otherwise -mu0*H impulse."
+        ),
     )
     parser.add_argument(
         "--no-impulse-audit",
         action="store_true",
-        help="Disable the independent -mu0*H-impulse cross-check.",
+        help=(
+            "Disable the native-B versus -mu0*H-impulse cross-check "
+            "when the native route is available."
+        ),
     )
     parser.add_argument("--audit-tolerance", type=float, default=0.01)
     parser.add_argument("--comparison-tolerance", type=float, default=0.05)
@@ -72,7 +98,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--require-audit-pass",
         action="store_true",
-        help="Abort if the two empymod dB/dt constructions disagree.",
+        help=(
+            "Require the two empymod dB/dt constructions to be "
+            "available and to agree."
+        ),
     )
     parser.add_argument("--srcpts-audit", type=int, default=0)
     return parser
@@ -92,7 +121,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         if args.resistivities is None:
-            raise ValueError("--resistivities is required unless --use-config-ip is set")
+            raise ValueError(
+                "--resistivities is required unless --use-config-ip is set"
+            )
         if len(args.resistivities) != len(args.depths) + 1:
             raise ValueError("len(resistivities) must equal len(depths)+1")
         resistivity_model = args.resistivities
@@ -141,7 +172,13 @@ def main(argv: list[str] | None = None) -> int:
         components=np.asarray(reference.components),
         units=np.asarray(reference.units),
         receiver_locations=np.asarray(reference.receiver_locations, dtype=float),
-        dbdt_native=reference.dbdt_native,
+        primary_dbdt_reference=np.asarray(reference.primary_dbdt_reference),
+        empymod_version=np.asarray(reference.empymod_version or ""),
+        dbdt_native=(
+            np.asarray(reference.dbdt_native)
+            if reference.dbdt_native is not None
+            else np.empty((0, 0, 0), dtype=float)
+        ),
         dbdt_impulse=(
             np.asarray(reference.dbdt_impulse)
             if reference.dbdt_impulse is not None
@@ -160,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             audit_floor_fraction=args.floor_fraction,
         )
         source_audit = compare_magnetic6(
-            type(numerical)(
+            MagneticSixNumericalData(
                 times=reference.times,
                 data=reference.data,
                 receiver_locations=reference.receiver_locations,
@@ -170,7 +207,12 @@ def main(argv: list[str] | None = None) -> int:
             floor_fraction=args.floor_fraction,
         )
         (args.output_dir / "empymod_source_quadrature_audit.json").write_text(
-            json.dumps(source_audit, ensure_ascii=False, indent=2, allow_nan=False)
+            json.dumps(
+                source_audit,
+                ensure_ascii=False,
+                indent=2,
+                allow_nan=False,
+            )
             + "\n",
             encoding="utf-8",
         )
