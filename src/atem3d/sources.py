@@ -38,8 +38,15 @@ class StepOffWaveform:
         return self.value(time)
 
     def interval_average_didt(self, t0: float, t1: float) -> float:
+        """Return the interval-average current derivative.
+
+        Intervals follow the half-open convention ``[t0, t1)``.  This assigns
+        an ideal step exactly once when ``off_time`` is a shared time node and
+        prevents double counting across adjacent integration intervals.
+        """
+
         t0, t1 = _validated_interval(t0, t1)
-        if t0 <= float(self.off_time) <= t1:
+        if t0 <= float(self.off_time) < t1:
             return float(-self.on_value / (t1 - t0))
         return 0.0
 
@@ -114,7 +121,15 @@ class TabulatedWaveform:
         return abs(self.initial_field_value) > 0.0
 
     def value(self, time: float) -> float:
-        return float(np.interp(time, self.times, self.values, left=self.values[0], right=self.values[-1]))
+        return float(
+            np.interp(
+                time,
+                self.times,
+                self.values,
+                left=self.values[0],
+                right=self.values[-1],
+            )
+        )
 
     def previous_value(self, time: float) -> float:
         return self.value(time)
@@ -156,7 +171,9 @@ class GroundedWireSource:
 
     @property
     def locations(self) -> np.ndarray:
-        return np.vstack([np.asarray(self.start, dtype=float), np.asarray(self.end, dtype=float)])
+        return np.vstack(
+            [np.asarray(self.start, dtype=float), np.asarray(self.end, dtype=float)]
+        )
 
     def unit_edge_vector(self, mesh) -> np.ndarray:
         """Return the unit-current integrated edge source vector."""
@@ -228,12 +245,16 @@ class GroundedWireSource:
 
         return float(self.current * self.waveform.interval_average_didt(t0, t1))
 
-    def edge_vector_interval_average_didt(self, mesh, t0: float, t1: float) -> np.ndarray:
+    def edge_vector_interval_average_didt(
+        self, mesh, t0: float, t1: float
+    ) -> np.ndarray:
         """Return unit edge source vector scaled by interval-average dI/dt."""
 
         return self.current_interval_average_didt(t0, t1) * self.unit_edge_vector(mesh)
 
-    def face_vector_interval_average_didt(self, mesh, t0: float, t1: float) -> np.ndarray:
+    def face_vector_interval_average_didt(
+        self, mesh, t0: float, t1: float
+    ) -> np.ndarray:
         """Return unit face source vector scaled by interval-average dI/dt."""
 
         return self.current_interval_average_didt(t0, t1) * self.unit_face_vector(mesh)
@@ -272,7 +293,9 @@ def _nearest_edge_line_source(mesh, locations: np.ndarray) -> np.ndarray:
     """
 
     if not all(hasattr(mesh, name) for name in ("gridEx", "gridEy", "gridEz")):
-        raise ValueError("fallback source projection requires a 3D TensorMesh-like mesh")
+        raise ValueError(
+            "fallback source projection requires a 3D TensorMesh-like mesh"
+        )
 
     trees = [
         cKDTree(mesh.gridEx),
@@ -314,7 +337,9 @@ def _nearest_face_line_source(mesh, locations: np.ndarray) -> np.ndarray:
 
     required = ("faces_x", "faces_y", "faces_z", "face_areas")
     if not all(hasattr(mesh, name) for name in required):
-        raise ValueError("fallback face source projection requires a 3D TensorMesh-like mesh")
+        raise ValueError(
+            "fallback face source projection requires a 3D TensorMesh-like mesh"
+        )
 
     face_grids = [mesh.faces_x, mesh.faces_y, mesh.faces_z]
     offsets = np.r_[0, mesh.n_faces_x, mesh.n_faces_x + mesh.n_faces_y]
@@ -326,7 +351,9 @@ def _nearest_face_line_source(mesh, locations: np.ndarray) -> np.ndarray:
         delta = end - start
         active_axes = np.flatnonzero(np.abs(delta) > tolerance)
         if active_axes.size != 1:
-            raise ValueError("fallback face source projection requires axis-aligned segments")
+            raise ValueError(
+                "fallback face source projection requires axis-aligned segments"
+            )
 
         axis = int(active_axes[0])
         direction = float(np.sign(start[axis] - end[axis]))
@@ -349,7 +376,9 @@ def _nearest_face_line_source(mesh, locations: np.ndarray) -> np.ndarray:
             weight = float(np.prod([item[1] for item in channel_pair]))
             if weight == 0.0:
                 continue
-            mask = (grid[:, axis] >= low - tolerance) & (grid[:, axis] <= high + tolerance)
+            mask = (grid[:, axis] >= low - tolerance) & (
+                grid[:, axis] <= high + tolerance
+            )
             for local_index, transverse_axis in enumerate(transverse_axes):
                 mask &= np.isclose(
                     grid[:, transverse_axis],
@@ -363,10 +392,14 @@ def _nearest_face_line_source(mesh, locations: np.ndarray) -> np.ndarray:
                 continue
             found = True
             global_indices = offsets[axis] + local_indices
-            source[global_indices] += weight * direction / mesh.face_areas[global_indices]
+            source[global_indices] += (
+                weight * direction / mesh.face_areas[global_indices]
+            )
 
         if not found:
-            raise ValueError("fallback face source projection found no faces on the wire path")
+            raise ValueError(
+                "fallback face source projection found no faces on the wire path"
+            )
 
     return source
 
@@ -379,7 +412,9 @@ def _face_channel_weights(
     """Return linear interpolation weights on sorted unique face-channel coordinates."""
 
     unique = np.unique(np.asarray(coordinates, dtype=float))
-    close = np.flatnonzero(np.isclose(unique, value, rtol=0.0, atol=tolerance))
+    close = np.flatnonzero(
+        np.isclose(unique, value, rtol=0.0, atol=tolerance)
+    )
     if close.size:
         return [(float(unique[int(close[0])]), 1.0)]
 
@@ -389,7 +424,9 @@ def _face_channel_weights(
         distance, nearest = tree.query([[value]])
         if float(distance[0]) <= tolerance:
             return [(float(unique[int(nearest[0])]), 1.0)]
-        raise ValueError("fallback face source projection is outside the mesh face channels")
+        raise ValueError(
+            "fallback face source projection is outside the mesh face channels"
+        )
 
     lower = float(unique[upper_index - 1])
     upper = float(unique[upper_index])
@@ -399,4 +436,8 @@ def _face_channel_weights(
     lower_weight = (upper - value) / width
     upper_weight = (value - lower) / width
     weights = [(lower, lower_weight), (upper, upper_weight)]
-    return [(coordinate, weight) for coordinate, weight in weights if weight > tolerance]
+    return [
+        (coordinate, weight)
+        for coordinate, weight in weights
+        if weight > tolerance
+    ]

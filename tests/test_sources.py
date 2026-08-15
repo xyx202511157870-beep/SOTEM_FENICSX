@@ -12,7 +12,10 @@ from atem3d.sources import (
 
 
 def test_grounded_wire_source_projects_finite_wire_to_edges_with_current_strength():
-    mesh = TensorMesh([np.ones(7), np.ones(5), np.ones(3)], origin=(-3.5, -2.5, -1.5))
+    mesh = TensorMesh(
+        [np.ones(7), np.ones(5), np.ones(3)],
+        origin=(-3.5, -2.5, -1.5),
+    )
     source = GroundedWireSource(
         start=(-2.5, 0.0, 0.0),
         end=(2.5, 0.0, 0.0),
@@ -29,7 +32,10 @@ def test_grounded_wire_source_projects_finite_wire_to_edges_with_current_strengt
 
 
 def test_grounded_wire_source_projects_finite_wire_to_hj_faces_like_simpeg():
-    mesh = TensorMesh([np.ones(7), np.ones(5), np.ones(3)], origin=(-3.5, -2.5, -1.5))
+    mesh = TensorMesh(
+        [np.ones(7), np.ones(5), np.ones(3)],
+        origin=(-3.5, -2.5, -1.5),
+    )
     source = GroundedWireSource(
         start=(-2.5, 0.0, 0.0),
         end=(2.5, 0.0, 0.0),
@@ -70,7 +76,10 @@ def test_grounded_wire_source_can_force_axis_aligned_hj_face_projection():
     expected = _nearest_face_line_source(mesh, source.locations)
 
     np.testing.assert_allclose(projected, expected)
-    active_x = mesh.faces_x[np.flatnonzero(np.abs(projected[: mesh.n_faces_x]) > 0.0), 0]
+    active_x = mesh.faces_x[
+        np.flatnonzero(np.abs(projected[: mesh.n_faces_x]) > 0.0),
+        0,
+    ]
     np.testing.assert_allclose(np.unique(active_x), [-1.0, 0.0, 1.0])
 
 
@@ -120,12 +129,21 @@ def test_grounded_wire_face_fallback_distributes_between_transverse_channels():
     for x_value in [-1.0, 0.0, 1.0]:
         mask = np.isclose(points[:, 0], x_value)
         np.testing.assert_allclose(values[mask].sum(), -1.0)
-        np.testing.assert_allclose(np.average(points[mask, 1], weights=-values[mask]), 0.0)
-        np.testing.assert_allclose(np.average(points[mask, 2], weights=-values[mask]), 0.0)
+        np.testing.assert_allclose(
+            np.average(points[mask, 1], weights=-values[mask]),
+            0.0,
+        )
+        np.testing.assert_allclose(
+            np.average(points[mask, 2], weights=-values[mask]),
+            0.0,
+        )
 
 
 def test_grounded_wire_face_vector_follows_step_off_waveform():
-    mesh = TensorMesh([np.ones(7), np.ones(5), np.ones(3)], origin=(-3.5, -2.5, -1.5))
+    mesh = TensorMesh(
+        [np.ones(7), np.ones(5), np.ones(3)],
+        origin=(-3.5, -2.5, -1.5),
+    )
     source = GroundedWireSource(
         start=(-2.5, 0.0, 0.0),
         end=(2.5, 0.0, 0.0),
@@ -161,6 +179,21 @@ def test_step_off_waveform_matches_simpeg_endpoint_convention():
     assert waveform.previous_value(1.0) == 0.0
 
 
+def test_step_off_derivative_is_assigned_once_at_shared_time_node():
+    off_time = 1.0e-5
+    waveform = StepOffWaveform(off_time=off_time, on_value=2.0)
+
+    left = waveform.interval_average_didt(0.0, off_time)
+    right = waveform.interval_average_didt(off_time, 2.0 * off_time)
+
+    assert left == 0.0
+    np.testing.assert_allclose(right, -2.0 / off_time)
+    np.testing.assert_allclose(
+        left * off_time + right * off_time,
+        -waveform.on_value,
+    )
+
+
 def test_legacy_waveforms_expose_interval_average_didt():
     step = StepOffWaveform(off_time=1.0e-5, on_value=1.0)
     ramp = LinearRampOffWaveform(
@@ -174,13 +207,25 @@ def test_legacy_waveforms_expose_interval_average_didt():
         initial_field_value=1.0,
     )
 
-    np.testing.assert_allclose(step.interval_average_didt(0.0, 2.0e-5), -5.0e4)
-    np.testing.assert_allclose(ramp.interval_average_didt(2.0e-6, 7.0e-6), -1.0e5)
-    np.testing.assert_allclose(tabulated.interval_average_didt(0.0, 1.0e-5), -1.0e5)
+    np.testing.assert_allclose(
+        step.interval_average_didt(0.0, 2.0e-5),
+        -5.0e4,
+    )
+    np.testing.assert_allclose(
+        ramp.interval_average_didt(2.0e-6, 7.0e-6),
+        -1.0e5,
+    )
+    np.testing.assert_allclose(
+        tabulated.interval_average_didt(0.0, 1.0e-5),
+        -1.0e5,
+    )
 
 
 def test_grounded_wire_source_interval_average_didt_scales_unit_vector():
-    mesh = TensorMesh([np.ones(7), np.ones(5), np.ones(3)], origin=(-3.5, -2.5, -1.5))
+    mesh = TensorMesh(
+        [np.ones(7), np.ones(5), np.ones(3)],
+        origin=(-3.5, -2.5, -1.5),
+    )
     source = GroundedWireSource(
         start=(-2.5, 0.0, 0.0),
         end=(2.5, 0.0, 0.0),
@@ -193,7 +238,11 @@ def test_grounded_wire_source_interval_average_didt_scales_unit_vector():
     )
 
     avg_didt = source.current_interval_average_didt(0.0, 1.0e-5)
-    edge_rhs = source.edge_vector_interval_average_didt(mesh, 0.0, 1.0e-5)
+    edge_rhs = source.edge_vector_interval_average_didt(
+        mesh,
+        0.0,
+        1.0e-5,
+    )
 
     np.testing.assert_allclose(avg_didt, -1.0e6)
     np.testing.assert_allclose(edge_rhs, avg_didt * source.unit_edge_vector(mesh))
