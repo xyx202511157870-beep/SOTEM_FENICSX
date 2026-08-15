@@ -92,6 +92,17 @@ def _apply_pipeline(text: str) -> str:
             label="replace function-space fallback",
         )
 
+    old_order_factor = (
+        "    order_factor = 1.0 if int(config.nedelec_order) == 1 else 4.0\n"
+    )
+    if old_order_factor in text:
+        text = _replace_exact(
+            text,
+            old_order_factor,
+            "    order_factor = 4.0\n",
+            label="remove first-order memory-estimate branch",
+        )
+
     return text
 
 
@@ -192,6 +203,7 @@ def check_policy() -> None:
             "if nedelec_order != REQUIRED_NEDELEC_ORDER:"
         ),
         "second-order function-space fallback": "else REQUIRED_NEDELEC_ORDER",
+        "second-order memory estimate": "order_factor = 4.0",
     }
     missing = [label for label, token in required.items() if token not in pipeline]
     if missing:
@@ -201,6 +213,9 @@ def check_policy() -> None:
         "first-order dataclass default": "nedelec_order: int = 1",
         "mixed first/second validation": "nedelec_order not in {1, 2}",
         "first-order function-space fallback": "if config is not None else 1",
+        "first-order memory-estimate branch": (
+            "1.0 if int(config.nedelec_order) == 1 else 4.0"
+        ),
     }
     present = [
         label for label, token in forbidden_pipeline.items() if token in pipeline
