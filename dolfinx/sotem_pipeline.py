@@ -13176,7 +13176,12 @@ def _main_locked(argv: list[str]) -> int:
     parser.add_argument("--sponge-power", type=float, default=2.0, help="Polynomial ramp power for the transient sponge conductivity.")
     parser.add_argument("--sponge-apply-to-initial", action="store_true", help="Also apply the sponge to the DC/on-time initial solve; normally leave this off.")
     parser.add_argument("--sponge-sides", default=",".join(SPONGE_ALL_SIDES), help="Comma-separated active sponge sides: x_min,x_max,y_min,y_max,z_min,z_max.")
-    parser.add_argument("--nedelec-order", type=int, choices=[1, 2], default=1)
+    parser.add_argument(
+        "--nedelec-order",
+        type=int,
+        choices=[1, 2],
+        default=REQUIRED_NEDELEC_ORDER,
+    )
     parser.add_argument("--expected-source-length", type=float, default=1000.0)
     parser.add_argument("--expected-parallel-offset", type=float, default=500.0)
     parser.add_argument("--wire-radius", type=float, default=2.5)

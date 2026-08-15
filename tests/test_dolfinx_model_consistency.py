@@ -771,6 +771,22 @@ def test_model_consistency_reports_nedelec_order():
     assert diagnostics["nedelec_order"] == 2
 
 
+def test_cli_defaults_to_required_nedelec_order(monkeypatch):
+    sp = _load_pipeline_module()
+    captured = {}
+    validate_model_consistency = sp.validate_model_consistency
+
+    def capture_config(config, *args, **kwargs):
+        captured["nedelec_order"] = config.nedelec_order
+        return validate_model_consistency(config, *args, **kwargs)
+
+    monkeypatch.setattr(sp, "validate_model_consistency", capture_config)
+    monkeypatch.setattr(sp, "check_environment", lambda **_kwargs: {})
+
+    assert sp.main(["--check-env-only", "--no-install"]) == 0
+    assert captured["nedelec_order"] == sp.REQUIRED_NEDELEC_ORDER == 2
+
+
 @pytest.mark.parametrize("nedelec_order", [0, 3])
 def test_model_consistency_rejects_unsupported_nedelec_order(nedelec_order):
     sp = _load_pipeline_module()
