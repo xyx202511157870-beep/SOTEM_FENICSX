@@ -85,6 +85,7 @@ _FORWARD_ARTIFACT_IDENTITY_KEYS = (
     "producer_forward_config_fingerprint",
 )
 LOCAL_MESH_MAX_ASPECT = 100.0
+REQUIRED_NEDELEC_ORDER = 2
 _CHECKOUT_SHARED_MODULES: dict[str, Any] = {}
 
 
@@ -139,7 +140,7 @@ class PipelineConfig:
     layer_resistivities: tuple[float, ...] = ()
     mu_r_air: float = 1.0
     mu_r_earth: float = 1.0
-    nedelec_order: int = 1
+    nedelec_order: int = REQUIRED_NEDELEC_ORDER
 
     t_min: float = 1.0e-6
     t_max: float = 1.0
@@ -844,8 +845,11 @@ def validate_model_consistency(config: PipelineConfig, reference_mode: str | Non
     if stop_after_outputs < 0:
         raise ValueError(f"stop_after_outputs must be nonnegative; got {stop_after_outputs}")
     nedelec_order = int(config.nedelec_order)
-    if nedelec_order not in {1, 2}:
-        raise ValueError(f"nedelec_order must be 1 or 2; got {nedelec_order}")
+    if nedelec_order != REQUIRED_NEDELEC_ORDER:
+        raise ValueError(
+            f"nedelec_order is fixed to {REQUIRED_NEDELEC_ORDER}; "
+            f"got {nedelec_order}"
+        )
     source_term_mode = str(config.source_term_mode).strip().lower()
     if source_term_mode not in {"impressed_current", "primary_dc"}:
         raise ValueError("source_term_mode must be 'impressed_current' or 'primary_dc'")
@@ -2039,7 +2043,16 @@ def build_function_spaces(msh, config: PipelineConfig | None = None):
 
     from dolfinx import fem
 
-    nedelec_order = int(config.nedelec_order) if config is not None else 1
+    nedelec_order = (
+        int(config.nedelec_order)
+        if config is not None
+        else REQUIRED_NEDELEC_ORDER
+    )
+    if nedelec_order != REQUIRED_NEDELEC_ORDER:
+        raise ValueError(
+            f"production function spaces require N1curl order "
+            f"{REQUIRED_NEDELEC_ORDER}; got {nedelec_order}"
+        )
     V = fem.functionspace(msh, ("N1curl", nedelec_order))
     Q = fem.functionspace(msh, ("DG", 0))
     W = fem.functionspace(msh, ("DG", 0, (3,)))
