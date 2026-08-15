@@ -1463,7 +1463,7 @@ def _mesh_memory_preflight(config: PipelineConfig, mesh_stats: dict[str, Any]) -
     if cells <= 0 or nodes <= 0:
         raise ValueError(f"mesh statistics must include positive cells_blocks and nodes; got {mesh_stats}")
 
-    order_factor = 1.0 if int(config.nedelec_order) == 1 else 4.0
+    order_factor = 4.0
     polarization_factor = 1.0
     if str(config.polarization).strip().lower() == "cole-cole":
         polarization_factor += 0.03 * max(0, int(config.cole_n_terms))
