@@ -27,6 +27,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
 
+      - name: Enforce second-order Nedelec production policy
+        run: python tools/second_order_policy.py --check
+
       - name: Run waveform and receiver regression tests
         run: |
           python -m pytest -q \
