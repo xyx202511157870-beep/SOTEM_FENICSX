@@ -1,0 +1,30 @@
+# empymod Hx/Hy/Hz + dBx/dt,dBy/dt,dBz/dt formal benchmark geometry.
+# The source and receiver are deliberately off-symmetry so all six components
+# are observable; do not move the receiver onto the source symmetry planes for
+# component-wise relative-error acceptance.
+coordinate_system: z_up
+
+source:
+  start: [-20.0, -7.0, -0.1]
+  end: [20.0, 7.0, -0.1]
+  current: 1.0
+  waveform:
+    type: step_off
+    off_time: 0.0
+    on_value: 1.0
+
+receiver:
+  location: [13.0, 31.0, -0.2]
+
+model:
+  layers:
+    - top: 1000000000.0
+      bottom: 0.0
+      sigma_infinity: 1.0e-8
+    - top: 0.0
+      bottom: -1000000000.0
+      sigma_infinity: 0.01
+
+# The validation CLI takes observation times from the numerical CSV/NPZ.
+# Layer interfaces for empymod are supplied through --depths; resistivities
+# are supplied through --resistivities or derived with --use-config-ip.
