@@ -86,18 +86,25 @@ class PointReceiver:
             raise ValueError("unsupported receiver component")
         object.__setattr__(self, "location", tuple(float(v) for v in location))
 
+    @property
+    def requires_previous_magnetic_state(self) -> bool:
+        """Whether the receiver needs two magnetic states to produce data."""
+
+        return self.component in _DBDT_COMPONENTS
+
     def sample(self, mesh, e: np.ndarray, b: np.ndarray, mu: float = mu_0) -> float:
-        """Sample a non-time-derivative field state."""
+        """Sample a field state.
+
+        A dB/dt receiver returns the explicit initial-node convention ``0.0``;
+        subsequent nodes must use :meth:`sample_time_derivative`.
+        """
 
         loc = np.asarray(self.location, dtype=float).reshape(1, 3)
         if self.component in _EDGE_COMPONENTS:
             matrix = mesh.get_interpolation_matrix(loc, _EDGE_COMPONENTS[self.component])
             return float((matrix @ e)[0])
         if self.component in _DBDT_COMPONENTS:
-            raise RuntimeError(
-                "dB/dt receivers require sample_time_derivative(); "
-                "a single magnetic state is insufficient"
-            )
+            return 0.0
 
         matrix = mesh.get_interpolation_matrix(loc, _FACE_COMPONENTS[self.component])
         value = float((matrix @ b)[0])
@@ -106,7 +113,11 @@ class PointReceiver:
         return value
 
     def sample_hj(self, mesh, e: np.ndarray, h: np.ndarray, mu: float = mu_0) -> float:
-        """Sample a non-time-derivative field state from an H/J formulation."""
+        """Sample a field state from an H/J formulation.
+
+        A dB/dt receiver returns the explicit initial-node convention ``0.0``;
+        subsequent nodes must use :meth:`sample_hj_time_derivative`.
+        """
 
         loc = np.asarray(self.location, dtype=float).reshape(1, 3)
         if self.component in _HJ_ELECTRIC_COMPONENTS:
@@ -115,10 +126,7 @@ class PointReceiver:
             )
             return float((matrix @ e)[0])
         if self.component in _DBDT_COMPONENTS:
-            raise RuntimeError(
-                "dB/dt receivers require sample_hj_time_derivative(); "
-                "a single magnetic state is insufficient"
-            )
+            return 0.0
 
         matrix = mesh.get_interpolation_matrix(
             loc, _HJ_MAGNETIC_COMPONENTS[self.component]
@@ -203,7 +211,7 @@ class AverageReceiver:
 
     For ``disk_average`` the disk normal and measured vector direction default
     to the component axis: x-components use a y-z disk, y-components use an
-    x-z disk, and z-components use an x-y disk.  Supplying ``normal`` models a
+    x-z disk, and z-components use an x-y disk. Supplying ``normal`` models a
     rotated coil and projects the vector field onto that physical normal.
     """
 
@@ -244,6 +252,12 @@ class AverageReceiver:
             if normal_array is None
             else tuple(float(value) for value in normal_array),
         )
+
+    @property
+    def requires_previous_magnetic_state(self) -> bool:
+        """Whether the receiver needs two magnetic states to produce data."""
+
+        return self.component in _DBDT_COMPONENTS
 
     @property
     def measurement_axis(self) -> np.ndarray:
@@ -308,7 +322,7 @@ class AverageReceiver:
         """Project recovered H vectors onto the physical receiver normal.
 
         A single ``(3,)`` vector is accepted for legacy Biot recovery paths that
-        currently evaluate only the receiver centre.  A ``(sample_count, 3)``
+        currently evaluate only the receiver centre. A ``(sample_count, 3)``
         array performs the full finite-area quadrature.
         """
 
@@ -328,10 +342,7 @@ class AverageReceiver:
 
     def sample(self, mesh, e: np.ndarray, b: np.ndarray, mu: float = mu_0) -> float:
         if self.component in _DBDT_COMPONENTS:
-            raise RuntimeError(
-                "dB/dt receivers require sample_time_derivative(); "
-                "a single magnetic state is insufficient"
-            )
+            return 0.0
         if self.component in _EDGE_COMPONENTS:
             vectors = _sample_vector_field(
                 mesh,
@@ -354,10 +365,7 @@ class AverageReceiver:
 
     def sample_hj(self, mesh, e: np.ndarray, h: np.ndarray, mu: float = mu_0) -> float:
         if self.component in _DBDT_COMPONENTS:
-            raise RuntimeError(
-                "dB/dt receivers require sample_hj_time_derivative(); "
-                "a single magnetic state is insufficient"
-            )
+            return 0.0
         if self.component in _HJ_ELECTRIC_COMPONENTS:
             vectors = _sample_vector_field(
                 mesh,
