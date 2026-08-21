@@ -570,3 +570,17 @@ u_i(t)=-N_i\frac{\mathrm d}{\mathrm dt}
 
 点位层状基准通过，不代表真实无人机线圈系统已经完成绝对标定，也不代表
 三维坝体中的百分之一弱异常已经达到现场可检测水平。
+
+## 17. 堤坝渗流 H 三分量正演任务
+
+HTML 堤坝复杂模型的 H 三分量正演任务书见：
+
+```text
+docs/dam_seepage_h3_forward_task.md
+examples/dam_seepage/acceptance_contract.yaml
+src/atem3d/examples/dam_seepage_geometry.py
+```
+
+当前状态：求解器 **尚未** 通过 Hx,Hy,Hz 对 empymod 的算法验收。在 L1
+通过之前，坝体正演曲线不得作为正式结果。算法修改是该任务的预期工作。
+

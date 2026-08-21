@@ -1,0 +1,56 @@
+# Frozen HTML dam-seepage geometry. Unique source of coordinates.
+# Resistivities and channel radius are project convention, not printed in HTML.
+
+html_source: 堤坝渗流通道交互模型_三维与侧剖面.html
+coordinate_system: z_up
+length_unit: m
+
+elevations_m:
+  valley_floor: 0.0
+  cover_top: 50.0
+  water_surface: 85.0
+  dam_crest: 100.0
+  hill_top: 150.0
+
+channel_m:
+  p1: [30.0, -128.5, 65.0]
+  p2: [30.0, 0.0, 40.0]
+  p3: [30.0, 276.0, 10.0]
+  equivalent_radius_m: 2.0
+  radius_status: proposed_not_printed_in_html
+
+wire_polyline_m:
+  - [0.0, -240.0, 50.0]     # A, +10 A
+  - [0.0, -240.0, 95.0]
+  - [-50.0, -240.0, 120.0]
+  - [-200.0, -240.0, 120.0]
+  - [-275.0, -240.0, 175.0]
+  - [-350.0, -240.0, 190.0]
+  - [-350.0, 330.0, 190.0]
+  - [-275.0, 330.0, 175.0]
+  - [-200.0, 330.0, 120.0]
+  - [-50.0, 330.0, 20.0]
+  - [0.0, 330.0, 5.0]       # B, -10 A, inside cover
+
+source:
+  current_a: 10.0
+  direction: A_to_B
+  path: html_polyline_not_straight_ab
+
+uav:
+  x_m: [-150.0, 150.0]
+  dx_m: 5.0
+  y_m: 0.0
+  flight_height_m: 0.5
+  html_display_z_m: 100.3
+  height_rule: local_topography_plus_flight_height
+
+resistivity_ohm_m:
+  air: 1.0e8
+  water: 20.0
+  dam: 200.0
+  cover: 80.0
+  channel: 10.0
+  foundation: 300.0
+  hill: 300.0
+  status: project_convention_not_printed_in_html

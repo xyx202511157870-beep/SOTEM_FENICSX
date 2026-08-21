@@ -8,6 +8,7 @@ def test_public_repository_has_only_approved_top_level_entries():
     approved = {
         ".git",
         ".gitattributes",
+        ".github",
         ".gitignore",
         ".numba_cache",
         ".pytest_cache",
@@ -15,12 +16,14 @@ def test_public_repository_has_only_approved_top_level_entries():
         "LICENSE",
         "README.md",
         "benchmarks",
+        "docs",
         "dolfinx",
         "examples",
         "pyproject.toml",
         "sotem_ip",
         "src",
         "tests",
+        "tools",
     }
     present = {path.name for path in ROOT.iterdir()}
     unexpected = sorted(present - approved)
@@ -47,10 +50,13 @@ def test_public_repository_contains_no_tracked_runtime_artifacts():
 def test_public_documents_are_chinese_and_do_not_overclaim():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    task = (ROOT / "docs" / "dam_seepage_h3_forward_task.md").read_text(encoding="utf-8")
     assert "三维时域" in readme
     assert "Cole–Cole" in readme
     assert "不能替代现场工程验证" in readme
     assert "保留所有权利" in license_text
+    assert "尚未通过 H 三分量验收" in task
+    assert "禁止把坝体曲线当作正式结果" in task
 
 
 def test_public_text_files_do_not_contain_personal_absolute_paths():

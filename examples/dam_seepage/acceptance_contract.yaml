@@ -1,0 +1,52 @@
+# Dam-seepage H3 solver acceptance. This is not a paper manuscript contract.
+# L1 must pass before any dam-body Hx/Hy/Hz curve is treated as production data.
+
+profile: dam_seepage_uav_h3/v1
+coordinate_system: z_up
+flight_height_m: 0.5
+acceptance_components: [Hx, Hy, Hz]
+diagnostic_components: [dBxdt, dBydt, dBzdt]
+units:
+  Hx: A/m
+  Hy: A/m
+  Hz: A/m
+  dBxdt: T/s
+  dBydt: T/s
+  dBzdt: T/s
+
+production:
+  nedelec_order: 2
+  time_theta: 1.0
+  time_origin: after_ramp
+  magnetic_output_contract: magnetic6
+  preferred_formulation: e
+  preferred_magnetic_receiver_mode: biot_current
+  preferred_magnetic_dbdt_mode: curl
+  fallback_formulation_if_l1_fails: h
+
+l1_algorithm:
+  status: not_passed
+  reference: empymod
+  model: homogeneous_or_layered_halfspace
+  receiver_height_m: 0.5
+  relative_error_with_floor: 0.05
+  nedelec_order: 2
+  blocking: true
+  note: >
+    Existing tests only cover magnetic6 file schema, fake-empymod reference
+    wiring, and Biot formula units. They do not prove DOLFINx Hx/Hy/Hz
+    accuracy. Solver changes are expected.
+
+l2_dam_model:
+  status: blocked_until_l1
+  reference: dolfinx_refined
+  mesh_relative_l2: 0.10
+  time_step_relative_l2: 0.05
+  boundary_relative_l2: 0.05
+  anomaly_to_mesh_residual_ratio: 3.0
+
+forbidden:
+  - empymod as dam-body truth
+  - first-order elements as production dam result
+  - deleting zero-crossings to force a pass
+  - treating Ex/Hz/dBzdt SOTEM acceptance as H3 acceptance
