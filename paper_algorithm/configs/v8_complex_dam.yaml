@@ -1,0 +1,173 @@
+case_id: v8_complex_dam
+role: final_complex_geometry_demonstration
+coordinate_system:
+  convention: z_up
+  x: dam_axis
+  y: upstream_to_downstream
+  z: elevation
+
+geometry:
+  cad_kernel: gmsh_occ
+  boolean_operation: fragment_all_material_volumes
+  computational_domain_m:
+    x: [-2000.0, 2000.0]
+    y: [-2500.0, 2500.0]
+    z: [-1500.0, 1000.0]
+
+  ground_profile:
+    variable: x
+    expression: ground(x)=0 for abs(x)<=50; (abs(x)-50)/1.5 for 50<abs(x)<275; 150 otherwise
+  upstream_slope:
+    expression: y_up(z)=-356+3.5*z
+  downstream_slope:
+    expression: y_down(z)=306-3*z
+
+  foundation_slab:
+    x: [-500.0, 500.0]
+    y: [-850.0, 800.0]
+    z: [-250.0, 0.0]
+
+  left_mountain:
+    y: [-850.0, 800.0]
+    xz_polygon:
+      - [-500.0, 0.0]
+      - [-500.0, 150.0]
+      - [-275.0, 150.0]
+      - [-50.0, 0.0]
+
+  right_mountain:
+    y: [-850.0, 800.0]
+    xz_polygon:
+      - [50.0, 0.0]
+      - [275.0, 150.0]
+      - [500.0, 150.0]
+      - [500.0, 0.0]
+
+  dam:
+    x_sections_m: [-200.0, -150.0, -100.0, -50.0, 50.0, 100.0, 150.0, 200.0]
+    section_rule: g=min(100,ground(x)); yz=[(y_up(g),g),(-6,100),(6,100),(y_down(g),g)]
+
+  reservoir_water:
+    x_sections_m: [-177.5, -150.0, -100.0, -50.0, 50.0, 100.0, 150.0, 177.5]
+    section_rule: g=min(85,ground(x)); yz=[(-800,g),(y_up(g),g),(-58.5,85),(-800,85)]
+
+  downstream_cover:
+    x_sections_m: [-125.0, -100.0, -50.0, 50.0, 100.0, 125.0]
+    section_rule: g=min(50,ground(x)); yz=[(y_down(g),g),(800,g),(800,50),(y_down(50),50)]
+    top_elevation_m: 50.0
+    downstream_extent_y_m: 800.0
+
+  leakage_channel:
+    centerline_m:
+      - [30.0, -128.5, 65.0]
+      - [30.0, 0.0, 40.0]
+      - [30.0, 276.0, 10.0]
+    radius_m: 5.0
+    construction: fused_segment_cylinders_and_joint_spheres
+    retain_as_separate_physical_volume: true
+
+  receiver_lines:
+    - id: crest_0p3m
+      start_m: [-150.0, 0.0, 100.3]
+      end_m: [150.0, 0.0, 100.3]
+      spacing_m: 5.0
+    - id: crest_uav_5m
+      start_m: [-150.0, 0.0, 105.0]
+      end_m: [150.0, 0.0, 105.0]
+      spacing_m: 5.0
+    - id: crest_uav_10m
+      start_m: [-150.0, 0.0, 110.0]
+      end_m: [150.0, 0.0, 110.0]
+      spacing_m: 5.0
+
+source:
+  type: grounded_polyline_return_cable
+  current_direction: B_to_A_in_cable
+  current_a: 10.0
+  vertices_m:
+    - [0.0, 330.0, 5.0]
+    - [-50.0, 330.0, 20.0]
+    - [-200.0, 330.0, 120.0]
+    - [-275.0, 330.0, 175.0]
+    - [-350.0, 330.0, 190.0]
+    - [-350.0, -240.0, 190.0]
+    - [-275.0, -240.0, 175.0]
+    - [-200.0, -240.0, 120.0]
+    - [-50.0, -240.0, 120.0]
+    - [0.0, -240.0, 95.0]
+    - [0.0, -240.0, 50.0]
+  electrode_A_m: [0.0, -240.0, 50.0]
+  electrode_B_m: [0.0, 330.0, 5.0]
+  waveform:
+    type: linear_ramp_off
+    ramp_off_time_s: 5.0e-6
+    time_origin: after_ramp
+    turnoff_steps: 10
+
+materials:
+  air: {resistivity_ohm_m: 1.0e8, mu_r: 1.0}
+  foundation_and_mountain: {resistivity_ohm_m: 500.0, mu_r: 1.0}
+  dam: {resistivity_ohm_m: 100.0, mu_r: 1.0}
+  reservoir_water: {resistivity_ohm_m: 20.0, mu_r: 1.0}
+  downstream_cover: {resistivity_ohm_m: 50.0, mu_r: 1.0}
+  leakage_channel_active: {resistivity_ohm_m: 10.0, mu_r: 1.0}
+  leakage_channel_background: {inherit_host_material: true}
+
+mesh_profiles:
+  pilot:
+    polynomial_order: 2
+    channel_size_m: 2.5
+    source_size_m: 5.0
+    receiver_size_m: 5.0
+    dam_cover_size_m: 15.0
+    mountain_size_m: 30.0
+    far_earth_size_m: 120.0
+    air_size_m: 150.0
+  full:
+    polynomial_order: 2
+    channel_size_m: 1.25
+    source_size_m: 2.5
+    receiver_size_m: 2.5
+    dam_cover_size_m: 8.0
+    mountain_size_m: 20.0
+    far_earth_size_m: 80.0
+    air_size_m: 100.0
+
+observations:
+  times_s:
+    kind: logspace
+    start: 1.0e-6
+    stop: 1.0e-1
+    count: 51
+  primary_components: [dBxdt, dBydt, dBzdt]
+  audit_components_at_selected_receivers: [Hx, Hy, Hz]
+  receiver_models:
+    - {type: point}
+    - {type: disk_average, radius_m: 1.0, normals: [x, y, z]}
+
+case_matrix:
+  - id: D0_background
+    channel_material: leakage_channel_background
+  - id: D1_channel_r5
+    channel_material: leakage_channel_active
+  - id: D1_channel_r5_refined
+    channel_material: leakage_channel_active
+    mesh_profile: full
+
+required_outputs:
+  - cad_volume_and_physical_tag_report.json
+  - mesh_quality_report.json
+  - source_polyline_audit.json
+  - receiver_locations.csv
+  - response_background.npz
+  - response_channel.npz
+  - channel_anomaly.npz
+  - runtime_memory.json
+  - model_and_mesh.xdmf
+
+comparison_rules:
+  use_identical_mesh_for_background_and_channel: true
+  background_case_sets_channel_to_host_material: true
+  anomaly_definition: channel_minus_background
+  coarse_fine_reference: full_mesh
+  anomaly_to_numerical_difference_ratio_required: true
