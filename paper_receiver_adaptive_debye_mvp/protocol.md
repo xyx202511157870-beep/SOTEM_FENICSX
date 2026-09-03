@@ -60,11 +60,15 @@ success.
 - Receivers: (1) point six-channel; (2) disk radius 1.0 m; (3) disk radius
   4.0 m; (4) three orthogonal coil-normal dB/dt projections; (5) holdout
   tilted normal `normalized([0.35, -0.20, 0.915])` as independent-test task.
-  Layered production disk quadrature is a frozen 4-point in-plane square
-  (`square4`) on receiver 0. AverageReceiver 36-point disks are retained as
-  an audit rule only. L0 evaluates every valid template on both point
-  receivers; disks are computed for the spectral-best and the top 8
-  point-ranked templates per K so the finite-area check stays tractable.
+  Layered production disks call PR 9 `compute_layered_response` with
+  `ReceiverSpec(kind="disk_average")` (AverageReceiver 36-point, component-
+  normal). L0 evaluates every valid template on both point receivers; disks
+  are computed for the spectral-best, the point-oracle, and the top 2
+  point-ranked templates per K. Official lagged DLF (`SMOKE_FAST_TRANSFORM`)
+  is the L0 evaluation identity: approved production DLF (`pts_per_dec=0`)
+  timed at ~84 s per 2-point W0 call and is not completable for the frozen
+  8-case x 180-candidate matrix on 4 CPUs. Exact Cole-Cole and Debye still
+  share `hashes["shared_survey_hash"]`.
 - Source: asymmetric oblique finite grounded wire. Off-axis receivers so all
   six channels have real samples. Do not inflate relative error on theoretically
   zero components.
@@ -190,6 +194,8 @@ universal optimality. Never label high-K 3-D as exact Cole-Cole.
 
 Do not reimplement the Debye library. Use `atem3d.adaptive_debye_mvp`
 (`passive_fit`, `candidates`, `receiver_metrics`, `bootstrap`, `io`) from
-`paper/mvp-debye-lib`. Layered forwards wrap
-`empymod_magnetic6` / `empymod_waveform` / `empymod_compare` /
-`receivers.AverageReceiver`.
+`paper/mvp-debye-lib`. Do not reimplement the layered empymod wrapper or
+the smoke audit. Call
+`atem3d.adaptive_debye_mvp.layered_forward.compute_layered_response` from
+`paper/mvp-empymod-layered-forward`. Keep PR 8 library exports in
+`__init__.py`; PR 9's docstring-only package marker is not used.

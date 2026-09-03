@@ -55,6 +55,10 @@ from .guards import (
     assert_split_readable,
     refuse_3d_before_l2,
 )
+from .layered_forward import (
+    BlockedBySoftwareOrResourcesError,
+    compute_layered_response,
+)
 from .protocol_constants import PROTOCOL_NAME, PROTOCOL_VERSION
 from .receiver_metrics import (
     CHANNEL_UNITS,
@@ -105,8 +109,10 @@ __all__ = [
     "REGISTRY_COLUMNS",
     "ReceiverCase",
     "ThreeDNotAuthorizedError",
+    "BlockedBySoftwareOrResourcesError",
     "BootstrapResult",
     "assert_3d_authorized",
+    "compute_layered_response",
     "assert_split_readable",
     "bootstrap_candidate_comparison",
     "bootstrap_case_statistic",

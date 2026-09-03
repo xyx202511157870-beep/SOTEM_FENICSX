@@ -17,6 +17,7 @@ if str(SRC) not in sys.path:
 
 from atem3d.adaptive_debye_mvp.guards import assert_split_readable
 from atem3d.adaptive_debye_mvp.io import write_json
+from atem3d.adaptive_debye_mvp.layered_forward import BlockedBySoftwareOrResourcesError
 from atem3d.adaptive_debye_mvp.oracle_gap import evaluate_l0, evaluate_pilot_case, write_oracle_gap_artifacts
 from atem3d.adaptive_debye_mvp.protocol_constants import K_PILOT, PILOT_WAVEFORMS
 from atem3d.adaptive_debye_mvp.registry import cases_for_split, generate_all_cases
@@ -63,35 +64,52 @@ def main() -> int:
     workers = max(1, min(int(os.environ.get("ROADS_WORKERS", "4")), len(cases)))
     print(f"[flow2] {len(cases)} cases, K={k_values}, workers={workers}", flush=True)
     results = []
-    if workers == 1:
-        for case in cases:
-            print(f"[flow2] evaluating {case.case_id}", flush=True)
-            results.append(
-                evaluate_pilot_case(
-                    case,
-                    waveform_ids=PILOT_WAVEFORMS,
-                    cache_dir=cache_dir,
-                    k_values=k_values,
+    try:
+        if workers == 1:
+            for case in cases:
+                print(f"[flow2] evaluating {case.case_id}", flush=True)
+                results.append(
+                    evaluate_pilot_case(
+                        case,
+                        waveform_ids=PILOT_WAVEFORMS,
+                        cache_dir=cache_dir,
+                        k_values=k_values,
+                    )
                 )
-            )
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(
-                    evaluate_pilot_case,
-                    case,
-                    waveform_ids=PILOT_WAVEFORMS,
-                    cache_dir=str(cache_dir),
-                    k_values=k_values,
-                ): case.case_id
-                for case in cases
-            }
-            for future in as_completed(futures):
-                case_id = futures[future]
-                result = future.result()
-                print(f"[flow2] finished {case_id}", flush=True)
-                results.append(result)
-        results.sort(key=lambda item: item["case_id"])
+        else:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(
+                        evaluate_pilot_case,
+                        case,
+                        waveform_ids=PILOT_WAVEFORMS,
+                        cache_dir=str(cache_dir),
+                        k_values=k_values,
+                    ): case.case_id
+                    for case in cases
+                }
+                for future in as_completed(futures):
+                    case_id = futures[future]
+                    result = future.result()
+                    print(f"[flow2] finished {case_id}", flush=True)
+                    results.append(result)
+            results.sort(key=lambda item: item["case_id"])
+    except BlockedBySoftwareOrResourcesError as exc:
+        write_json(
+            generated / "STOP_REASON.json",
+            {
+                "status": "BLOCKED_BY_SOFTWARE_OR_RESOURCES",
+                "gate": "L0",
+                "reason": str(exc),
+                "three_d_run": False,
+            },
+        )
+        write_json(
+            generated / "FLOW2_STATUS.json",
+            {"status": "BLOCKED_BY_SOFTWARE_OR_RESOURCES", "passed": False},
+        )
+        print("BLOCKED_BY_SOFTWARE_OR_RESOURCES", flush=True)
+        return 2
     for result in results:
         write_json(
             flow2 / f"{result['case_id']}.json",
