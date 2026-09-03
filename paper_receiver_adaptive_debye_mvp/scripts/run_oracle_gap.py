@@ -68,17 +68,20 @@ def main() -> int:
 
     workers = max(1, min(int(os.environ.get("ROADS_WORKERS", "4")), len(cases)))
     _log(f"[flow2] {len(cases)} cases, K={k_values}, workers={workers}")
-    results = []
-    try:
+
+    def _run_cases(*, include_disks: bool, label: str) -> list:
+        _log(f"[flow2] stage={label} include_disks={include_disks}")
+        stage_results = []
         if workers == 1:
             for case in cases:
-                print(f"[flow2] evaluating {case.case_id}", flush=True)
-                results.append(
+                _log(f"[flow2] {label} {case.case_id}")
+                stage_results.append(
                     evaluate_pilot_case(
                         case,
                         waveform_ids=PILOT_WAVEFORMS,
                         cache_dir=cache_dir,
                         k_values=k_values,
+                        include_disks=include_disks,
                     )
                 )
         else:
@@ -90,15 +93,24 @@ def main() -> int:
                         waveform_ids=PILOT_WAVEFORMS,
                         cache_dir=str(cache_dir),
                         k_values=k_values,
+                        include_disks=include_disks,
                     ): case.case_id
                     for case in cases
                 }
                 for future in as_completed(futures):
                     case_id = futures[future]
                     result = future.result()
-                    print(f"[flow2] finished {case_id}", flush=True)
-                    results.append(result)
-            results.sort(key=lambda item: item["case_id"])
+                    _log(f"[flow2] {label} finished {case_id}")
+                    stage_results.append(result)
+            stage_results.sort(key=lambda item: item["case_id"])
+        return stage_results
+
+    try:
+        point_results = _run_cases(include_disks=False, label="points")
+        point_l0 = evaluate_l0(point_results)
+        write_json(flow2 / "L0_point_only_preview.json", {"note": "point receivers only; not the official L0", **point_l0})
+        _log(f"[flow2] point-only preview {point_l0['status']} median_ratio={point_l0['best_same_k_median_ratio']}")
+        results = _run_cases(include_disks=True, label="disks")
     except BlockedBySoftwareOrResourcesError as exc:
         write_json(
             generated / "STOP_REASON.json",
