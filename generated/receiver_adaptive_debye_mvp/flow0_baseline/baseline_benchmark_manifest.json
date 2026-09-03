@@ -1,0 +1,15 @@
+{
+  "layered_smoke": {
+    "case_id": "PG01",
+    "ip_increment_nonzero": true,
+    "ip_increment_peak_abs": 3.5156166086257405e-06,
+    "ip_peak_abs": 4.319784229107307e-05,
+    "n_locations": 2,
+    "n_times": 7,
+    "noip_peak_abs": 4.010590676992159e-05,
+    "script": "paper_algorithm/run_ip_debye_sweep.py skipped (3-D FEniCSx)"
+  },
+  "pytest_exit_code": 2,
+  "skipped_3d": true,
+  "solver_edits": false
+}
