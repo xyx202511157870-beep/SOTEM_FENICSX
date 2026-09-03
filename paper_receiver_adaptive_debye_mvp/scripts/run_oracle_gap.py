@@ -121,15 +121,15 @@ def main() -> int:
         if workers == 1:
             for case in cases:
                 _log(f"[flow2] {label} {case.case_id}")
-                stage_results.append(
-                    evaluate_pilot_case(
-                        case,
-                        waveform_ids=PILOT_WAVEFORMS,
-                        cache_dir=cache_dir,
-                        k_values=k_values,
-                        include_disks=include_disks,
-                    )
+                result = evaluate_pilot_case(
+                    case,
+                    waveform_ids=PILOT_WAVEFORMS,
+                    cache_dir=cache_dir,
+                    k_values=k_values,
+                    include_disks=include_disks,
                 )
+                write_case_result(flow2 / f"{result['case_id']}.json", result)
+                stage_results.append(result)
         else:
             with ProcessPoolExecutor(max_workers=workers) as pool:
                 futures = {
@@ -150,9 +150,6 @@ def main() -> int:
                     _log(f"[flow2] {label} finished {case_id}")
                     stage_results.append(result)
             stage_results.sort(key=lambda item: item["case_id"])
-        if workers == 1:
-            for result in stage_results:
-                write_case_result(flow2 / f"{result['case_id']}.json", result)
         return stage_results
 
     try:
