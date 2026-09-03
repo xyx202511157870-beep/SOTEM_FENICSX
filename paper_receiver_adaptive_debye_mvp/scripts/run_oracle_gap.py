@@ -539,10 +539,21 @@ def main() -> int:
     subset = {case.case_id for case in cases} != {case.case_id for case in all_pilot}
     per_case_only = bool(args.per_case_only or (requested_ids and subset))
 
+    detected_cpus = os.cpu_count() or 4
+    try:
+        detected_cpus = max(detected_cpus, int(subprocess.check_output(["nproc", "--all"], text=True).strip()))
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        pass
     if args.workers > 0:
         requested_workers = args.workers
+    elif "ROADS_WORKERS" in os.environ:
+        requested_workers = int(os.environ["ROADS_WORKERS"])
+        # Some containers report nproc=1 while os.cpu_count()/nproc --all is 4.
+        # Subset runs must saturate the VM unless --workers is explicit.
+        if requested_workers < detected_cpus:
+            requested_workers = detected_cpus
     else:
-        requested_workers = int(os.environ.get("ROADS_WORKERS", os.cpu_count() or 4))
+        requested_workers = detected_cpus
     requested_workers = max(1, requested_workers)
     if per_case_only:
         unit_workers = requested_workers
