@@ -225,9 +225,16 @@ def test_six_channel_unit_separation():
 
 
 def test_all_zero_reference_channel_is_skipped():
-    reference = {"Hz": REF10, "Hy": np.zeros_like(REF10)}
-    candidate = {"Hz": REF10.copy(), "Hy": np.zeros_like(REF10)}
-    metrics = evaluate_case(ReceiverCase(case_id="hy0", times=TIMES10, reference=reference, candidate=candidate))
+    hz = np.array([10.0, 8.0, 6.0, 4.0, 2.0, 1.0, 0.5, 0.2, 0.005, 0.0005])
+    zeros = np.zeros_like(hz)
+    metrics = evaluate_case(
+        ReceiverCase(
+            case_id="hy0",
+            times=TIMES10,
+            reference={"Hz": hz, "Hy": zeros},
+            candidate={"Hz": hz.copy(), "Hy": zeros.copy()},
+        )
+    )
     assert metrics.channels["Hy"].n_masked == 0
     assert np.isnan(metrics.channels["Hy"].total_p95)
     assert metrics.passed
