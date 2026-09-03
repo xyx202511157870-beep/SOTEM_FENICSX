@@ -29,23 +29,81 @@ from atem3d.adaptive_debye_mvp.protocol_constants import K_PILOT, PILOT_WAVEFORM
 from atem3d.adaptive_debye_mvp.registry import cases_for_split, generate_all_cases
 
 
+def _decision_markdown(l0: dict, n_cases: int) -> str:
+    status = (
+        "STOP_LAYERED_NO_ACTIONABLE_GAP"
+        if not l0["passed"]
+        else "L0_PASS_SELECTOR_NOT_STARTED"
+    )
+    if l0["passed"]:
+        status_line = "L0 passed. Selector / independent test were not started in this turn."
+    else:
+        status_line = "STOP_LAYERED_NO_ACTIONABLE_GAP. Official 8-case L0 A and B both failed."
+    return "\n".join(
+        [
+            "# LAYERED_DECISION",
+            "",
+            "## 1. FINAL STATUS",
+            "",
+            status_line,
+            "",
+            "## 2. 3-D continue?",
+            "",
+            "NO. L2 has not passed. 3-D was not run.",
+            "",
+            "## 3. Numbers",
+            "",
+            f"- L0 pass/fail: `{l0['status']}` (A=`{l0['passed_A']}`, B=`{l0['passed_B']}`)",
+            f"- best same-K OR/B2 median ratio: `{l0['best_same_k_median_ratio']}` at K=`{l0['best_same_k']}`",
+            f"- bootstrap 95% CI: `[{l0['bootstrap_ci_low']}, {l0['bootstrap_ci_high']}]`",
+            f"- win rate: `{l0['win_rate']}`",
+            f"- qualifying-K oracle difference: median `{l0['median_k_qual_diff']}`, nonnegative rate `{l0['nonnegative_k_qual_rate']}`",
+            f"- n official pilot cases with disks: `{n_cases}`",
+            "",
+            "## 4. Git / tests",
+            "",
+            "Official L0 calls `compute_layered_response`. PR 10 remains draft.",
+            "",
+            "## 5. If stopped",
+            "",
+            f"`{status}`" if not l0["passed"] else "Not stopped at L0. 3-D still unauthorized.",
+            "",
+            "Explicitly not run: any 3-D FEniCSx forward, including `paper_algorithm/run_ip_debye_sweep.py`.",
+            "",
+        ]
+    )
+
+
 def _markdown_report(l0: dict, n_cases: int) -> str:
     lines = [
         "# LAYERED_ORACLE_GAP_REPORT",
         "",
+        "Official 8-case L0 with point and disk-average receivers.",
+        "The earlier 4-case point-only preview is not official L0.",
+        "",
         f"- L0 status: `{l0['status']}`",
         f"- passed A: `{l0['passed_A']}`",
         f"- passed B: `{l0['passed_B']}`",
-        f"- n pilot cases: `{n_cases}`",
+        f"- n official pilot cases with disks: `{n_cases}`",
         f"- best same-K OR/B2 median ratio: `{l0['best_same_k_median_ratio']}` at K=`{l0['best_same_k']}`",
         f"- bootstrap 95% CI: `[{l0['bootstrap_ci_low']}, {l0['bootstrap_ci_high']}]`",
         f"- win rate: `{l0['win_rate']}`",
         f"- median K_qual_B2 - K_qual_OR: `{l0['median_k_qual_diff']}`",
         f"- nonnegative K_qual rate: `{l0['nonnegative_k_qual_rate']}`",
+        f"- group_ok: `{l0.get('group_ok')}`",
+        f"- focus_k: `{l0.get('focus_k')}`",
         "",
-        "3-D was not run.",
+        "## Same-K A rows",
         "",
     ]
+    for key in sorted(l0.get("same_k", {}), key=int):
+        row = l0["same_k"][key]
+        lines.append(
+            f"- K={key}: median_ratio={row['median_ratio']}, "
+            f"CI=[{row['bootstrap_ci_low']}, {row['bootstrap_ci_high']}], "
+            f"win_rate={row['win_rate']}, n={row['n_cases']}"
+        )
+    lines.extend(["", "3-D was not run.", ""])
     return "\n".join(lines)
 
 
@@ -83,9 +141,17 @@ def main() -> int:
         if len(results) != 8:
             _log(f"[flow2] assemble-l0 found {len(results)} cases, need 8")
             return 3
+        if any(item.get("point_only") for item in results):
+            _log("[flow2] official L0 refused: at least one case is point-only")
+            return 4
         l0 = evaluate_l0(results)
         write_oracle_gap_artifacts(flow2, results, l0)
-        (flow2 / "LAYERED_ORACLE_GAP_REPORT.md").write_text(_markdown_report(l0, len(results)), encoding="utf-8")
+        report = _markdown_report(l0, len(results))
+        decision = _decision_markdown(l0, len(results))
+        (flow2 / "LAYERED_ORACLE_GAP_REPORT.md").write_text(report, encoding="utf-8")
+        (flow2 / "LAYERED_DECISION.md").write_text(decision, encoding="utf-8")
+        (REPO_ROOT / "LAYERED_ORACLE_GAP_REPORT.md").write_text(report, encoding="utf-8")
+        (REPO_ROOT / "LAYERED_DECISION.md").write_text(decision, encoding="utf-8")
         write_json(generated / "FLOW2_STATUS.json", {"status": l0["status"], "passed": l0["passed"], "l0": l0})
         if not l0["passed"]:
             write_json(
@@ -190,7 +256,12 @@ def main() -> int:
 
     l0 = evaluate_l0(results)
     write_oracle_gap_artifacts(flow2, results, l0)
-    (flow2 / "LAYERED_ORACLE_GAP_REPORT.md").write_text(_markdown_report(l0, len(cases)), encoding="utf-8")
+    report = _markdown_report(l0, len(results))
+    decision = _decision_markdown(l0, len(results))
+    (flow2 / "LAYERED_ORACLE_GAP_REPORT.md").write_text(report, encoding="utf-8")
+    (flow2 / "LAYERED_DECISION.md").write_text(decision, encoding="utf-8")
+    (REPO_ROOT / "LAYERED_ORACLE_GAP_REPORT.md").write_text(report, encoding="utf-8")
+    (REPO_ROOT / "LAYERED_DECISION.md").write_text(decision, encoding="utf-8")
     if not l0["passed"]:
         write_json(
             generated / "STOP_REASON.json",

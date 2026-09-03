@@ -85,7 +85,7 @@ def main() -> int:
             "MKL_NUM_THREADS": "1",
             "OPENBLAS_NUM_THREADS": "1",
             "NUMEXPR_NUM_THREADS": "1",
-            "ROADS_WORKERS": "4",
+            "ROADS_WORKERS": str(os.cpu_count() or 4),
         }
     )
     command = [

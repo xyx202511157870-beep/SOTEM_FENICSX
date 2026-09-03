@@ -37,3 +37,16 @@ def test_l0_fails_when_ratio_near_one():
     assert l0["passed"] is False
     assert l0["passed_A"] is False
     assert l0["status"] == "L0_FAIL"
+
+
+def test_l0_ratio_ci_is_on_the_ratio_not_a_shifted_difference():
+    results = []
+    for index in range(8):
+        choices = [_choice(f"PG{index+1:02d}", k, 0.64) for k in (4, 6, 8, 10, 12)]
+        results.append({"choices": choices, "tasks": [], "official_variant": "S0"})
+    l0 = evaluate_l0(results)
+    row = l0["same_k"]["10"]
+    assert row["median_ratio"] == 0.64
+    assert row["bootstrap_ci_low"] == 0.64
+    assert row["bootstrap_ci_high"] == 0.64
+    assert row["bootstrap_ci_high"] != 0.0

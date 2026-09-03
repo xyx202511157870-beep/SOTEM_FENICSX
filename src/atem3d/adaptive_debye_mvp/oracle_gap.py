@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from .bootstrap import paired_case_bootstrap
+from .bootstrap import bootstrap_case_statistic, paired_case_bootstrap
 from .candidates import CandidateSpec
 from .case_bridge import (
     assert_shared_survey_hash,
@@ -685,9 +685,14 @@ def evaluate_l0(pilot_results: list[dict[str, Any]]) -> dict[str, Any]:
             seed=BOOTSTRAP_SEED,
             case_ids=[item.case_id for item in rows],
         )
-        ratio_ci = paired_case_bootstrap(
-            [item.e_or / item.e_b2 if item.e_b2 > 0 else np.nan for item in rows],
-            np.ones(len(rows)),
+        # Case-level OR/B2 ratios, then bootstrap the median. Do not pair
+        # raw ratios against ones (that CI is on median(ratio)-1 and can
+        # report a high of 0 when the ratio CI is actually near 1).
+        ratio_values = [
+            item.e_or / item.e_b2 if item.e_b2 > 0.0 else np.nan for item in rows
+        ]
+        ratio_ci = bootstrap_case_statistic(
+            ratio_values,
             statistic="median",
             seed=BOOTSTRAP_SEED,
             case_ids=[item.case_id for item in rows],
