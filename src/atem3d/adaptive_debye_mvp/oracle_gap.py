@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -543,6 +543,7 @@ def evaluate_pilot_case(
             "choices": choices,
             "tasks": task_rows,
             "point_only": True,
+            "disk_shortlist": {str(k): sorted(ids) for k, ids in shortlists.items()},
         }
 
     print(f"[{case.case_id}] computing exact/noip disks", flush=True)
@@ -636,6 +637,8 @@ def evaluate_pilot_case(
         "fits": fits,
         "choices": choices,
         "tasks": task_rows,
+        "point_only": False,
+        "disk_shortlist": {str(k): sorted(ids) for k, ids in shortlists.items()},
     }
 
 
@@ -834,6 +837,275 @@ def load_case_results(paths) -> list[dict[str, Any]]:
     from .io import read_json
 
     return [hydrate_result(read_json(path)) for path in paths]
+
+
+PILOT_CASE_RESULT_SCHEMA = "atem3d.adaptive_debye_mvp.pilot_case_result.v1"
+
+_CASE_BY_ID: dict[str, LayeredCase] | None = None
+_FIT_CACHE: dict[tuple[str, str], Any] = {}
+
+
+def forward_unit_cache_key(case_id: str, model_id: str, waveform_id: str) -> str:
+    return f"{case_id}:{model_id}:{waveform_id}"
+
+
+def plan_point_forward_units(
+    case: LayeredCase,
+    *,
+    k_values: tuple[int, ...] = K_PILOT,
+    waveform_ids: tuple[str, ...] = PILOT_WAVEFORMS,
+) -> list[dict[str, Any]]:
+    """List point-receiver cache units matching ``evaluate_pilot_case`` keys."""
+
+    candidates = tuple(spec for spec in instantiate_candidates(case) if spec.K in k_values)
+    fits = fit_case_candidates(case, candidates)
+    units: list[dict[str, Any]] = []
+    for model_id in ("exact:point", "noip:point"):
+        for waveform_id in waveform_ids:
+            units.append(
+                {
+                    "case_id": case.case_id,
+                    "model_id": model_id,
+                    "waveform_id": waveform_id,
+                    "receiver_kind": "point",
+                    "cache_key": forward_unit_cache_key(case.case_id, model_id, waveform_id),
+                }
+            )
+    for record in fits:
+        if not record.valid:
+            continue
+        model_id = f"{record.candidate_id}:point"
+        for waveform_id in waveform_ids:
+            units.append(
+                {
+                    "case_id": case.case_id,
+                    "model_id": model_id,
+                    "waveform_id": waveform_id,
+                    "receiver_kind": "point",
+                    "candidate_id": record.candidate_id,
+                    "cache_key": forward_unit_cache_key(case.case_id, model_id, waveform_id),
+                }
+            )
+    return units
+
+
+def plan_disk_forward_units(
+    case: LayeredCase,
+    shortlist_ids: Iterable[str],
+    *,
+    waveform_ids: tuple[str, ...] = PILOT_WAVEFORMS,
+) -> list[dict[str, Any]]:
+    """List official disk-average cache units for a candidate shortlist."""
+
+    ids = sorted({str(item) for item in shortlist_ids})
+    units: list[dict[str, Any]] = []
+    for model_id in ("exact:disk", "noip:disk"):
+        for waveform_id in waveform_ids:
+            units.append(
+                {
+                    "case_id": case.case_id,
+                    "model_id": model_id,
+                    "waveform_id": waveform_id,
+                    "receiver_kind": "disk",
+                    "cache_key": forward_unit_cache_key(case.case_id, model_id, waveform_id),
+                }
+            )
+    for candidate_id in ids:
+        model_id = f"{candidate_id}:disk"
+        for waveform_id in waveform_ids:
+            units.append(
+                {
+                    "case_id": case.case_id,
+                    "model_id": model_id,
+                    "waveform_id": waveform_id,
+                    "receiver_kind": "disk",
+                    "candidate_id": candidate_id,
+                    "cache_key": forward_unit_cache_key(case.case_id, model_id, waveform_id),
+                }
+            )
+    return units
+
+
+def _case_by_id(case_id: str) -> LayeredCase:
+    global _CASE_BY_ID
+    if _CASE_BY_ID is None:
+        from .registry import generate_all_cases
+
+        _CASE_BY_ID = {item.case_id: item for item in generate_all_cases()}
+    return _CASE_BY_ID[case_id]
+
+
+def material_for_model_id(case: LayeredCase, model_id: str):
+    """Rebuild the constitutive model encoded in a cache ``model_id``."""
+
+    kind, _sep, _kind = model_id.rpartition(":")
+    if kind == "exact":
+        return exact_pelton_material(case)
+    if kind == "noip":
+        return nonpolarizable_material(case)
+    cache_key = (case.case_id, kind)
+    if cache_key not in _FIT_CACHE:
+        spec = next(item for item in instantiate_candidates(case) if item.candidate_id == kind)
+        records = fit_case_candidates(case, (spec,))
+        if not records or not records[0].valid:
+            raise RuntimeError(f"cannot build Debye material for {model_id}")
+        _FIT_CACHE[cache_key] = records[0].fit
+    return debye_material(case, _FIT_CACHE[cache_key], candidate_id=kind)
+
+
+def execute_forward_unit(unit: dict[str, Any], cache_dir: str | Path) -> dict[str, Any]:
+    """Compute or load one ``forward_response`` cache entry (worker entry)."""
+
+    import os
+    import time
+
+    for var in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "NUMBA_NUM_THREADS",
+    ):
+        os.environ.setdefault(var, "1")
+
+    from .case_bridge import load_cached_response
+
+    started = time.perf_counter()
+    cache_key = str(unit["cache_key"])
+    cached = load_cached_response(cache_dir, cache_key)
+    if cached is not None:
+        return {
+            "cache_key": cache_key,
+            "from_cache": True,
+            "seconds": time.perf_counter() - started,
+            "shared_survey_hash": cached["hashes"]["shared_survey_hash"],
+        }
+    case = _case_by_id(str(unit["case_id"]))
+    receivers = disk_receivers(case) if unit["receiver_kind"] == "disk" else point_receivers(case)
+    result = forward_response(
+        material_for_model_id(case, str(unit["model_id"])),
+        case_geometry(case),
+        case_waveform(str(unit["waveform_id"])),
+        receivers,
+        case_time_grid(),
+        evaluation_transform(),
+        cache_dir=cache_dir,
+        cache_key=cache_key,
+    )
+    return {
+        "cache_key": cache_key,
+        "from_cache": bool(result.get("from_cache")),
+        "seconds": time.perf_counter() - started,
+        "shared_survey_hash": result["hashes"]["shared_survey_hash"],
+    }
+
+
+def _fit_summary(fits) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in fits:
+        rows.append(
+            {
+                "candidate_id": item.candidate_id,
+                "K": item.K,
+                "valid": item.valid,
+                "spectral_error_s0": item.spectral_error_s0,
+                "spectral_error_s1": item.spectral_error_s1,
+                "condition_number": item.condition_number,
+                "relative_dc_error": item.relative_dc_error,
+                "optimizer_success": item.optimizer_success,
+            }
+        )
+    return rows
+
+
+def pilot_case_result_record(
+    result: dict[str, Any],
+    *,
+    case: LayeredCase,
+    provenance: dict[str, Any],
+    k_values: tuple[int, ...] = K_PILOT,
+    waveform_ids: tuple[str, ...] = PILOT_WAVEFORMS,
+) -> dict[str, Any]:
+    """Compact per-case JSON with every field ``evaluate_l0`` reads."""
+
+    shortlist = result.get("disk_shortlist") or {}
+    shortlist = {str(key): list(value) for key, value in shortlist.items()}
+    return {
+        "schema": PILOT_CASE_RESULT_SCHEMA,
+        "case_id": case.case_id,
+        "case_hash": case.case_hash(),
+        "split": case.split,
+        "official_variant": result.get("official_variant", "S0"),
+        "point_only": bool(result.get("point_only", False)),
+        "k_values": [int(value) for value in k_values],
+        "waveform_ids": list(waveform_ids),
+        "receiver_ids": ["point", "disk_1.0", "disk_4.0"],
+        "disk_shortlist": shortlist,
+        "choices": [to_record(item) for item in result["choices"]],
+        "tasks": [to_record(item) for item in result["tasks"]],
+        "fit_summary": _fit_summary(result.get("fits", [])),
+        "provenance": provenance,
+    }
+
+
+def write_pilot_case_result(
+    path: str | Path,
+    result: dict[str, Any],
+    *,
+    case: LayeredCase,
+    provenance: dict[str, Any],
+    k_values: tuple[int, ...] = K_PILOT,
+    waveform_ids: tuple[str, ...] = PILOT_WAVEFORMS,
+) -> Path:
+    return write_json(
+        path,
+        pilot_case_result_record(
+            result,
+            case=case,
+            provenance=provenance,
+            k_values=k_values,
+            waveform_ids=waveform_ids,
+        ),
+    )
+
+
+def load_pilot_case_result(path) -> dict[str, Any]:
+    """Load ``case_PG*.json`` into the dataclass form ``evaluate_l0`` expects."""
+
+    from .io import read_json
+
+    payload = read_json(path)
+
+    def _finite_or_nan(value: Any) -> Any:
+        return float("nan") if value is None else value
+
+    def _hydrate_choice(item: Any) -> CaseKChoice:
+        if isinstance(item, CaseKChoice):
+            return item
+        fields = {name: _finite_or_nan(item[name]) for name in CaseKChoice.__dataclass_fields__}
+        return CaseKChoice(**fields)
+
+    def _hydrate_task(item: Any) -> TaskMetrics:
+        if isinstance(item, TaskMetrics):
+            return item
+        fields = {name: _finite_or_nan(item[name]) for name in TaskMetrics.__dataclass_fields__}
+        return TaskMetrics(**fields)
+
+    choices = [_hydrate_choice(item) for item in payload.get("choices", [])]
+    case_id = payload.get("case_id")
+    if not case_id and choices:
+        case_id = choices[0].case_id
+    return {
+        "case_id": case_id,
+        "official_variant": payload.get("official_variant", "S0"),
+        "choices": choices,
+        "tasks": [_hydrate_task(item) for item in payload.get("tasks", [])],
+        "fits": [],
+        "point_only": bool(payload.get("point_only", False)),
+        "disk_shortlist": payload.get("disk_shortlist", {}),
+        "case_hash": payload.get("case_hash"),
+        "provenance": payload.get("provenance", {}),
+    }
 
 
 def write_oracle_gap_artifacts(output_dir: str | Path, pilot_results: list[dict[str, Any]], l0: dict[str, Any]) -> None:

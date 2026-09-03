@@ -252,16 +252,26 @@ def load_cached_response(cache_dir: str | Path | None, cache_key: str | None) ->
 def store_cached_response(cache_dir: str | Path | None, cache_key: str | None, result: dict[str, Any]) -> None:
     if cache_dir is None or not cache_key:
         return
+    import os
+
     path = _cache_file(cache_dir, cache_key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        path,
-        data=np.asarray(result["data"], dtype="<f8"),
-        channels=np.asarray(list(result["channels"]), dtype="U16"),
-        receiver_labels=np.asarray(list(result["receiver_labels"]), dtype="U32"),
-        times=np.asarray(result["times"], dtype=float),
-        shared_survey_hash=np.asarray(result["hashes"]["shared_survey_hash"]),
-    )
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with tmp.open("wb") as handle:
+            np.savez(
+                handle,
+                data=np.asarray(result["data"], dtype="<f8"),
+                channels=np.asarray(list(result["channels"]), dtype="U16"),
+                receiver_labels=np.asarray(list(result["receiver_labels"]), dtype="U32"),
+                times=np.asarray(result["times"], dtype=float),
+                shared_survey_hash=np.asarray(result["hashes"]["shared_survey_hash"]),
+            )
+        os.replace(tmp, path)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
+        raise
 
 
 def forward_response(
