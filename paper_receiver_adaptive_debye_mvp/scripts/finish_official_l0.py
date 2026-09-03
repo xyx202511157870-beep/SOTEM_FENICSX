@@ -75,9 +75,19 @@ def _point_files(case_id: str) -> int:
     return count
 
 
+def _case_json_path(case_id: str) -> Path | None:
+    case_path = FLOW2 / f"case_{case_id}.json"
+    legacy_path = FLOW2 / f"{case_id}.json"
+    if case_path.is_file():
+        return case_path
+    if legacy_path.is_file():
+        return legacy_path
+    return None
+
+
 def _case_ready(case_id: str) -> bool:
-    path = FLOW2 / f"{case_id}.json"
-    if not path.is_file():
+    path = _case_json_path(case_id)
+    if path is None:
         return False
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("point_only"):
@@ -145,9 +155,9 @@ def main() -> int:
             if code != 0:
                 return code
 
-    if not all(_case_ready(f"PG{index:02d}") for index in range(1, 5)):
-        _log("[finish] sibling PG01-PG04 disk JSON missing; computing disks here")
-        code = _run("PG01,PG02,PG03,PG04")
+    if not all(_case_ready(f"PG{index:02d}") for index in range(1, 3)):
+        _log("[finish] PG01-PG02 disk JSON missing; computing disks here")
+        code = _run("PG01,PG02")
         if code != 0:
             return code
 

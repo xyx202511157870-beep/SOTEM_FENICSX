@@ -21,7 +21,7 @@ from atem3d.adaptive_debye_mvp.layered_forward import BlockedBySoftwareOrResourc
 from atem3d.adaptive_debye_mvp.oracle_gap import (
     evaluate_l0,
     evaluate_pilot_case,
-    load_case_results,
+    load_official_case_results,
     write_case_result,
     write_oracle_gap_artifacts,
 )
@@ -134,8 +134,7 @@ def main() -> int:
             handle.write(message + "\n")
 
     if args.assemble_l0:
-        paths = sorted(flow2.glob("PG*.json"))
-        results = load_case_results(paths)
+        results = load_official_case_results(flow2)
         if wanted:
             results = [item for item in results if item["case_id"] in set(wanted)]
         if len(results) != 8:

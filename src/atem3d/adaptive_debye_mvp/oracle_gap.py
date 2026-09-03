@@ -841,6 +841,72 @@ def load_case_results(paths) -> list[dict[str, Any]]:
     return [hydrate_result(read_json(path)) for path in paths]
 
 
+def load_pilot_case_result(path: str | Path) -> dict[str, Any]:
+    """Load ``case_PG*.json`` into the dataclass form ``evaluate_l0`` expects."""
+
+    from .io import read_json
+
+    payload = read_json(path)
+
+    def _finite_or_nan(value: Any) -> Any:
+        return float("nan") if value is None else value
+
+    choices = [
+        hydrate_choice({name: _finite_or_nan(item[name]) for name in CaseKChoice.__dataclass_fields__})
+        for item in payload.get("choices", [])
+    ]
+    case_id = payload.get("case_id")
+    if not case_id and choices:
+        case_id = choices[0].case_id
+    return {
+        "case_id": case_id,
+        "official_variant": payload.get("official_variant", "S0"),
+        "choices": choices,
+        "tasks": [
+            hydrate_task({name: _finite_or_nan(item[name]) for name in TaskMetrics.__dataclass_fields__})
+            for item in payload.get("tasks", [])
+        ],
+        "point_only": bool(payload.get("point_only", False)),
+        "disk_shortlist": payload.get("disk_shortlist", {}),
+        "case_hash": payload.get("case_hash"),
+        "provenance": payload.get("provenance", {}),
+    }
+
+
+def discover_official_case_paths(flow2: str | Path) -> list[Path]:
+    """Resolve one JSON per pilot case, preferring sibling ``case_PG*.json`` artifacts."""
+
+    root = Path(flow2)
+    paths: list[Path] = []
+    missing: list[str] = []
+    for index in range(1, 9):
+        case_id = f"PG{index:02d}"
+        case_path = root / f"case_{case_id}.json"
+        legacy_path = root / f"{case_id}.json"
+        if case_path.is_file():
+            paths.append(case_path)
+        elif legacy_path.is_file():
+            paths.append(legacy_path)
+        else:
+            missing.append(case_id)
+    if missing:
+        raise FileNotFoundError(f"missing official case JSON: {missing}")
+    return paths
+
+
+def load_official_case_result(path: str | Path) -> dict[str, Any]:
+    path = Path(path)
+    if path.name.startswith("case_"):
+        return load_pilot_case_result(path)
+    from .io import read_json
+
+    return hydrate_result(read_json(path))
+
+
+def load_official_case_results(flow2: str | Path) -> list[dict[str, Any]]:
+    return [load_official_case_result(path) for path in discover_official_case_paths(flow2)]
+
+
 def write_oracle_gap_artifacts(output_dir: str | Path, pilot_results: list[dict[str, Any]], l0: dict[str, Any]) -> None:
     """Write Flow-2 machine-readable tables and the L0 decision."""
 
