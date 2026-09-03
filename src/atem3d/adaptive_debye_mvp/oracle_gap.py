@@ -448,32 +448,9 @@ def evaluate_pilot_case(
         )
         for waveform_id in waveform_ids:
             assert_shared_survey_hash([reference_point[waveform_id], baseline_point[waveform_id]])
-        reference_disk = _run_model_waveforms(
-            case,
-            exact,
-            receivers=disks,
-            waveform_ids=waveform_ids,
-            cache_dir=cache_dir,
-            backend=backend,
-            model_id="exact:disk",
-            times=times,
-            geometry=geometry,
-            transform=transform,
-        )
-        baseline_disk = _run_model_waveforms(
-            case,
-            noip,
-            receivers=disks,
-            waveform_ids=waveform_ids,
-            cache_dir=cache_dir,
-            backend=backend,
-            model_id="noip:disk",
-            times=times,
-            geometry=geometry,
-            transform=transform,
-        )
-        for waveform_id in waveform_ids:
-            assert_shared_survey_hash([reference_disk[waveform_id], baseline_disk[waveform_id]])
+        print(f"[{case.case_id}] point exact/noip finished", flush=True)
+        reference_disk = None
+        baseline_disk = None
     except BlockedBySoftwareOrResourcesError:
         raise
     choices: list[CaseKChoice] = []
@@ -492,6 +469,7 @@ def evaluate_pilot_case(
         for record in records:
             if not record.valid:
                 continue
+            print(f"[{case.case_id}] point {record.candidate_id}", flush=True)
             tasks = _forward_and_tasks(
                 case,
                 record,
@@ -515,6 +493,34 @@ def evaluate_pilot_case(
         ranked = sorted(point_map, key=lambda cid: (reduce_case_error(point_map[cid]), cid))
         shortlist_ids = {spectral.candidate_id, point_oracle.candidate_id, *ranked[: int(disk_shortlist)]}
         disk_map: dict[str, list[TaskMetrics]] = {}
+        if reference_disk is None:
+            print(f"[{case.case_id}] computing exact/noip disks", flush=True)
+            reference_disk = _run_model_waveforms(
+                case,
+                exact,
+                receivers=disks,
+                waveform_ids=waveform_ids,
+                cache_dir=cache_dir,
+                backend=backend,
+                model_id="exact:disk",
+                times=times,
+                geometry=geometry,
+                transform=transform,
+            )
+            baseline_disk = _run_model_waveforms(
+                case,
+                noip,
+                receivers=disks,
+                waveform_ids=waveform_ids,
+                cache_dir=cache_dir,
+                backend=backend,
+                model_id="noip:disk",
+                times=times,
+                geometry=geometry,
+                transform=transform,
+            )
+            for waveform_id in waveform_ids:
+                assert_shared_survey_hash([reference_disk[waveform_id], baseline_disk[waveform_id]])
         print(
             f"[{case.case_id}] K={poles} disk shortlist {sorted(shortlist_ids)}",
             flush=True,

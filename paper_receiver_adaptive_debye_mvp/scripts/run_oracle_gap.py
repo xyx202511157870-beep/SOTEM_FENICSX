@@ -55,6 +55,11 @@ def main() -> int:
     flow2 = generated / "flow2_oracle_gap"
     flow2.mkdir(parents=True, exist_ok=True)
 
+    def _log(message: str) -> None:
+        print(message, flush=True)
+        with (flow2 / "flow2.log").open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
+
     cases = list(cases_for_split("pilot_gap", generate_all_cases()))
     for case in cases:
         assert_split_readable(case.split, stage="flow2")
@@ -62,7 +67,7 @@ def main() -> int:
         cases = cases[: args.max_cases]
 
     workers = max(1, min(int(os.environ.get("ROADS_WORKERS", "4")), len(cases)))
-    print(f"[flow2] {len(cases)} cases, K={k_values}, workers={workers}", flush=True)
+    _log(f"[flow2] {len(cases)} cases, K={k_values}, workers={workers}")
     results = []
     try:
         if workers == 1:
