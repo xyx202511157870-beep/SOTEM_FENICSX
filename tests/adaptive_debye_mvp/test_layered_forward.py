@@ -26,7 +26,9 @@ from atem3d.adaptive_debye_mvp.layered_forward import (
 )
 from atem3d.adaptive_debye_mvp.reference_audit import (
     annotate_reference_type,
+    floor_relative_error,
     run_reference_audit,
+    _classify_reference_type,
 )
 from atem3d.empymod_magnetic6 import MAGNETIC6_UNITS
 
@@ -418,6 +420,50 @@ def test_layered_forward_does_not_import_fem_or_dolfinx():
         joined = "\n".join(imports)
         for token in forbidden:
             assert token not in joined
+
+
+def test_empty_audit_does_not_mark_converged(case):
+    report = _classify_reference_type(
+        case["materials"]["exact_m0p2"],
+        {},
+        (),
+        all_gating_passed=True,
+        approved_identity_tied=True,
+    )
+    assert report == "empymod_unaudited"
+    empty = run_reference_audit(
+        case["materials"]["exact_m0p2"],
+        case["geometry"],
+        case["waveforms"]["W0"],
+        (case["receivers"][0],),
+        case["times"],
+        APPROVED_PRODUCTION_TRANSFORM,
+        baseline={
+            "data": np.ones((31, 1, 6)),
+            "hashes": {},
+            "dbdt_route_audit": {},
+        },
+        checks=(),
+    )
+    assert empty["reference_type"] == "empymod_unaudited"
+    assert empty["all_gating_passed"] is False
+
+
+def test_near_zero_channels_are_excluded_from_gating_error():
+    reference = np.zeros((4, 6), dtype=float)
+    reference[:, 2] = 1.0
+    variant = reference.copy()
+    variant[:, 0] = 1.0
+    full = floor_relative_error(reference, variant, floor_fraction=1.0e-2)
+    excluded = floor_relative_error(
+        reference,
+        variant,
+        floor_fraction=1.0e-2,
+        exclude=("Hx",),
+    )
+    assert full["global_max"] > 1.0
+    assert excluded["global_max"] == 0.0
+    assert excluded["per_channel_max_floor_relative_error"]["Hx"] > 0.0
 
 
 def test_time_grid_default_window():

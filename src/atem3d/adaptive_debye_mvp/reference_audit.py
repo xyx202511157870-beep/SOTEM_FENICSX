@@ -172,6 +172,7 @@ def run_reference_audit(
             backend=backend,
         )
     baseline_data = _point_column(baseline, 0)
+    near_zero = _near_zero_channel_names(baseline_data)
 
     report_checks: dict[str, Any] = {}
     if "frequency_range_expansion" in requested:
@@ -186,6 +187,7 @@ def run_reference_audit(
             backend=backend,
             tolerance=tolerance,
             floor_fraction=floor_fraction,
+            exclude=near_zero,
         )
     if "frequency_sampling_density" in requested:
         report_checks["frequency_sampling_density"] = _check_frequency_sampling(
@@ -198,6 +200,7 @@ def run_reference_audit(
             backend=backend,
             tolerance=tolerance,
             floor_fraction=floor_fraction,
+            exclude=near_zero,
         )
     if "fourier_method_pair" in requested:
         report_checks["fourier_method_pair"] = _check_fourier_pair(
@@ -212,6 +215,7 @@ def run_reference_audit(
             backend=backend,
             tolerance=tolerance,
             floor_fraction=floor_fraction,
+            exclude=near_zero,
         )
     if "source_quadrature_9_vs_17" in requested:
         report_checks["source_quadrature_9_vs_17"] = _compare_transform_variant(
@@ -228,6 +232,7 @@ def run_reference_audit(
             tolerance=tolerance,
             floor_fraction=floor_fraction,
             note="finite-source quadrature 9 vs 17",
+            exclude=near_zero,
         )
     if "hankel_filter_pair" in requested:
         report_checks["hankel_filter_pair"] = _compare_transform_variant(
@@ -248,6 +253,7 @@ def run_reference_audit(
             tolerance=tolerance,
             floor_fraction=floor_fraction,
             note="Hankel DLF key_201_2009 vs key_401_2009",
+            exclude=near_zero,
         )
     if "disk_quadrature_order" in requested:
         report_checks["disk_quadrature_order"] = _check_disk_quadrature(
@@ -263,6 +269,7 @@ def run_reference_audit(
             backend=backend,
             tolerance=tolerance,
             floor_fraction=floor_fraction,
+            exclude=near_zero,
         )
     if "six_channel_signs_and_near_zero" in requested:
         report_checks["six_channel_signs_and_near_zero"] = _check_signs_and_near_zero(
@@ -290,21 +297,25 @@ def run_reference_audit(
             floor_fraction=floor_fraction,
             gating=False,
             note="fftlog is informational only; not a gating cross-check",
+            exclude=near_zero,
         )
 
-    near_zero = report_checks.get("six_channel_signs_and_near_zero", {}).get(
-        "near_zero_channels", []
+    if "six_channel_signs_and_near_zero" in report_checks:
+        near_zero = list(
+            report_checks["six_channel_signs_and_near_zero"].get(
+                "near_zero_channels", near_zero
+            )
+        )
+    required_ok = all(
+        bool(report_checks.get(name, {}).get("performed"))
+        and bool(report_checks.get(name, {}).get("passed"))
+        for name in REQUIRED_PERFORMED_CHECKS
     )
-    gating_items = [
-        item for item in report_checks.values() if item.get("gating", True)
-    ]
-    all_gating_passed = all(
-        (not item.get("performed", False)) or bool(item.get("passed"))
-        for item in gating_items
-    ) and all(
-        report_checks.get(name, {}).get("performed") for name in REQUIRED_PERFORMED_CHECKS
-        if name in requested
+    gating_failed = any(
+        item.get("gating", True) and item.get("performed") and not item.get("passed")
+        for item in report_checks.values()
     )
+    all_gating_passed = required_ok and not gating_failed
     approved_identity_tied = _approved_identity_tied(
         transform_settings,
         report_checks.get("fourier_method_pair"),
@@ -315,6 +326,7 @@ def run_reference_audit(
         requested,
         all_gating_passed=all_gating_passed,
         approved_identity_tied=approved_identity_tied,
+        required_ok=required_ok,
     )
     return {
         "schema": "atem3d.adaptive_debye_mvp.reference_audit.v1",
@@ -363,6 +375,7 @@ def _check_frequency_range(
     backend,
     tolerance,
     floor_fraction,
+    exclude=(),
 ) -> dict[str, Any]:
     expanded = TimeGrid(
         times_s=tuple(
@@ -397,6 +410,7 @@ def _check_frequency_range(
         baseline_data,
         shared,
         floor_fraction=floor_fraction,
+        exclude=exclude,
     )
     note = "expanded time set logspace(-6,-1) union, compared on the 31 shared times"
     if transform_settings.ft_pts_per_dec == 0:
@@ -424,6 +438,7 @@ def _check_frequency_sampling(
     backend,
     tolerance,
     floor_fraction,
+    exclude=(),
 ) -> dict[str, Any]:
     coarse = replace(
         transform_settings,
@@ -447,6 +462,7 @@ def _check_frequency_sampling(
         _point_column(coarse_response, 0),
         _point_column(dense_response, 0),
         floor_fraction=floor_fraction,
+        exclude=exclude,
     )
     return _check_record(
         "frequency_sampling_density",
@@ -473,6 +489,7 @@ def _check_fourier_pair(
     backend,
     tolerance,
     floor_fraction,
+    exclude=(),
 ) -> dict[str, Any]:
     if baseline_transform.ft_pts_per_dec == 0:
         variant_settings = replace(
@@ -502,6 +519,7 @@ def _check_fourier_pair(
         tolerance=tolerance,
         floor_fraction=floor_fraction,
         note=f"pairs the audited numbers with {variant_label}",
+        exclude=exclude,
     )
 
 
@@ -519,6 +537,7 @@ def _check_disk_quadrature(
     backend,
     tolerance,
     floor_fraction,
+    exclude=(),
 ) -> dict[str, Any]:
     if disk_receiver_index is None:
         disk_receiver_index = next(
@@ -595,6 +614,7 @@ def _check_disk_quadrature(
         variant_data,
         floor_fraction=floor_fraction,
         channel_names=channel_names,
+        exclude=exclude,
     )
     return _check_record(
         "disk_quadrature_order",
@@ -618,21 +638,7 @@ def _check_signs_and_near_zero(
     if data.ndim != 3:
         raise ValueError("baseline data must have shape (n_times, n_receivers, 6)")
     column = data[:, 0, :]
-    peaks = {
-        name: float(np.max(np.abs(column[:, index])))
-        for index, name in enumerate(CHANNELS)
-    }
-    h_group = max(peaks[name] for name in H_CHANNELS)
-    dbdt_group = max(peaks[name] for name in DBDT_CHANNELS)
-    near_zero = [
-        name
-        for name in H_CHANNELS
-        if peaks[name] < NEAR_ZERO_FRACTION * max(h_group, np.finfo(float).tiny)
-    ] + [
-        name
-        for name in DBDT_CHANNELS
-        if peaks[name] < NEAR_ZERO_FRACTION * max(dbdt_group, np.finfo(float).tiny)
-    ]
+    peaks, near_zero = _channel_peaks_and_near_zero(column)
     route_ok = True
     sign_agreement = {}
     for label, audit in baseline.get("dbdt_route_audit", {}).items():
@@ -704,6 +710,7 @@ def _compare_transform_variant(
     floor_fraction,
     note: str,
     gating: bool = True,
+    exclude=(),
 ) -> dict[str, Any]:
     started = time.perf_counter()
     variant = compute_layered_response(
@@ -720,6 +727,7 @@ def _compare_transform_variant(
         baseline_data,
         _point_column(variant, 0),
         floor_fraction=floor_fraction,
+        exclude=exclude,
     )
     return _check_record(
         name,
@@ -805,21 +813,48 @@ def _classify_reference_type(
     *,
     all_gating_passed: bool,
     approved_identity_tied: bool,
+    required_ok: bool | None = None,
 ) -> str:
-    required_missing = any(
-        name in requested and not checks.get(name, {}).get("performed")
-        for name in REQUIRED_PERFORMED_CHECKS
-    )
+    if required_ok is None:
+        required_ok = all(
+            bool(checks.get(name, {}).get("performed"))
+            and bool(checks.get(name, {}).get("passed"))
+            for name in REQUIRED_PERFORMED_CHECKS
+        )
     gating_failed = any(
         item.get("gating", True) and item.get("performed") and not item.get("passed")
         for item in checks.values()
     )
     if gating_failed:
         return "empymod_audit_failed"
-    if required_missing or not all_gating_passed or not approved_identity_tied:
+    if not required_ok or not all_gating_passed or not approved_identity_tied:
         return "empymod_unaudited"
     if isinstance(material, ExactPeltonMaterial):
         return "empymod_converged_cole_cole"
     if isinstance(material, DebyeCandidateMaterial):
         return "empymod_audited_debye_candidate"
     return "empymod_unaudited"
+
+
+def _channel_peaks_and_near_zero(column: np.ndarray) -> tuple[dict[str, float], list[str]]:
+    peaks = {
+        name: float(np.max(np.abs(column[:, index])))
+        for index, name in enumerate(CHANNELS)
+    }
+    h_group = max(peaks[name] for name in H_CHANNELS)
+    dbdt_group = max(peaks[name] for name in DBDT_CHANNELS)
+    near_zero = [
+        name
+        for name in H_CHANNELS
+        if peaks[name] < NEAR_ZERO_FRACTION * max(h_group, np.finfo(float).tiny)
+    ] + [
+        name
+        for name in DBDT_CHANNELS
+        if peaks[name] < NEAR_ZERO_FRACTION * max(dbdt_group, np.finfo(float).tiny)
+    ]
+    return peaks, near_zero
+
+
+def _near_zero_channel_names(column: np.ndarray) -> list[str]:
+    _peaks, near_zero = _channel_peaks_and_near_zero(np.asarray(column, dtype=float))
+    return near_zero

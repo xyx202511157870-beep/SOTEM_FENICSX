@@ -721,10 +721,15 @@ def compute_layered_response(
         )
         columns.append(stacked)
         receiver_records.append(disk_record)
+        if convolution is None:
+            convolution = disk_record.get("convolution")
+        if primary_reference is None:
+            primary_reference = disk_record.get("primary_dbdt_reference")
         dbdt_audits[receiver.label] = {
             "performed": False,
             "passed": True,
             "reason": "impulse cross-check is skipped for disk-average receivers",
+            "primary_dbdt_reference": disk_record.get("primary_dbdt_reference"),
         }
 
     data = np.stack(columns, axis=1)
@@ -738,7 +743,12 @@ def compute_layered_response(
         data,
         empymod_version=version_text,
     )
-    frequencies = _frequency_provenance(time_array, resolved_waveform, transform_settings)
+    frequencies = _frequency_provenance(
+        time_array,
+        resolved_waveform,
+        transform_settings,
+        quadrature_order=waveform.quadrature_order,
+    )
     provenance = {
         "empymod_version": version_text,
         "transform": {
@@ -860,6 +870,8 @@ def disk_average_channel_pair(
         "radial_order": DISK_RADIAL_ORDER,
         "azimuth_count": DISK_AZIMUTH_COUNT,
         "normal_per_channel": "component_axis",
+        "convolution": getattr(result, "convolution", None),
+        "primary_dbdt_reference": result.primary_dbdt_reference,
     }
     return averaged[:, indices], record
 
@@ -919,6 +931,8 @@ def disk_average_six_channel(
             "normal_per_channel": "component_axis",
             "axes": used_axes,
         },
+        "convolution": last_record.get("convolution"),
+        "primary_dbdt_reference": last_record.get("primary_dbdt_reference"),
     }
 
 
@@ -1224,10 +1238,14 @@ def _frequency_provenance(
     times: np.ndarray,
     waveform: PiecewiseLinearTurnOff | None,
     transform_settings: TransformSettings,
+    *,
+    quadrature_order: int = 8,
 ) -> dict[str, Any]:
     eval_times = np.asarray(times, dtype=float)
     if waveform is not None:
-        delays = np.linspace(float(waveform.times[0]), 0.0, 8)
+        from atem3d.empymod_waveform import _turnoff_quadrature  # noqa: PLC0415
+
+        delays, _weights, _segments = _turnoff_quadrature(waveform, int(quadrature_order))
         eval_times = np.unique((eval_times[:, None] - delays[None, :]).reshape(-1))
     kwargs = transform_settings.empymod_kwargs(2)
     frequencies = _empymod_frequency_grid(
