@@ -401,6 +401,7 @@ def evaluate_pilot_case(
     k_values: tuple[int, ...] = K_PILOT,
     official_variant: str | None = None,
     disk_shortlist: int = 2,
+    include_disks: bool = True,
 ) -> dict[str, Any]:
     """Evaluate spectral-best vs receiver-oracle on one pilot case.
 
@@ -449,8 +450,6 @@ def evaluate_pilot_case(
         for waveform_id in waveform_ids:
             assert_shared_survey_hash([reference_point[waveform_id], baseline_point[waveform_id]])
         print(f"[{case.case_id}] point exact/noip finished", flush=True)
-        reference_disk = None
-        baseline_disk = None
     except BlockedBySoftwareOrResourcesError:
         raise
     choices: list[CaseKChoice] = []
@@ -499,6 +498,51 @@ def evaluate_pilot_case(
             spectrals[poles].candidate_id,
             point_oracle.candidate_id,
             *ranked[: int(disk_shortlist)],
+        }
+
+    if not include_disks:
+        for poles, records in by_k.items():
+            if poles not in point_maps:
+                continue
+            point_map = point_maps[poles]
+            spectral = spectrals[poles]
+            oracle = pick_oracle_best(point_map, records)
+            e_b2 = reduce_case_error(point_map[spectral.candidate_id])
+            e_or = reduce_case_error(point_map[oracle.candidate_id])
+            ratio = (
+                float(e_or / e_b2)
+                if e_b2 > 0.0 and np.isfinite(e_b2) and np.isfinite(e_or)
+                else float("nan")
+            )
+            choices.append(
+                CaseKChoice(
+                    case_id=case.case_id,
+                    K=poles,
+                    spectral_id=spectral.candidate_id,
+                    oracle_id=oracle.candidate_id,
+                    ids_differ=spectral.candidate_id != oracle.candidate_id,
+                    e_b2=e_b2,
+                    e_or=e_or,
+                    ratio=ratio,
+                    gap=1.0 - ratio if np.isfinite(ratio) else float("nan"),
+                    ip_b2=reduce_ip_error(point_map[spectral.candidate_id]),
+                    ip_or=reduce_ip_error(point_map[oracle.candidate_id]),
+                    log_hausdorff=log_hausdorff_pole_distance(
+                        next(spec.tau_grid for spec in candidates if spec.candidate_id == spectral.candidate_id),
+                        next(spec.tau_grid for spec in candidates if spec.candidate_id == oracle.candidate_id),
+                    ),
+                    qualifies_b2=tasks_qualify(point_map[spectral.candidate_id]),
+                    qualifies_or=tasks_qualify(point_map[oracle.candidate_id]),
+                )
+            )
+        print(f"[{case.case_id}] point-only stage finished", flush=True)
+        return {
+            "case_id": case.case_id,
+            "official_variant": variant,
+            "fits": fits,
+            "choices": choices,
+            "tasks": task_rows,
+            "point_only": True,
         }
 
     print(f"[{case.case_id}] computing exact/noip disks", flush=True)
