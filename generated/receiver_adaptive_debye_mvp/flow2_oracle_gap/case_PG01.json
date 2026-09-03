@@ -294,6 +294,31 @@
       "spectral_id": "K12_tw_span6.0_shift+0.5_dens1.00"
     }
   ],
+  "disk_shortlist": {
+    "10": [
+      "K10_tw_span6.0_shift+0.5_dens1.00",
+      "K10_tw_span6.0_shift+0.5_dens1.25",
+      "K10_tw_span8.0_shift+0.0_dens1.25"
+    ],
+    "12": [
+      "K12_tw_span6.0_shift+0.5_dens1.00",
+      "K12_tw_span8.0_shift+0.0_dens1.25",
+      "K12_tw_span8.0_shift+0.5_dens1.25"
+    ],
+    "4": [
+      "K04_tw_span4.0_shift+0.0_dens1.25",
+      "K04_tw_span4.0_shift+0.5_dens1.00",
+      "K04_tw_span4.0_shift+0.5_dens1.25"
+    ],
+    "6": [
+      "K06_tw_span6.0_shift+0.5_dens1.00",
+      "K06_tw_span6.0_shift+0.5_dens1.25"
+    ],
+    "8": [
+      "K08_tw_span6.0_shift+0.5_dens1.00",
+      "K08_tw_span6.0_shift+0.5_dens1.25"
+    ]
+  },
   "disk_shortlists": {
     "10": [
       "K10_tw_span6.0_shift+0.5_dens1.00",

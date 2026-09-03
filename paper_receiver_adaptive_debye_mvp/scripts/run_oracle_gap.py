@@ -445,6 +445,7 @@ def build_case_result_payload(
         },
         "groups": _case_groups(choices, tasks),
         "disk_shortlists": {str(key): value for key, value in sorted(shortlists.items())},
+        "disk_shortlist": {str(key): value for key, value in sorted(shortlists.items())},
         "candidate_ids_evaluated": {"point": point_ids, "disk": disk_ids},
         "three_d_run": False,
         "l0_gate_evaluated": False,
