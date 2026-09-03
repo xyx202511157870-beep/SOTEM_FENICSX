@@ -154,12 +154,16 @@ def main() -> int:
 
     try:
         point_results = _run_cases(include_disks=False, label="points")
-        point_l0 = evaluate_l0(point_results)
-        write_json(
-            flow2 / "L0_point_only_preview.json",
-            {"note": "point receivers only; not the official L0", **point_l0},
-        )
-        _log(f"[flow2] point-only preview {point_l0['status']} median_ratio={point_l0['best_same_k_median_ratio']}")
+        if not args.skip_l0 and len(point_results) >= 2:
+            point_l0 = evaluate_l0(point_results)
+            write_json(
+                flow2 / "L0_point_only_preview.json",
+                {"note": "point receivers only; not the official L0", **point_l0},
+            )
+            _log(
+                f"[flow2] point-only preview {point_l0['status']} "
+                f"median_ratio={point_l0['best_same_k_median_ratio']}"
+            )
         results = point_results
         if not args.points_only:
             results = _run_cases(include_disks=True, label="disks")
