@@ -1,4 +1,7 @@
-"""Receiver-oriented adaptive Debye/Prony library for the ROADS MVP."""
+"""Receiver-oriented adaptive Debye/Prony library for the ROADS MVP.
+
+Layered empymod forward entry point: ``compute_layered_response``.
+"""
 
 from .bootstrap import (
     DEFAULT_BOOTSTRAP_SEED,
@@ -32,6 +35,7 @@ from .io import (
     write_json,
     write_records_csv,
 )
+from .layered_forward import compute_layered_response
 from .passive_fit import (
     HARD_GATE_DC_TOLERANCE,
     HARD_GATE_DELTA_FLOOR,
@@ -94,6 +98,7 @@ __all__ = [
     "bootstrap_case_statistic",
     "build_candidate",
     "case_resample_indices",
+    "compute_layered_response",
     "effective_mask",
     "evaluate_candidate",
     "evaluate_case",
