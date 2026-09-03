@@ -18,14 +18,30 @@ GRID8 = np.logspace(-4, 2, 8)
 
 
 def test_c_equals_one_single_pole_recovers_exact_debye():
-    fit = fit_pelton_passive_hard_dc(100.0, 0.3, 0.1, 1.0, FREQS, [0.1])
-    expected = 1.0 / (100.0 * 0.7) - 1.0 / 100.0
-    np.testing.assert_allclose(fit.delta_sigma, [expected], rtol=1.0e-10)
-    assert fit.spectral_error < 1.0e-10
-    assert fit.relative_dc_error <= 1.0e-10
-    assert fit.passive
-    assert fit.passes_hard_gates()
-    assert fit.optimizer_status.success
+    from atem3d.materials.cole_cole import ColeColeConductivity
+
+    rho0, chargeability, tau = 100.0, 0.3, 0.1
+    debye_tau = tau * (1.0 - chargeability)
+    pelton = fit_pelton_passive_hard_dc(rho0, chargeability, tau, 1.0, FREQS, [debye_tau])
+    expected = 1.0 / (rho0 * (1.0 - chargeability)) - 1.0 / rho0
+    np.testing.assert_allclose(pelton.delta_sigma, [expected], rtol=1.0e-10)
+    assert pelton.spectral_error < 1.0e-10
+    assert pelton.relative_dc_error <= 1.0e-10
+    assert pelton.passive
+    assert pelton.passes_hard_gates()
+    assert pelton.optimizer_status.success
+
+    material = ColeColeConductivity(sigma_inf=0.1, eta=0.2, tau=0.5, c=1.0)
+    conductivity = fit_debye_passive_hard_dc(
+        FREQS,
+        material.complex_conductivity(FREQS),
+        material.sigma_inf,
+        [0.5],
+        material.sigma0,
+    )
+    np.testing.assert_allclose(conductivity.delta_sigma, [0.02], rtol=1.0e-10)
+    assert conductivity.spectral_error < 1.0e-10
+    assert conductivity.passes_hard_gates()
 
 
 def test_m_zero_gives_no_ip():
