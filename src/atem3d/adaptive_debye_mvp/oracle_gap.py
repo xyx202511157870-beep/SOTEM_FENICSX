@@ -459,6 +459,9 @@ def evaluate_pilot_case(
     for record in fits:
         by_k.setdefault(record.K, []).append(record)
 
+    point_maps: dict[int, dict[str, list[TaskMetrics]]] = {}
+    shortlists: dict[int, set[str]] = {}
+    spectrals: dict[int, FitRecord] = {}
     for poles, records in by_k.items():
         point_map: dict[str, list[TaskMetrics]] = {}
         print(
@@ -488,39 +491,51 @@ def evaluate_pilot_case(
             task_rows.extend(tasks)
         if not point_map:
             continue
-        spectral = pick_spectral_best(records, variant)
+        point_maps[poles] = point_map
+        spectrals[poles] = pick_spectral_best(records, variant)
         point_oracle = pick_oracle_best(point_map, records)
         ranked = sorted(point_map, key=lambda cid: (reduce_case_error(point_map[cid]), cid))
-        shortlist_ids = {spectral.candidate_id, point_oracle.candidate_id, *ranked[: int(disk_shortlist)]}
+        shortlists[poles] = {
+            spectrals[poles].candidate_id,
+            point_oracle.candidate_id,
+            *ranked[: int(disk_shortlist)],
+        }
+
+    print(f"[{case.case_id}] computing exact/noip disks", flush=True)
+    reference_disk = _run_model_waveforms(
+        case,
+        exact,
+        receivers=disks,
+        waveform_ids=waveform_ids,
+        cache_dir=cache_dir,
+        backend=backend,
+        model_id="exact:disk",
+        times=times,
+        geometry=geometry,
+        transform=transform,
+    )
+    baseline_disk = _run_model_waveforms(
+        case,
+        noip,
+        receivers=disks,
+        waveform_ids=waveform_ids,
+        cache_dir=cache_dir,
+        backend=backend,
+        model_id="noip:disk",
+        times=times,
+        geometry=geometry,
+        transform=transform,
+    )
+    for waveform_id in waveform_ids:
+        assert_shared_survey_hash([reference_disk[waveform_id], baseline_disk[waveform_id]])
+
+    for poles, records in by_k.items():
+        if poles not in point_maps:
+            continue
+        point_map = point_maps[poles]
+        shortlist_ids = shortlists[poles]
+        spectral = spectrals[poles]
         disk_map: dict[str, list[TaskMetrics]] = {}
-        if reference_disk is None:
-            print(f"[{case.case_id}] computing exact/noip disks", flush=True)
-            reference_disk = _run_model_waveforms(
-                case,
-                exact,
-                receivers=disks,
-                waveform_ids=waveform_ids,
-                cache_dir=cache_dir,
-                backend=backend,
-                model_id="exact:disk",
-                times=times,
-                geometry=geometry,
-                transform=transform,
-            )
-            baseline_disk = _run_model_waveforms(
-                case,
-                noip,
-                receivers=disks,
-                waveform_ids=waveform_ids,
-                cache_dir=cache_dir,
-                backend=backend,
-                model_id="noip:disk",
-                times=times,
-                geometry=geometry,
-                transform=transform,
-            )
-            for waveform_id in waveform_ids:
-                assert_shared_survey_hash([reference_disk[waveform_id], baseline_disk[waveform_id]])
         print(
             f"[{case.case_id}] K={poles} disk shortlist {sorted(shortlist_ids)}",
             flush=True,
