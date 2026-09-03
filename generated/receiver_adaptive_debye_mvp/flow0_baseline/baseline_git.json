@@ -1,0 +1,7 @@
+{
+  "branch": "paper/receiver-oriented-adaptive-debye-mvp",
+  "commit": "3621dfba63917e2e6e620a9bee21dd40e56f1fa1",
+  "describe": "3621dfb Add layered empymod oracle-gap pipeline on the reusable Debye library.",
+  "status": "?? generated/",
+  "workspace": "/workspace"
+}
