@@ -18,7 +18,13 @@ if str(SRC) not in sys.path:
 from atem3d.adaptive_debye_mvp.guards import assert_split_readable
 from atem3d.adaptive_debye_mvp.io import write_json
 from atem3d.adaptive_debye_mvp.layered_forward import BlockedBySoftwareOrResourcesError
-from atem3d.adaptive_debye_mvp.oracle_gap import evaluate_l0, evaluate_pilot_case, write_oracle_gap_artifacts
+from atem3d.adaptive_debye_mvp.oracle_gap import (
+    evaluate_l0,
+    evaluate_pilot_case,
+    load_case_results,
+    write_case_result,
+    write_oracle_gap_artifacts,
+)
 from atem3d.adaptive_debye_mvp.protocol_constants import K_PILOT, PILOT_WAVEFORMS
 from atem3d.adaptive_debye_mvp.registry import cases_for_split, generate_all_cases
 
@@ -43,12 +49,21 @@ def _markdown_report(l0: dict, n_cases: int) -> str:
     return "\n".join(lines)
 
 
+def _parse_case_ids(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-cases", type=int, default=0)
+    parser.add_argument("--case-ids", default="", help="comma-separated case ids, e.g. PG05,PG06,PG07,PG08")
     parser.add_argument("--k", default=",".join(str(value) for value in K_PILOT))
+    parser.add_argument("--points-only", action="store_true", help="skip official disk averages")
+    parser.add_argument("--skip-l0", action="store_true", help="write case JSON only; do not apply L0")
+    parser.add_argument("--assemble-l0", action="store_true", help="load existing PG*.json and apply L0")
     args = parser.parse_args()
     k_values = tuple(int(item) for item in args.k.split(",") if item.strip())
+    wanted = _parse_case_ids(args.case_ids)
 
     generated = REPO_ROOT / "generated" / "receiver_adaptive_debye_mvp"
     cache_dir = generated / "cache"
@@ -60,14 +75,45 @@ def main() -> int:
         with (flow2 / "flow2.log").open("a", encoding="utf-8") as handle:
             handle.write(message + "\n")
 
+    if args.assemble_l0:
+        paths = sorted(flow2.glob("PG*.json"))
+        results = load_case_results(paths)
+        if wanted:
+            results = [item for item in results if item["case_id"] in set(wanted)]
+        if len(results) != 8:
+            _log(f"[flow2] assemble-l0 found {len(results)} cases, need 8")
+            return 3
+        l0 = evaluate_l0(results)
+        write_oracle_gap_artifacts(flow2, results, l0)
+        (flow2 / "LAYERED_ORACLE_GAP_REPORT.md").write_text(_markdown_report(l0, len(results)), encoding="utf-8")
+        write_json(generated / "FLOW2_STATUS.json", {"status": l0["status"], "passed": l0["passed"], "l0": l0})
+        if not l0["passed"]:
+            write_json(
+                generated / "STOP_REASON.json",
+                {
+                    "status": "STOP_LAYERED_NO_ACTIONABLE_GAP",
+                    "gate": "L0",
+                    "reason": "oracle gap A and B both failed on the frozen pilot set",
+                    "l0": l0,
+                    "three_d_run": False,
+                },
+            )
+        _log(l0["status"])
+        return 0
+
     cases = list(cases_for_split("pilot_gap", generate_all_cases()))
     for case in cases:
         assert_split_readable(case.split, stage="flow2")
+    if wanted:
+        missing = [case_id for case_id in wanted if all(case.case_id != case_id for case in cases)]
+        if missing:
+            raise SystemExit(f"unknown case ids: {missing}")
+        cases = [case for case in cases if case.case_id in set(wanted)]
     if args.max_cases > 0:
         cases = cases[: args.max_cases]
 
     workers = max(1, min(int(os.environ.get("ROADS_WORKERS", "4")), len(cases)))
-    _log(f"[flow2] {len(cases)} cases, K={k_values}, workers={workers}")
+    _log(f"[flow2] {len(cases)} cases, K={k_values}, workers={workers}, case_ids={[c.case_id for c in cases]}")
 
     def _run_cases(*, include_disks: bool, label: str) -> list:
         _log(f"[flow2] stage={label} include_disks={include_disks}")
@@ -100,17 +146,26 @@ def main() -> int:
                 for future in as_completed(futures):
                     case_id = futures[future]
                     result = future.result()
+                    write_case_result(flow2 / f"{result['case_id']}.json", result)
                     _log(f"[flow2] {label} finished {case_id}")
                     stage_results.append(result)
             stage_results.sort(key=lambda item: item["case_id"])
+        if workers == 1:
+            for result in stage_results:
+                write_case_result(flow2 / f"{result['case_id']}.json", result)
         return stage_results
 
     try:
         point_results = _run_cases(include_disks=False, label="points")
         point_l0 = evaluate_l0(point_results)
-        write_json(flow2 / "L0_point_only_preview.json", {"note": "point receivers only; not the official L0", **point_l0})
+        write_json(
+            flow2 / "L0_point_only_preview.json",
+            {"note": "point receivers only; not the official L0", **point_l0},
+        )
         _log(f"[flow2] point-only preview {point_l0['status']} median_ratio={point_l0['best_same_k_median_ratio']}")
-        results = _run_cases(include_disks=True, label="disks")
+        results = point_results
+        if not args.points_only:
+            results = _run_cases(include_disks=True, label="disks")
     except BlockedBySoftwareOrResourcesError as exc:
         write_json(
             generated / "STOP_REASON.json",
@@ -127,11 +182,10 @@ def main() -> int:
         )
         print("BLOCKED_BY_SOFTWARE_OR_RESOURCES", flush=True)
         return 2
-    for result in results:
-        write_json(
-            flow2 / f"{result['case_id']}.json",
-            {"case_id": result["case_id"], "choices": [item.__dict__ for item in result["choices"]]},
-        )
+
+    if args.skip_l0 or len(results) != 8 or args.points_only:
+        _log(f"[flow2] wrote {len(results)} case JSON files; L0 not finalized")
+        return 0
 
     l0 = evaluate_l0(results)
     write_oracle_gap_artifacts(flow2, results, l0)

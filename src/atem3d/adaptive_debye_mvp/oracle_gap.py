@@ -660,6 +660,7 @@ def _group_ratio(tasks_or: list[TaskMetrics], tasks_b2: list[TaskMetrics], predi
 def evaluate_l0(pilot_results: list[dict[str, Any]]) -> dict[str, Any]:
     """Apply the frozen L0 A/B predicates to pilot oracle-gap results."""
 
+    pilot_results = [hydrate_result(result) for result in pilot_results]
     by_k: dict[int, list[CaseKChoice]] = {k: [] for k in K_PILOT}
     k_qual_diffs: list[float] = []
     for result in pilot_results:
@@ -786,11 +787,61 @@ def evaluate_l0(pilot_results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def hydrate_choice(item: Any) -> CaseKChoice:
+    if isinstance(item, CaseKChoice):
+        return item
+    fields = {name: item[name] for name in CaseKChoice.__dataclass_fields__}
+    return CaseKChoice(**fields)
+
+
+def hydrate_task(item: Any) -> TaskMetrics:
+    if isinstance(item, TaskMetrics):
+        return item
+    fields = {name: item[name] for name in TaskMetrics.__dataclass_fields__}
+    return TaskMetrics(**fields)
+
+
+def hydrate_result(payload: dict[str, Any]) -> dict[str, Any]:
+    choices = [hydrate_choice(item) for item in payload.get("choices", [])]
+    case_id = payload.get("case_id")
+    if not case_id and choices:
+        case_id = choices[0].case_id
+    return {
+        "case_id": case_id,
+        "official_variant": payload.get("official_variant", "S0"),
+        "choices": choices,
+        "tasks": [hydrate_task(item) for item in payload.get("tasks", [])],
+        "point_only": bool(payload.get("point_only", False)),
+    }
+
+
+def write_case_result(path: str | Path, result: dict[str, Any]) -> None:
+    """Write one case so sibling VMs can assemble L0 without rerunning empymod."""
+
+    write_json(
+        path,
+        {
+            "case_id": result["case_id"],
+            "official_variant": result.get("official_variant", "S0"),
+            "point_only": bool(result.get("point_only", False)),
+            "choices": [to_record(item) for item in result["choices"]],
+            "tasks": [to_record(item) for item in result["tasks"]],
+        },
+    )
+
+
+def load_case_results(paths) -> list[dict[str, Any]]:
+    from .io import read_json
+
+    return [hydrate_result(read_json(path)) for path in paths]
+
+
 def write_oracle_gap_artifacts(output_dir: str | Path, pilot_results: list[dict[str, Any]], l0: dict[str, Any]) -> None:
     """Write Flow-2 machine-readable tables and the L0 decision."""
 
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    pilot_results = [hydrate_result(result) for result in pilot_results]
     choices = [to_record(choice) for result in pilot_results for choice in result["choices"]]
     tasks = [to_record(task) for result in pilot_results for task in result["tasks"]]
     write_records_csv(root / "oracle_gap_choices.csv", choices)
