@@ -1,0 +1,21 @@
+protocol_name: ROADS-Debye-MVP-layered-v1
+protocol_version: "1.0.0"
+time_window_s: [1.0e-5, 1.0e-2]
+n_times: 31
+k_pilot: [4, 6, 8, 10, 12]
+disk_rule: square4
+disk_radii_m: [1.0, 4.0]
+waveforms:
+  train_val: [W0, W1, W2]
+  independent_test: [W0, W1, W2, W3]
+  pressure: [W0, W4]
+seeds:
+  pilot_gap: 202609111
+  train: 202609112
+  validation: 202609113
+  independent_test: 202609114
+  layered_pressure: 202609115
+  bootstrap: 202609116
+n_bootstrap: 2000
+candidates_per_k: 36
+three_d_authorized: false
