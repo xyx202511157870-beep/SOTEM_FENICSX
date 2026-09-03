@@ -72,7 +72,7 @@ def _memory_info() -> dict:
 
 
 def _run_pytest(log_path: Path) -> int:
-    command = [sys.executable, "-m", "pytest", "-q"]
+    command = [sys.executable, "-m", "pytest", "-q", "tests/adaptive_debye_mvp"]
     with log_path.open("w", encoding="utf-8") as handle:
         handle.write(f"$ {' '.join(command)}\n")
         handle.flush()
@@ -89,41 +89,85 @@ def _run_pytest(log_path: Path) -> int:
 def _layered_smoke() -> dict:
     import numpy as np
 
+    from atem3d.adaptive_debye_mvp.case_bridge import (
+        assert_shared_survey_hash,
+        case_geometry,
+        case_time_grid,
+        case_waveform,
+        exact_pelton_material,
+        forward_response,
+        nonpolarizable_material,
+        point_receivers,
+        production_transform,
+    )
     from atem3d.adaptive_debye_mvp.layered_forward import (
-        noip_resistivities,
-        pelton_layers,
-        run_case_models,
+        TimeGrid,
+        compute_layered_response,
+        default_smoke_case,
     )
     from atem3d.adaptive_debye_mvp.registry import generate_split
-    from atem3d.adaptive_debye_mvp.protocol_constants import observation_times
+
+    official = default_smoke_case()
+    point = (official["receivers"][0],)
+    short_times = TimeGrid(times_s=tuple(float(value) for value in np.logspace(-5, -2, 7)))
+    official_ip = compute_layered_response(
+        official["materials"]["exact_m0p2"],
+        official["geometry"],
+        official["waveforms"]["W0"],
+        point,
+        short_times,
+        official["transform"],
+    )
+    official_noip = compute_layered_response(
+        official["materials"]["non_polarizable"],
+        official["geometry"],
+        official["waveforms"]["W0"],
+        point,
+        short_times,
+        official["transform"],
+    )
+    official_hash = assert_shared_survey_hash([official_ip, official_noip])
+    official_delta = np.asarray(official_ip["data"]) - np.asarray(official_noip["data"])
 
     case = generate_split("pilot_gap")[0]
-    times = observation_times()[:7]
-    noip = run_case_models(
-        case,
-        resistivities=noip_resistivities(case),
-        model_id="flow0_noip",
-        waveform_ids=("W0",),
-        times=times,
-        include_disks=False,
-    )["W0"]
-    ip = run_case_models(
-        case,
-        resistivities=pelton_layers(case),
-        model_id="flow0_ip",
-        waveform_ids=("W0",),
-        times=times,
-        include_disks=False,
-    )["W0"]
-    delta = np.asarray(ip.data) - np.asarray(noip.data)
+    times = case_time_grid(np.logspace(-5, -2, 7))
+    geometry = case_geometry(case)
+    receivers = (point_receivers(case)[0],)
+    transform = production_transform()
+    waveform = case_waveform("W0")
+    ip = forward_response(
+        exact_pelton_material(case),
+        geometry,
+        waveform,
+        receivers,
+        times,
+        transform,
+        cache_key=None,
+    )
+    noip = forward_response(
+        nonpolarizable_material(case),
+        geometry,
+        waveform,
+        receivers,
+        times,
+        transform,
+        cache_key=None,
+    )
+    survey_hash = assert_shared_survey_hash([ip, noip])
+    delta = np.asarray(ip["data"]) - np.asarray(noip["data"])
     return {
+        "official_smoke_shared_survey_hash": official_hash,
+        "official_smoke_ip_increment_peak_abs": float(np.max(np.abs(official_delta))),
+        "official_smoke_ip_increment_nonzero": bool(np.max(np.abs(official_delta)) > 0.0),
         "case_id": case.case_id,
-        "n_times": int(times.size),
-        "n_locations": len(noip.locations),
-        "noip_peak_abs": float(np.max(np.abs(noip.data))),
-        "ip_peak_abs": float(np.max(np.abs(ip.data))),
+        "n_times": int(times.as_array().size),
+        "n_locations": 1,
+        "noip_peak_abs": float(np.max(np.abs(noip["data"]))),
+        "ip_peak_abs": float(np.max(np.abs(ip["data"]))),
         "ip_increment_peak_abs": float(np.max(np.abs(delta))),
         "ip_increment_nonzero": bool(np.max(np.abs(delta)) > 0.0),
+        "shared_survey_hash": survey_hash,
+        "api": "atem3d.adaptive_debye_mvp.layered_forward.compute_layered_response",
         "script": "paper_algorithm/run_ip_debye_sweep.py skipped (3-D FEniCSx)",
     }
 

@@ -10,34 +10,37 @@ import numpy as np
 
 from .bootstrap import paired_case_bootstrap
 from .candidates import CandidateSpec
-from .io import to_record, write_json, write_records_csv
-from .layered_forward import (
-    average_receiver_channels,
-    debye_layers,
-    noip_resistivities,
-    pelton_layers,
+from .case_bridge import (
+    assert_shared_survey_hash,
+    case_geometry,
+    case_time_grid,
+    case_waveform,
+    channel_column,
+    debye_material,
+    disk_receivers,
+    exact_pelton_material,
+    forward_response,
+    nonpolarizable_material,
+    point_receivers,
     polarizable_material,
-    run_case_models,
+    evaluation_transform,
 )
+from .io import to_record, write_json, write_records_csv
+from .layered_forward import BlockedBySoftwareOrResourcesError
 from .passive_fit import fit_pelton_passive_hard_dc
 from .protocol_constants import (
     BOOTSTRAP_SEED,
-    DISK_RADII,
     K_PILOT,
     K_PRACTICAL,
     PILOT_RECEIVERS,
     PILOT_WAVEFORMS,
     SPECTRAL_FREQUENCIES,
-    observation_times,
     spectral_weights,
 )
 from .receiver_metrics import (
-    CHANNELS,
     MetricThresholds,
     ReceiverCase,
     evaluate_case,
-    is_qualifying,
-    ranking_key,
 )
 from .registry import LayeredCase, instantiate_candidates
 
@@ -239,15 +242,14 @@ def tasks_qualify(tasks: list[TaskMetrics], thresholds: MetricThresholds = Metri
     return True
 
 
-def _receiver_kind(receiver_id: str) -> tuple[str, float | None]:
-    if receiver_id == "point":
-        return "point", None
-    if receiver_id.startswith("disk_"):
-        return "disk", float(receiver_id.split("_", 1)[1])
-    raise ValueError(f"unknown receiver id: {receiver_id}")
+def _label_matches(label: str, receiver_id: str) -> bool:
+    kind, _sep, index_text = str(label).partition(":")
+    if not index_text:
+        return False
+    return kind == receiver_id
 
 
-def collect_tasks_for_model(
+def collect_tasks_from_responses(
     case: LayeredCase,
     *,
     candidate_id: str,
@@ -258,17 +260,25 @@ def collect_tasks_for_model(
     waveform_ids: tuple[str, ...] = PILOT_WAVEFORMS,
     receiver_ids: tuple[str, ...] = PILOT_RECEIVERS,
 ) -> list[TaskMetrics]:
-    times = observation_times()
+    """Score one constitutive model from official wrapper responses."""
+
     tasks: list[TaskMetrics] = []
     for waveform_id in waveform_ids:
         reference = reference_models[waveform_id]
         candidate = candidate_models[waveform_id]
         baseline = baseline_models[waveform_id]
-        for receiver_index, location in enumerate(case.receivers):
+        times = np.asarray(reference["times"], dtype=float)
+        labels = [str(label) for label in reference["receiver_labels"]]
+        if labels != [str(label) for label in candidate["receiver_labels"]]:
+            raise RuntimeError("candidate receiver labels do not match the reference survey")
+        if labels != [str(label) for label in baseline["receiver_labels"]]:
+            raise RuntimeError("baseline receiver labels do not match the reference survey")
+        assert_shared_survey_hash([reference, candidate, baseline])
+        for column, label in enumerate(labels):
             for receiver_id in receiver_ids:
-                kind, radius = _receiver_kind(receiver_id)
-                if kind == "disk" and receiver_index != 0:
+                if not _label_matches(label, receiver_id):
                     continue
+                receiver_index = int(label.split(":", 1)[1])
                 tasks.append(
                     evaluate_task(
                         case=case,
@@ -277,9 +287,9 @@ def collect_tasks_for_model(
                         waveform_id=waveform_id,
                         receiver_id=receiver_id,
                         receiver_index=receiver_index,
-                        reference=average_receiver_channels(reference, location, kind=kind, radius=radius),
-                        candidate=average_receiver_channels(candidate, location, kind=kind, radius=radius),
-                        baseline=average_receiver_channels(baseline, location, kind=kind, radius=radius),
+                        reference=channel_column(reference, column),
+                        candidate=channel_column(candidate, column),
+                        baseline=channel_column(baseline, column),
                         times=times,
                     )
                 )
@@ -313,6 +323,35 @@ def pick_oracle_best(task_map: dict[str, list[TaskMetrics]], records: list[FitRe
     return min(valid, key=key)
 
 
+def _run_model_waveforms(
+    case: LayeredCase,
+    material,
+    *,
+    receivers,
+    waveform_ids: tuple[str, ...],
+    cache_dir,
+    backend,
+    model_id: str,
+    times,
+    geometry,
+    transform,
+) -> dict[str, Any]:
+    models: dict[str, Any] = {}
+    for waveform_id in waveform_ids:
+        models[waveform_id] = forward_response(
+            material,
+            geometry,
+            case_waveform(waveform_id),
+            receivers,
+            times,
+            transform,
+            cache_dir=cache_dir,
+            cache_key=f"{case.case_id}:{model_id}:{waveform_id}",
+            backend=backend,
+        )
+    return models
+
+
 def _forward_and_tasks(
     case: LayeredCase,
     record: FitRecord,
@@ -324,17 +363,24 @@ def _forward_and_tasks(
     cache_dir,
     backend,
     include_disks: bool,
+    times,
+    geometry,
+    transform,
 ) -> list[TaskMetrics]:
-    models = run_case_models(
+    receivers = disk_receivers(case) if include_disks else point_receivers(case)
+    models = _run_model_waveforms(
         case,
-        resistivities=debye_layers(case, record.fit),
-        model_id=f"{case.case_id}:{record.candidate_id}:{'disk' if include_disks else 'point'}",
+        debye_material(case, record.fit, candidate_id=record.candidate_id),
+        receivers=receivers,
         waveform_ids=waveform_ids,
-        backend=backend,
         cache_dir=cache_dir,
-        include_disks=include_disks,
+        backend=backend,
+        model_id=f"{record.candidate_id}:{'disk' if include_disks else 'point'}",
+        times=times,
+        geometry=geometry,
+        transform=transform,
     )
-    return collect_tasks_for_model(
+    return collect_tasks_from_responses(
         case,
         candidate_id=record.candidate_id,
         K=record.K,
@@ -354,55 +400,82 @@ def evaluate_pilot_case(
     backend=None,
     k_values: tuple[int, ...] = K_PILOT,
     official_variant: str | None = None,
-    disk_shortlist: int = 8,
+    disk_shortlist: int = 2,
 ) -> dict[str, Any]:
     """Evaluate spectral-best vs receiver-oracle on one pilot case.
 
-    All valid templates are compared on point receivers. Four-point disks are
-    then computed for the spectral-best and the top ``disk_shortlist``
-    point-ranked templates so L0 can still test finite-area receivers without
-    an infeasible 36-point-all-candidate empymod budget.
+    All valid templates are compared on point receivers via
+    ``compute_layered_response``. Official PR 9 ``disk_average`` receivers are
+    then computed for the spectral-best, the point-oracle, and the top
+    ``disk_shortlist`` point-ranked templates. The shortlist is 2 because
+    AverageReceiver 36-point x 3-axis disks cost ~140 s each on lagged DLF.
     """
 
     candidates = tuple(spec for spec in instantiate_candidates(case) if spec.K in k_values)
     fits = fit_case_candidates(case, candidates)
     variant = official_variant or choose_official_spectral_variant(fits)
-    reference_point = run_case_models(
-        case,
-        resistivities=pelton_layers(case),
-        model_id=f"{case.case_id}:exact:point",
-        waveform_ids=waveform_ids,
-        backend=backend,
-        cache_dir=cache_dir,
-        include_disks=False,
-    )
-    baseline_point = run_case_models(
-        case,
-        resistivities=noip_resistivities(case),
-        model_id=f"{case.case_id}:noip:point",
-        waveform_ids=waveform_ids,
-        backend=backend,
-        cache_dir=cache_dir,
-        include_disks=False,
-    )
-    reference_disk = run_case_models(
-        case,
-        resistivities=pelton_layers(case),
-        model_id=f"{case.case_id}:exact:disk",
-        waveform_ids=waveform_ids,
-        backend=backend,
-        cache_dir=cache_dir,
-        include_disks=True,
-    )
-    baseline_disk = run_case_models(
-        case,
-        resistivities=noip_resistivities(case),
-        model_id=f"{case.case_id}:noip:disk",
-        waveform_ids=waveform_ids,
-        backend=backend,
-        cache_dir=cache_dir,
-        include_disks=True,
-    )
+    geometry = case_geometry(case)
+    times = case_time_grid()
+    transform = evaluation_transform()
+    points = point_receivers(case)
+    disks = disk_receivers(case)
+    exact = exact_pelton_material(case)
+    noip = nonpolarizable_material(case)
+    try:
+        reference_point = _run_model_waveforms(
+            case,
+            exact,
+            receivers=points,
+            waveform_ids=waveform_ids,
+            cache_dir=cache_dir,
+            backend=backend,
+            model_id="exact:point",
+            times=times,
+            geometry=geometry,
+            transform=transform,
+        )
+        baseline_point = _run_model_waveforms(
+            case,
+            noip,
+            receivers=points,
+            waveform_ids=waveform_ids,
+            cache_dir=cache_dir,
+            backend=backend,
+            model_id="noip:point",
+            times=times,
+            geometry=geometry,
+            transform=transform,
+        )
+        for waveform_id in waveform_ids:
+            assert_shared_survey_hash([reference_point[waveform_id], baseline_point[waveform_id]])
+        reference_disk = _run_model_waveforms(
+            case,
+            exact,
+            receivers=disks,
+            waveform_ids=waveform_ids,
+            cache_dir=cache_dir,
+            backend=backend,
+            model_id="exact:disk",
+            times=times,
+            geometry=geometry,
+            transform=transform,
+        )
+        baseline_disk = _run_model_waveforms(
+            case,
+            noip,
+            receivers=disks,
+            waveform_ids=waveform_ids,
+            cache_dir=cache_dir,
+            backend=backend,
+            model_id="noip:disk",
+            times=times,
+            geometry=geometry,
+            transform=transform,
+        )
+        for waveform_id in waveform_ids:
+            assert_shared_survey_hash([reference_disk[waveform_id], baseline_disk[waveform_id]])
+    except BlockedBySoftwareOrResourcesError:
+        raise
     choices: list[CaseKChoice] = []
     task_rows: list[TaskMetrics] = []
     by_k: dict[int, list[FitRecord]] = {}
@@ -411,6 +484,11 @@ def evaluate_pilot_case(
 
     for poles, records in by_k.items():
         point_map: dict[str, list[TaskMetrics]] = {}
+        print(
+            f"[{case.case_id}] K={poles} point forwards "
+            f"{sum(1 for item in records if item.valid)}/{len(records)}",
+            flush=True,
+        )
         for record in records:
             if not record.valid:
                 continue
@@ -424,14 +502,23 @@ def evaluate_pilot_case(
                 cache_dir=cache_dir,
                 backend=backend,
                 include_disks=False,
+                times=times,
+                geometry=geometry,
+                transform=transform,
             )
             point_map[record.candidate_id] = tasks
             task_rows.extend(tasks)
+        if not point_map:
+            continue
         spectral = pick_spectral_best(records, variant)
         point_oracle = pick_oracle_best(point_map, records)
         ranked = sorted(point_map, key=lambda cid: (reduce_case_error(point_map[cid]), cid))
         shortlist_ids = {spectral.candidate_id, point_oracle.candidate_id, *ranked[: int(disk_shortlist)]}
         disk_map: dict[str, list[TaskMetrics]] = {}
+        print(
+            f"[{case.case_id}] K={poles} disk shortlist {sorted(shortlist_ids)}",
+            flush=True,
+        )
         for record in records:
             if record.candidate_id not in shortlist_ids:
                 continue
@@ -445,6 +532,9 @@ def evaluate_pilot_case(
                 cache_dir=cache_dir,
                 backend=backend,
                 include_disks=True,
+                times=times,
+                geometry=geometry,
+                transform=transform,
             )
             combined = point_map[record.candidate_id] + disk_tasks
             disk_map[record.candidate_id] = combined
