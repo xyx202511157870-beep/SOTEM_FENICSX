@@ -1271,10 +1271,17 @@ def _empymod_frequency_grid(times: np.ndarray, ft: str, ftarg: Mapping[str, Any]
     if check_time is None:
         return np.asarray([], dtype=float)
     try:
-        result = check_time(np.asarray(times, dtype=float), -1, ft, dict(ftarg), 0)
+        result = check_time(
+            np.asarray(times, dtype=float),
+            -1,
+            ft,
+            dict(ftarg),
+            0,
+            new=True,
+        )
     except TypeError:
         try:
-            result = check_time(np.asarray(times, dtype=float), -1, ft, dict(ftarg))
+            result = check_time(np.asarray(times, dtype=float), -1, ft, dict(ftarg), 0)
         except Exception:
             return np.asarray([], dtype=float)
     except Exception:
@@ -1284,15 +1291,13 @@ def _empymod_frequency_grid(times: np.ndarray, ft: str, ftarg: Mapping[str, Any]
 
 
 def _extract_frequencies(result: Any) -> np.ndarray:
-    if isinstance(result, tuple):
-        for item in result:
-            array = np.asarray(item)
-            if array.dtype != object and array.size and np.issubdtype(array.dtype, np.number):
-                if np.all(np.asarray(array, dtype=float) > 0.0):
-                    return np.asarray(array, dtype=float)
-        return np.asarray([], dtype=float)
     if hasattr(result, "freq"):
         return np.asarray(result.freq, dtype=float)
+    if isinstance(result, tuple) and len(result) >= 2:
+        # empymod.utils.check_time returns (time, freq, ft, ftarg[, signal]).
+        array = np.asarray(result[1])
+        if array.size and np.issubdtype(array.dtype, np.number):
+            return np.asarray(array, dtype=float)
     return np.asarray([], dtype=float)
 
 
