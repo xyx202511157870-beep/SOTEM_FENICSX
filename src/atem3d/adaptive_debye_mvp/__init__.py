@@ -35,7 +35,6 @@ from .io import (
     write_json,
     write_records_csv,
 )
-from .layered_forward import compute_layered_response
 from .passive_fit import (
     HARD_GATE_DC_TOLERANCE,
     HARD_GATE_DELTA_FLOOR,
@@ -112,7 +111,6 @@ __all__ = [
     "BlockedBySoftwareOrResourcesError",
     "BootstrapResult",
     "assert_3d_authorized",
-    "compute_layered_response",
     "assert_split_readable",
     "bootstrap_candidate_comparison",
     "bootstrap_case_statistic",
