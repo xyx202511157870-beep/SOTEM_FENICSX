@@ -33,7 +33,7 @@ jobs:
           python tools/second_order_policy.py --check
           python tools/apply_magnetic6_production.py --check
 
-      - name: Run waveform, receiver, and empymod magnetic-six regression tests
+      - name: Run waveform, receiver, empymod magnetic-six, and adaptive-Debye library tests
         run: |
           python -m pytest -q \
             tests/test_sources.py \
@@ -42,4 +42,8 @@ jobs:
             tests/test_receiver_groups.py \
             tests/test_empymod_magnetic6.py \
             tests/test_empymod_waveform.py \
-            tests/test_magnetic6_production_policy.py
+            tests/test_magnetic6_production_policy.py \
+            tests/adaptive_debye_mvp/test_passive_fit.py \
+            tests/adaptive_debye_mvp/test_candidates.py \
+            tests/adaptive_debye_mvp/test_receiver_metrics.py \
+            tests/adaptive_debye_mvp/test_bootstrap.py
