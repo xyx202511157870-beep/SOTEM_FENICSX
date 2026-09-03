@@ -23,6 +23,8 @@ FLOW2 = REPO / "generated" / "receiver_adaptive_debye_mvp" / "flow2_oracle_gap"
 LOG = FLOW2 / "watch_pg0508.log"
 WANTED = ("PG05", "PG06", "PG07", "PG08")
 LIVE_PARENT = int(os.environ.get("ROADS_LIVE_PARENT", "6962"))
+# 180 candidates + exact + noip, three waveforms each
+COMPLETE_POINT_FILES = 182 * 3
 
 
 def _log(message: str) -> None:
@@ -56,7 +58,7 @@ def main() -> int:
     while True:
         counts = _point_counts()
         _log(f"[watch] point_keys={counts}")
-        if all(counts[case] >= 182 for case in WANTED):
+        if all(counts[case] >= COMPLETE_POINT_FILES for case in WANTED):
             break
         time.sleep(15)
 
