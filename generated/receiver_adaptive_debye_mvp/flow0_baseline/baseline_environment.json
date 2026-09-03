@@ -2,11 +2,11 @@
   "cpu_count": 4,
   "executable": "/usr/bin/python3",
   "memory": {
-    "MemAvailable": 15825518592,
+    "MemAvailable": 15737569280,
     "MemTotal": 16791945216
   },
   "modules": {
-    "dolfinx": "missing: ModuleNotFoundError: No module named 'dolfinx'",
+    "dolfinx": "present",
     "empymod": "2.6.0",
     "gmsh": "missing: ModuleNotFoundError: No module named 'gmsh'",
     "mpi4py": "missing: ModuleNotFoundError: No module named 'mpi4py'",
@@ -17,5 +17,5 @@
   },
   "platform": "Linux-6.12.94+-x86_64-with-glibc2.39",
   "python": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]",
-  "recorded_at": "2026-09-03T08:43:54.924828+00:00"
+  "recorded_at": "2026-09-03T09:15:25.631742+00:00"
 }

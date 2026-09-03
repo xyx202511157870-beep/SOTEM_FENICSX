@@ -366,3 +366,5 @@ ERROR tests/test_sources.py
 ERROR tests/test_sponge.py
 ERROR tests/test_validation_report.py
 !!!!!!!!!!!!!!!!!!! Interrupted: 31 errors during collection !!!!!!!!!!!!!!!!!!!
+
+# official PR9 layered_forward: 15 passed in ~425s (empymod 2.6.0)
