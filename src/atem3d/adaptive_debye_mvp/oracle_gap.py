@@ -918,13 +918,23 @@ def evaluate_l0(
     }
 
 
-def apply_pr_choices(result: dict[str, Any], pr_by_k: Mapping[str, str]) -> dict[str, Any]:
-    """Remap oracle slots to the frozen P-R template so evaluate_l0 is L2."""
+def apply_pr_choices(
+    result: dict[str, Any],
+    pr_by_k: Mapping[str, str],
+    b2_by_k: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Remap oracle slots to the frozen P-R template so evaluate_l0 is L2.
+
+    When ``b2_by_k`` is given, B2 is the frozen L1 spectral template
+    (no per-case reselection). Otherwise the case-level spectral-best is kept.
+    """
 
     hydrated = hydrate_result(result)
     remapped: list[CaseKChoice] = []
     for choice in hydrated["choices"]:
-        pr_id = str(pr_by_k[str(choice.K)])
+        key = str(choice.K)
+        pr_id = str(pr_by_k[key])
+        spectral_id = str(b2_by_k[key]) if b2_by_k is not None else choice.spectral_id
         pr_tasks = [
             item
             for item in hydrated["tasks"]
@@ -933,7 +943,7 @@ def apply_pr_choices(result: dict[str, Any], pr_by_k: Mapping[str, str]) -> dict
         b2_tasks = [
             item
             for item in hydrated["tasks"]
-            if item.candidate_id == choice.spectral_id and item.K == choice.K
+            if item.candidate_id == spectral_id and item.K == choice.K
         ]
         e_pr = reduce_case_error(pr_tasks)
         e_b2 = reduce_case_error(b2_tasks)
@@ -942,9 +952,9 @@ def apply_pr_choices(result: dict[str, Any], pr_by_k: Mapping[str, str]) -> dict
             CaseKChoice(
                 case_id=choice.case_id,
                 K=choice.K,
-                spectral_id=choice.spectral_id,
+                spectral_id=spectral_id,
                 oracle_id=pr_id,
-                ids_differ=choice.spectral_id != pr_id,
+                ids_differ=spectral_id != pr_id,
                 e_b2=e_b2,
                 e_or=e_pr,
                 ratio=ratio,
@@ -963,14 +973,21 @@ def evaluate_l2(
     test_results: list[dict[str, Any]],
     *,
     pr_by_k: Mapping[str, str],
+    b2_by_k: Mapping[str, str] | None = None,
     waveform_ids: tuple[str, ...] = TEST_WAVEFORMS,
 ) -> dict[str, Any]:
-    """L2 A/B: L0 predicates with P-R in place of the oracle."""
+    """L2 A/B: L0 predicates with frozen P-R vs frozen B2 (no reselection)."""
 
-    remapped = [apply_pr_choices(result, pr_by_k) for result in test_results]
+    remapped = [
+        apply_pr_choices(result, pr_by_k, b2_by_k=b2_by_k) for result in test_results
+    ]
     l2 = evaluate_l0(remapped, waveform_ids=waveform_ids)
     l2["status"] = "L2_PASS" if l2["passed"] else "L2_FAIL"
     l2["pr_by_k"] = {str(key): str(value) for key, value in pr_by_k.items()}
+    l2["b2_by_k"] = (
+        {str(key): str(value) for key, value in b2_by_k.items()} if b2_by_k is not None else None
+    )
+    l2["reselection"] = False
     l2["waveform_ids"] = list(waveform_ids)
     return l2
 

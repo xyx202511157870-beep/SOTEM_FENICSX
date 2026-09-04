@@ -41,6 +41,20 @@ def _parse_case_ids(raw: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def _case_json_satisfies(path: Path, stage: str) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not payload.get("case_id") or not payload.get("tasks"):
+        return False
+    if not payload.get("point_only", True):
+        return True
+    return stage == "points"
+
+
 def _workers(n_cases: int) -> int:
     requested = max(4, int(os.cpu_count() or 4))
     env = os.environ.get("ROADS_WORKERS")
@@ -164,8 +178,14 @@ def _assemble(generated: Path, flow4: Path, l1: dict) -> int:
         print("[flow4] official L2 refused: at least one case is point-only", flush=True)
         return 4
     pr_by_k = {str(key): str(value) for key, value in dict(l1["selected"]).items()}
+    b2_by_k = {str(key): str(value) for key, value in dict(l1.get("spectral_selected") or {}).items()}
     official_variant = str(l1.get("official_spectral_variant") or "S1")
-    l2 = evaluate_l2(results, pr_by_k=pr_by_k, waveform_ids=TEST_WAVEFORMS)
+    l2 = evaluate_l2(
+        results,
+        pr_by_k=pr_by_k,
+        b2_by_k=b2_by_k or None,
+        waveform_ids=TEST_WAVEFORMS,
+    )
     write_oracle_gap_artifacts(flow4, results, l2)
     write_json(flow4 / "L2_summary.json", l2)
     write_records_csv(flow4 / "independent_test_choices.csv", [to_record(c) for r in results for c in r["choices"]])
@@ -258,9 +278,14 @@ def main() -> int:
     if wanted:
         cases = [case for case in cases if case.case_id in set(wanted)]
     pr_by_k = {int(key): str(value) for key, value in dict(l1["selected"]).items()}
-    forced = {int(key): [str(value)] for key, value in pr_by_k.items()}
+    b2_by_k = {int(key): str(value) for key, value in dict(l1.get("spectral_selected") or {}).items()}
+    forced: dict[int, list[str]] = {}
     for poles in K_PILOT:
-        forced.setdefault(int(poles), []).append(B1_LOG_UNIFORM_TEMPLATE.format(K=int(poles)))
+        ids = [pr_by_k[int(poles)]]
+        if int(poles) in b2_by_k:
+            ids.append(b2_by_k[int(poles)])
+        ids.append(B1_LOG_UNIFORM_TEMPLATE.format(K=int(poles)))
+        forced[int(poles)] = list(dict.fromkeys(ids))
     official_variant = str(l1.get("official_spectral_variant") or "S1")
     workers = _workers(len(cases))
 
@@ -275,8 +300,19 @@ def main() -> int:
         if not args.points_only:
             stages = (("points", False), ("disks", True))
         for label, include_disks in stages:
-            if workers == 1:
-                for case in cases:
+            pending = [
+                case
+                for case in cases
+                if not _case_json_satisfies(flow4 / f"case_{case.case_id}.json", label)
+            ]
+            skipped = [case.case_id for case in cases if case not in pending]
+            if skipped:
+                _log(f"[flow4] {label} skip existing {skipped}")
+            if not pending:
+                continue
+            stage_workers = max(1, min(workers, len(pending)))
+            if stage_workers == 1:
+                for case in pending:
                     result = _evaluate(
                         case,
                         cache_dir=cache_dir,
@@ -287,7 +323,7 @@ def main() -> int:
                     write_case_result(flow4 / f"case_{result['case_id']}.json", result)
                     _log(f"[flow4] {label} finished {result['case_id']}")
             else:
-                with ProcessPoolExecutor(max_workers=workers) as pool:
+                with ProcessPoolExecutor(max_workers=stage_workers) as pool:
                     futures = {
                         pool.submit(
                             _evaluate,
@@ -297,7 +333,7 @@ def main() -> int:
                             forced_disk_ids=forced,
                             official_variant=official_variant,
                         ): case.case_id
-                        for case in cases
+                        for case in pending
                     }
                     for future in as_completed(futures):
                         result = future.result()

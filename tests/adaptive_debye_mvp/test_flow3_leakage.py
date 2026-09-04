@@ -1,6 +1,14 @@
+import json
+import sys
 from pathlib import Path
 
 import pytest
+
+SCRIPTS = Path(__file__).resolve().parents[2] / "paper_receiver_adaptive_debye_mvp" / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from run_selector_cases import case_json_satisfies
 
 from atem3d.adaptive_debye_mvp.guards import (
     IndependentTestLeakageError,
@@ -33,3 +41,27 @@ def test_records_from_case_results_reject_te_case():
             official_variant="S1",
             scope="point",
         )
+
+
+def test_case_json_satisfies_does_not_overwrite_disks(tmp_path):
+    point = tmp_path / "case_TR01.json"
+    point.write_text(
+        json.dumps({"case_id": "TR01", "point_only": True, "tasks": [{"receiver_id": "point"}]}),
+        encoding="utf-8",
+    )
+    assert case_json_satisfies(point, "points") is True
+    assert case_json_satisfies(point, "disks") is False
+    disks = tmp_path / "case_TR02.json"
+    disks.write_text(
+        json.dumps(
+            {
+                "case_id": "TR02",
+                "point_only": False,
+                "receiver_ids": ["point", "disk_1.0", "disk_4.0"],
+                "tasks": [{"receiver_id": "disk_1.0"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert case_json_satisfies(disks, "points") is True
+    assert case_json_satisfies(disks, "disks") is True

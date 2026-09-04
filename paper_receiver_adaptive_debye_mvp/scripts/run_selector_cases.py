@@ -28,6 +28,26 @@ def _parse_case_ids(raw: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def case_json_satisfies(path: Path, stage: str) -> bool:
+    """True if an existing case JSON already covers this stage.
+
+    Disk JSON also satisfies the point stage so a later point pass cannot
+    overwrite official disk tasks.
+    """
+
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not payload.get("case_id") or not payload.get("tasks"):
+        return False
+    if not payload.get("point_only", True):
+        return True
+    return stage == "points"
+
+
 def _workers(n_cases: int) -> int:
     requested = max(4, int(os.cpu_count() or 4))
     env = os.environ.get("ROADS_WORKERS")
@@ -106,8 +126,19 @@ def main() -> int:
                 if forced_path.is_file():
                     payload = json.loads(forced_path.read_text(encoding="utf-8"))
                     forced = {int(key): list(value) for key, value in payload.items()}
-            if workers == 1:
-                for case in cases:
+            pending = [
+                case
+                for case in cases
+                if not case_json_satisfies(out_dir / f"case_{case.case_id}.json", stage)
+            ]
+            skipped = [case.case_id for case in cases if case not in pending]
+            if skipped:
+                _log(f"[flow3] {stage} skip existing {skipped}")
+            if not pending:
+                continue
+            stage_workers = max(1, min(workers, len(pending)))
+            if stage_workers == 1:
+                for case in pending:
                     result = _evaluate(
                         case,
                         cache_dir=cache_dir,
@@ -118,7 +149,7 @@ def main() -> int:
                     write_case_result(out_dir / f"case_{result['case_id']}.json", result)
                     _log(f"[flow3] {stage} finished {result['case_id']}")
             else:
-                with ProcessPoolExecutor(max_workers=workers) as pool:
+                with ProcessPoolExecutor(max_workers=stage_workers) as pool:
                     futures = {
                         pool.submit(
                             _evaluate,
@@ -128,7 +159,7 @@ def main() -> int:
                             forced_disk_ids=forced,
                             official_variant=official_variant,
                         ): case.case_id
-                        for case in cases
+                        for case in pending
                     }
                     for future in as_completed(futures):
                         result = future.result()

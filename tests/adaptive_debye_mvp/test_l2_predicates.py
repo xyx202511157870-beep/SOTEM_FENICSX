@@ -67,3 +67,48 @@ def test_l2_ratio_ci_is_on_the_ratio():
     assert row["median_ratio"] == 0.64
     assert row["bootstrap_ci_high"] != 0.0
     assert l2["status"] in {"L2_PASS", "L2_FAIL"}
+    assert l2["reselection"] is False
+
+
+def test_l2_uses_frozen_b2_not_per_case_spectral():
+    pr = {str(k): "pr" for k in (4, 6, 8, 10, 12)}
+    frozen_b2 = {str(k): "frozen_b2" for k in (4, 6, 8, 10, 12)}
+    results = []
+    for index in range(10):
+        results.append(
+            {
+                "case_id": f"TE{index+1:02d}",
+                "choices": [
+                    {
+                        **_choice(f"TE{index+1:02d}", k, 0.50).__dict__,
+                        "spectral_id": "case_spectral",
+                    }
+                    for k in (4, 6, 8, 10, 12)
+                ],
+                "tasks": [
+                    {
+                        "case_id": f"TE{index+1:02d}",
+                        "candidate_id": cid,
+                        "K": k,
+                        "waveform_id": "W0",
+                        "receiver_id": "point",
+                        "receiver_index": 0,
+                        "total_p95": {"pr": 0.012, "frozen_b2": 0.020, "case_spectral": 0.040}[cid],
+                        "ip_increment_nrmse": 0.01,
+                        "passed": True,
+                        "unexplained_sign_flips": 0,
+                        "peak_time_error_steps_max": 0.0,
+                        "h_p95": 0.01,
+                        "dbdt_p95": 0.01,
+                    }
+                    for k in (4, 6, 8, 10, 12)
+                    for cid in ("pr", "frozen_b2", "case_spectral")
+                ],
+                "official_variant": "S1",
+            }
+        )
+    remapped = evaluate_l2(results, pr_by_k=pr, b2_by_k=frozen_b2)
+    assert remapped["b2_by_k"]["10"] == "frozen_b2"
+    assert remapped["same_k"]["10"]["median_ratio"] == 0.6
+    leaked = evaluate_l2(results, pr_by_k=pr)
+    assert leaked["same_k"]["10"]["median_ratio"] == 0.3
