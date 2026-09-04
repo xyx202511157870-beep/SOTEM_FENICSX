@@ -13,6 +13,7 @@ generated/*
 !generated/receiver_adaptive_debye_mvp/
 generated/receiver_adaptive_debye_mvp/cache/
 generated/receiver_adaptive_debye_mvp/**/*.npz
+generated/receiver_adaptive_debye_mvp/flow3_selector/*.log
 !generated/receiver_adaptive_debye_mvp/**/*.md
 !generated/receiver_adaptive_debye_mvp/**/*.json
 !generated/receiver_adaptive_debye_mvp/**/*.csv

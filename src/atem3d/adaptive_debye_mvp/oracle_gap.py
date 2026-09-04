@@ -25,7 +25,8 @@ from .case_bridge import (
     polarizable_material,
     evaluation_transform,
 )
-from .io import to_record, write_json, write_records_csv
+from .guards import IndependentTestLeakageError, assert_split_readable
+from .io import read_json, to_record, write_json, write_records_csv
 from .layered_forward import BlockedBySoftwareOrResourcesError
 from .passive_fit import fit_pelton_passive_hard_dc
 from .protocol_constants import (
@@ -35,6 +36,7 @@ from .protocol_constants import (
     PILOT_RECEIVERS,
     PILOT_WAVEFORMS,
     SPECTRAL_FREQUENCIES,
+    TEST_ONLY_SPLITS,
     spectral_weights,
 )
 from .receiver_metrics import (
@@ -42,7 +44,31 @@ from .receiver_metrics import (
     ReceiverCase,
     evaluate_case,
 )
-from .registry import LayeredCase, instantiate_candidates
+from .registry import LayeredCase, generate_all_cases, instantiate_candidates
+
+POINT_METRIC_SENTINEL = 1.0e300
+SPLIT_CASE_SCHEMA = "atem3d.adaptive_debye_mvp.split_case_result.v1"
+CANDIDATE_POINT_METRIC_COLUMNS = (
+    "split",
+    "case_id",
+    "case_hash",
+    "K",
+    "candidate_id",
+    "receiver_scope",
+    "official_variant",
+    "valid",
+    "n_tasks",
+    "total_p95",
+    "ip_increment_nrmse_p95",
+    "fail_rate",
+    "qualifies_point",
+    "spectral_error",
+    "spectral_error_s0",
+    "spectral_error_s1",
+    "condition_number",
+    "relative_dc_error",
+    "optimizer_success",
+)
 
 
 @dataclass(frozen=True)
@@ -543,6 +569,10 @@ def evaluate_pilot_case(
             "choices": choices,
             "tasks": task_rows,
             "point_only": True,
+            "disk_shortlist": _shortlist_payload(shortlists),
+            "k_values": list(k_values),
+            "waveform_ids": list(waveform_ids),
+            "shared_survey_hash": {"point": _survey_hash(reference_point)},
         }
 
     print(f"[{case.case_id}] computing exact/noip disks", flush=True)
@@ -636,6 +666,14 @@ def evaluate_pilot_case(
         "fits": fits,
         "choices": choices,
         "tasks": task_rows,
+        "point_only": False,
+        "disk_shortlist": _shortlist_payload(shortlists),
+        "k_values": list(k_values),
+        "waveform_ids": list(waveform_ids),
+        "shared_survey_hash": {
+            "point": _survey_hash(reference_point),
+            "disk": _survey_hash(reference_disk),
+        },
     }
 
 
@@ -922,3 +960,333 @@ def write_oracle_gap_artifacts(output_dir: str | Path, pilot_results: list[dict[
         root / "official_spectral_variant.json",
         {"variant": pilot_results[0]["official_variant"] if pilot_results else "S0"},
     )
+
+
+def _survey_hash(models: dict[str, Any]) -> str:
+    first = next(iter(models.values()))
+    return str(first["hashes"]["shared_survey_hash"])
+
+
+def _shortlist_payload(shortlists: dict[int, set[str]]) -> dict[str, list[str]]:
+    return {str(poles): sorted(ids) for poles, ids in sorted(shortlists.items())}
+
+
+def fit_summary_records(fits: list[Any]) -> list[dict[str, Any]]:
+    """Serialize hard-DC fit metrics without the scipy fit object."""
+
+    rows: list[dict[str, Any]] = []
+    for record in fits:
+        if isinstance(record, FitRecord):
+            rows.append(
+                {
+                    "candidate_id": record.candidate_id,
+                    "K": int(record.K),
+                    "valid": bool(record.valid),
+                    "spectral_error_s0": float(record.spectral_error_s0),
+                    "spectral_error_s1": float(record.spectral_error_s1),
+                    "condition_number": float(record.condition_number),
+                    "relative_dc_error": float(record.relative_dc_error),
+                    "optimizer_success": bool(record.optimizer_success),
+                }
+            )
+            continue
+        rows.append(
+            {
+                "candidate_id": str(record["candidate_id"]),
+                "K": int(record["K"]),
+                "valid": bool(record["valid"]),
+                "spectral_error_s0": float(record["spectral_error_s0"]),
+                "spectral_error_s1": float(record["spectral_error_s1"]),
+                "condition_number": float(record["condition_number"]),
+                "relative_dc_error": float(record["relative_dc_error"]),
+                "optimizer_success": bool(record["optimizer_success"]),
+            }
+        )
+    return rows
+
+
+def _point_tasks_for_candidate(tasks: list[Any], candidate_id: str) -> list[TaskMetrics]:
+    hydrated = [hydrate_task(item) for item in tasks]
+    return [
+        item
+        for item in hydrated
+        if item.candidate_id == candidate_id and item.receiver_id == "point"
+    ]
+
+
+def _finite_or_sentinel(value: float) -> float:
+    return float(value) if np.isfinite(value) else POINT_METRIC_SENTINEL
+
+
+def candidate_point_metrics(
+    result: dict[str, Any],
+    *,
+    split: str,
+    case_hash: str,
+) -> list[dict[str, Any]]:
+    """One point-only ranking row per template, including invalid fits."""
+
+    assert_split_readable(split, stage="flow3")
+    variant = str(result.get("official_variant", "S0"))
+    case_id = str(result["case_id"])
+    fits = result.get("fits") or result.get("fit_summary") or []
+    tasks = result.get("tasks", [])
+    rows: list[dict[str, Any]] = []
+    for record in fit_summary_records(fits):
+        point_tasks = _point_tasks_for_candidate(tasks, record["candidate_id"])
+        valid = bool(record["valid"]) and bool(point_tasks)
+        if valid:
+            total = _finite_or_sentinel(reduce_case_error(point_tasks))
+            ip_error = _finite_or_sentinel(reduce_ip_error(point_tasks))
+            fail_rate = float(np.mean([not item.passed for item in point_tasks]))
+            qualifies = bool(tasks_qualify(point_tasks))
+        else:
+            total = POINT_METRIC_SENTINEL
+            ip_error = POINT_METRIC_SENTINEL
+            fail_rate = 1.0
+            qualifies = False
+        spectral = (
+            float(record["spectral_error_s0"])
+            if variant == "S0"
+            else float(record["spectral_error_s1"])
+        )
+        rows.append(
+            {
+                "split": split,
+                "case_id": case_id,
+                "case_hash": case_hash,
+                "K": int(record["K"]),
+                "candidate_id": str(record["candidate_id"]),
+                "receiver_scope": "point",
+                "official_variant": variant,
+                "valid": bool(record["valid"]),
+                "n_tasks": len(point_tasks),
+                "total_p95": total,
+                "ip_increment_nrmse_p95": ip_error,
+                "fail_rate": fail_rate,
+                "qualifies_point": qualifies,
+                "spectral_error": spectral,
+                "spectral_error_s0": float(record["spectral_error_s0"]),
+                "spectral_error_s1": float(record["spectral_error_s1"]),
+                "condition_number": float(record["condition_number"]),
+                "relative_dc_error": float(record["relative_dc_error"]),
+                "optimizer_success": bool(record["optimizer_success"]),
+            }
+        )
+    rows.sort(key=lambda item: (str(item["split"]), str(item["case_id"]), int(item["K"]), str(item["candidate_id"])))
+    return rows
+
+
+def write_split_case_result(
+    path: str | Path,
+    result: dict[str, Any],
+    *,
+    case: LayeredCase,
+    split: str,
+    provenance: dict[str, Any] | None = None,
+) -> Path:
+    """Write one train/validation case JSON. Refuses independent_test."""
+
+    assert_split_readable(split, stage="flow3")
+    if str(case.split) in TEST_ONLY_SPLITS or split in TEST_ONLY_SPLITS:
+        raise IndependentTestLeakageError(
+            f"write_split_case_result refused split {case.split!r}/{split!r}"
+        )
+    if str(case.split) != str(split):
+        raise IndependentTestLeakageError(
+            f"case {case.case_id} split {case.split!r} does not match requested {split!r}"
+        )
+    case_hash = case.case_hash()
+    point_only = bool(result.get("point_only", False))
+    status = str(result.get("status") or ("POINT_ONLY" if point_only else "COMPLETE"))
+    payload = {
+        "schema": SPLIT_CASE_SCHEMA,
+        "case_id": case.case_id,
+        "split": split,
+        "case_hash": case_hash,
+        "k_values": list(result.get("k_values") or [item.K if hasattr(item, "K") else item["K"] for item in result.get("choices", [])]),
+        "waveform_ids": list(result.get("waveform_ids") or list(PILOT_WAVEFORMS)),
+        "receiver_ids": list(PILOT_RECEIVERS),
+        "official_variant": result.get("official_variant", "S0"),
+        "official_variant_source": "flow2_oracle_gap/official_spectral_variant.json",
+        "point_only": point_only,
+        "status": status,
+        "choices": [to_record(item) for item in result.get("choices", [])],
+        "tasks": [to_record(item) for item in result.get("tasks", [])],
+        "fit_summary": fit_summary_records(result.get("fits") or result.get("fit_summary") or []),
+        "disk_shortlist": result.get("disk_shortlist") or {},
+        "candidate_point_metrics": candidate_point_metrics(result, split=split, case_hash=case_hash),
+        "provenance": {
+            "three_d_run": False,
+            "independent_test_read": False,
+            **(provenance or {}),
+            "shared_survey_hash": result.get("shared_survey_hash")
+            or (provenance or {}).get("shared_survey_hash", {}),
+        },
+    }
+    return write_json(path, payload)
+
+
+def load_split_case_result(path: str | Path) -> dict[str, Any]:
+    """Load a train/validation case JSON and refuse test-only splits."""
+
+    payload = read_json(path)
+    if not isinstance(payload, dict):
+        raise IndependentTestLeakageError(f"{path} is not a mapping")
+    schema = str(payload.get("schema", ""))
+    if schema not in {SPLIT_CASE_SCHEMA, "atem3d.adaptive_debye_mvp.pilot_case_result.v1"}:
+        raise ValueError(f"unsupported case JSON schema: {schema!r}")
+    split = str(payload.get("split", ""))
+    assert_split_readable(split, stage="flow3")
+    if split in TEST_ONLY_SPLITS:
+        raise IndependentTestLeakageError(f"{path} has forbidden split {split!r}")
+    hydrated = load_pilot_case_result(path)
+    hydrated["schema"] = schema
+    hydrated["split"] = split
+    hydrated["fit_summary"] = payload.get("fit_summary", [])
+    hydrated["candidate_point_metrics"] = payload.get("candidate_point_metrics", [])
+    hydrated["status"] = payload.get("status")
+    return hydrated
+
+
+def resolve_train_val_cases(
+    *,
+    split: str,
+    case_ids: tuple[str, ...] = (),
+) -> list[LayeredCase]:
+    """Return train/validation cases only. Independent-test ids are an error."""
+
+    requested = str(split)
+    if requested not in {"train", "validation", "both"}:
+        assert_split_readable(requested, stage="flow3")
+        raise IndependentTestLeakageError(f"unsupported train/val split {requested!r}")
+    wanted = {"train", "validation"} if requested == "both" else {requested}
+    if requested != "both":
+        assert_split_readable(requested, stage="flow3")
+    all_cases = generate_all_cases()
+    if case_ids:
+        by_id = {case.case_id: case for case in all_cases}
+        selected: list[LayeredCase] = []
+        missing = [case_id for case_id in case_ids if case_id not in by_id]
+        if missing:
+            raise ValueError(f"unknown case ids: {missing}")
+        for case_id in case_ids:
+            case = by_id[case_id]
+            assert_split_readable(case.split, stage="flow3")
+            if case.split not in wanted:
+                raise IndependentTestLeakageError(
+                    f"case {case.case_id} split {case.split!r} is outside {sorted(wanted)}"
+                )
+            selected.append(case)
+        return selected
+    selected = [case for case in all_cases if case.split in wanted]
+    for case in selected:
+        assert_split_readable(case.split, stage="flow3")
+    return selected
+
+
+def assemble_train_val_metrics(
+    flow3_dir: str | Path,
+    *,
+    generated_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Build point-only ranking CSVs from committed train/val case JSON."""
+
+    root = Path(flow3_dir)
+    generated = Path(generated_dir) if generated_dir is not None else root.parent
+    paths = sorted(root.glob("case_*.json"))
+    train_rows: list[dict[str, Any]] = []
+    val_rows: list[dict[str, Any]] = []
+    manifest_cases: dict[str, Any] = {}
+    n_point_only = 0
+    for path in paths:
+        payload = read_json(path)
+        if not isinstance(payload, dict):
+            raise IndependentTestLeakageError(f"{path} is not a mapping")
+        split = str(payload.get("split", ""))
+        assert_split_readable(split, stage="flow3")
+        if split not in {"train", "validation"}:
+            raise IndependentTestLeakageError(
+                f"assembler refused {path.name} with split {split!r}"
+            )
+        status = str(payload.get("status", ""))
+        if status == "FITS_ONLY":
+            continue
+        rows = candidate_point_metrics(
+            {
+                "case_id": payload.get("case_id"),
+                "official_variant": payload.get("official_variant", "S0"),
+                "fit_summary": payload.get("fit_summary", []),
+                "tasks": payload.get("tasks", []),
+            },
+            split=split,
+            case_hash=str(payload.get("case_hash", "")),
+        )
+        if split == "train":
+            train_rows.extend(rows)
+        else:
+            val_rows.extend(rows)
+        if bool(payload.get("point_only", False)):
+            n_point_only += 1
+        manifest_cases[str(payload.get("case_id"))] = {
+            "path": path.name,
+            "point_only": bool(payload.get("point_only", False)),
+            "n_tasks": len(payload.get("tasks", [])),
+            "n_choices": len(payload.get("choices", [])),
+            "case_hash": payload.get("case_hash"),
+            "status": status or ("POINT_ONLY" if payload.get("point_only") else "COMPLETE"),
+        }
+
+    train_rows.sort(key=lambda item: (item["case_id"], int(item["K"]), item["candidate_id"]))
+    val_rows.sort(key=lambda item: (item["case_id"], int(item["K"]), item["candidate_id"]))
+    write_records_csv(root / "train_candidate_metrics.csv", train_rows, columns=CANDIDATE_POINT_METRIC_COLUMNS)
+    write_records_csv(root / "validation_candidate_metrics.csv", val_rows, columns=CANDIDATE_POINT_METRIC_COLUMNS)
+    write_records_csv(root / "incoming_train.csv", train_rows, columns=CANDIDATE_POINT_METRIC_COLUMNS)
+    write_records_csv(root / "incoming_validation.csv", val_rows, columns=CANDIDATE_POINT_METRIC_COLUMNS)
+
+    train_ids = {row["case_id"] for row in train_rows}
+    val_ids = {row["case_id"] for row in val_rows}
+    complete = (
+        len(train_ids) == 12
+        and len(val_ids) == 6
+        and n_point_only == 0
+        and all(str(item.get("status")) == "COMPLETE" for item in manifest_cases.values())
+    )
+    status = "L1_INPUTS_READY" if complete else "L1_INPUTS_PARTIAL"
+    official_variant = None
+    if train_rows:
+        official_variant = train_rows[0]["official_variant"]
+    elif val_rows:
+        official_variant = val_rows[0]["official_variant"]
+    manifest = {
+        "schema": "atem3d.adaptive_debye_mvp.train_val_manifest.v1",
+        "cases": manifest_cases,
+        "n_train": len(train_ids),
+        "n_validation": len(val_ids),
+        "n_point_only": n_point_only,
+        "csv_rows": {"train": len(train_rows), "validation": len(val_rows)},
+        "official_variant": official_variant,
+        "k_values": list(K_PILOT),
+        "l1_frozen": False,
+        "independent_test_read": False,
+        "three_d_run": False,
+    }
+    write_json(root / "TRAIN_VAL_MANIFEST.json", manifest)
+    write_json(
+        generated / "FLOW3_STATUS.json",
+        {
+            "status": status,
+            "l1_frozen": False,
+            "selected": None,
+            "n_train": len(train_ids),
+            "n_validation": len(val_ids),
+            "disks_complete": complete,
+            "inputs": [
+                "flow3_selector/train_candidate_metrics.csv",
+                "flow3_selector/validation_candidate_metrics.csv",
+            ],
+            "next_step": "PR10 train_selector.py",
+            "three_d_run": False,
+        },
+    )
+    return {"status": status, "manifest": manifest, "l1_frozen": False}

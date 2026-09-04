@@ -164,6 +164,17 @@ Do not run independent test as a proposed-method claim. Do not run 3-D.
 P-R uses only train/val. B2 does not use receiver responses. Identical
 candidate sets/constraints. Independent test unread.
 
+Train/validation layered responses live in
+`generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR*.json` and
+`case_VA*.json`. Each file stores choices, tasks (all valid templates on
+point receivers; L0 disk shortlist on `disk_1.0` / `disk_4.0`), and
+`fit_summary` spectral metrics so PR10 can rank templates and pick B2.
+Aggregated ranking tables `train_candidate_metrics.csv` and
+`validation_candidate_metrics.csv` are point-only (one row per case x
+template, invalid fits use the `1e300` sentinel) so disk shortlists cannot
+bias the selector. This branch writes those inputs only; it does not freeze
+`selected_template_by_K.json`.
+
 ### L2 (independent test, only if L1 passed)
 
 A or B as specified in the task statement. If L0 passed but L2 failed:
