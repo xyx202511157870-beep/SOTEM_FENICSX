@@ -2,7 +2,7 @@
 
 ## 1. FINAL STATUS
 
-L0 passed. L1 selector is in progress (train/validation case forwards). L2 has not been assembled. 3-D was not run.
+L0 passed. L1 point ranking is done (`L1_POINTS_RANKED`, official variant S1). Disk shortlist forwards are in progress. L1 is not frozen. L2 has not been assembled. 3-D was not run.
 
 ## 2. 3-D continue?
 
@@ -16,7 +16,10 @@ NO. L1 is not frozen and L2 has not passed. 3-D was not run.
 - win rate: `1.0`
 - qualifying-K oracle difference: median `0.0`, nonnegative rate `1.0`
 - n official pilot cases with disks: `8`
-- L1 frozen: `no` (Flow 3 running; `FLOW3_STATUS` not yet `L1_FROZEN`)
+- L1 frozen: `no` (`FLOW3_STATUS=L1_POINTS_RANKED`; disk stage running)
+- L1 official variant: `S1`
+- L1 P-R preview: K4=`K04_cc_span4.0_shift-0.5_dens1.25`, K6=`K06_cc_span4.0_shift+0.0_dens1.25`, K8=`K08_cc_span4.0_shift-0.5_dens1.00`, K10=`K10_cc_span4.0_shift-0.5_dens1.00`, K12=`K12_cc_span6.0_shift+0.0_dens1.25`
+- L1 B2 spectral: differs from P-R at K=6, 10, 12
 - L2 pass/fail: not assembled
 - same-K P-R/B2 median ratio: n/a
 - bootstrap CI: n/a
