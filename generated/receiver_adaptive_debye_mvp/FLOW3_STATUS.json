@@ -1,0 +1,14 @@
+{
+  "disks_complete": false,
+  "inputs": [
+    "flow3_selector/train_candidate_metrics.csv",
+    "flow3_selector/validation_candidate_metrics.csv"
+  ],
+  "l1_frozen": false,
+  "n_train": 1,
+  "n_validation": 0,
+  "next_step": "PR10 train_selector.py",
+  "selected": null,
+  "status": "L1_INPUTS_PARTIAL",
+  "three_d_run": false
+}

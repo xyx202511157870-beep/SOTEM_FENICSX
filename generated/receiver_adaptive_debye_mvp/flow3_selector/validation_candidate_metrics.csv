@@ -1,0 +1,1 @@
+split,case_id,case_hash,K,candidate_id,receiver_scope,official_variant,valid,n_tasks,total_p95,ip_increment_nrmse_p95,fail_rate,qualifies_point,spectral_error,spectral_error_s0,spectral_error_s1,condition_number,relative_dc_error,optimizer_success
