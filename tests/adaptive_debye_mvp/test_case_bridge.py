@@ -22,7 +22,12 @@ from atem3d.adaptive_debye_mvp.layered_forward import (
     NonPolarizableMaterial,
 )
 from atem3d.adaptive_debye_mvp.passive_fit import fit_pelton_passive_hard_dc
-from atem3d.adaptive_debye_mvp.protocol_constants import COORDINATE_SYSTEM, SPECTRAL_FREQUENCIES
+from atem3d.adaptive_debye_mvp.protocol_constants import (
+    COORDINATE_SYSTEM,
+    SPECTRAL_FREQUENCIES,
+    WAVEFORM_BY_ID,
+    WAVEFORM_QUADRATURE_ORDER,
+)
 from atem3d.adaptive_debye_mvp.registry import generate_split
 
 
@@ -41,6 +46,13 @@ def test_case_bridge_types_and_depth_down():
     assert case_waveform("W0").kind == "ideal_step_off"
     assert case_waveform("W1").kind == "linear_ramp"
     assert case_waveform("W2").ramp_duration_s == 20.0e-6
+    w3 = case_waveform("W3")
+    proto = WAVEFORM_BY_ID["W3"]
+    assert w3.kind == "tabulated"
+    assert w3.label == "W3_tabulated"
+    assert w3.quadrature_order == WAVEFORM_QUADRATURE_ORDER
+    assert w3.config["source"]["waveform"]["times"] == list(proto.times_s)
+    assert w3.config["source"]["waveform"]["values"] == list(proto.current_scales)
     material = polarizable_material(case)
     sigma = material.complex_conductivity(SPECTRAL_FREQUENCIES)
     assert sigma.shape == SPECTRAL_FREQUENCIES.shape

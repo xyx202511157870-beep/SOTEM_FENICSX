@@ -140,6 +140,8 @@ TRAIN_VAL_WAVEFORMS = ("W0", "W1", "W2")
 TEST_WAVEFORMS = ("W0", "W1", "W2", "W3")
 PRESSURE_WAVEFORMS = ("W0", "W4")
 PILOT_RECEIVERS = ("point", "disk_1.0", "disk_4.0")
+TILTED_RECEIVER_ID = "tilted_coil"
+TEST_RECEIVERS = ("point", "disk_1.0", "disk_4.0", TILTED_RECEIVER_ID)
 
 
 def observation_times() -> np.ndarray:

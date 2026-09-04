@@ -11,6 +11,7 @@ from atem3d.metrics import robust_relative_error
 
 
 CHANNELS = ("Hx", "Hy", "Hz", "dBxdt", "dBydt", "dBzdt")
+PROJECTED_CHANNELS = ("Hn", "dBndt")
 CHANNEL_UNITS = {
     "Hx": "A/m",
     "Hy": "A/m",
@@ -18,6 +19,8 @@ CHANNEL_UNITS = {
     "dBxdt": "T/s",
     "dBydt": "T/s",
     "dBzdt": "T/s",
+    "Hn": "A/m",
+    "dBndt": "T/s",
 }
 DEFAULT_D_FLOOR = {
     "Hx": 1.0e-16,
@@ -26,6 +29,8 @@ DEFAULT_D_FLOOR = {
     "dBxdt": 1.0e-18,
     "dBydt": 1.0e-18,
     "dBzdt": 1.0e-18,
+    "Hn": 1.0e-16,
+    "dBndt": 1.0e-18,
 }
 
 
@@ -509,7 +514,8 @@ def evaluate_case(case: ReceiverCase, thresholds: MetricThresholds = MetricThres
     dt = _case_output_dt(case, times)
     channels: dict[str, ChannelMetrics] = {}
     pooled: list[np.ndarray] = []
-    for name in CHANNELS:
+    ordered_names = list(CHANNELS) + [name for name in PROJECTED_CHANNELS if name not in CHANNELS]
+    for name in ordered_names:
         if name not in case.reference:
             continue
         baseline = None if case.reference_no_ip is None else case.reference_no_ip[name]
