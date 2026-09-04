@@ -36,8 +36,8 @@ PY
   exit 2
 fi
 
-if [[ ! -f "$GEN/flow3_selector/incoming_train.csv" ]]; then
-  echo "Flow 3 inputs are not present; refusing unauthorized later stages" >&2
+if [[ ! -f "$GEN/flow3_selector/case_TR01.json" || ! -f "$GEN/flow3_selector/case_VA01.json" ]]; then
+  echo "Flow 3 case JSON is not present; refusing unauthorized later stages" >&2
   exit 3
 fi
 

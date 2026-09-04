@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,8 @@ from .protocol_constants import (
     PILOT_RECEIVERS,
     PILOT_WAVEFORMS,
     SPECTRAL_FREQUENCIES,
+    TEST_WAVEFORMS,
+    normalize_tilted_normal,
     spectral_weights,
 )
 from .receiver_metrics import (
@@ -392,6 +395,79 @@ def _forward_and_tasks(
     )
 
 
+def collect_tilted_coil_tasks(
+    case: LayeredCase,
+    *,
+    candidate_id: str,
+    K: int,
+    reference_models,
+    candidate_models,
+    baseline_models,
+    waveform_ids: tuple[str, ...],
+) -> list[TaskMetrics]:
+    """Project point dB/dt onto the frozen tilted coil normal (no new forward)."""
+
+    normal = np.asarray(case.sensor_normal or normalize_tilted_normal(), dtype=float)
+    norm = float(np.linalg.norm(normal))
+    if not np.isfinite(norm) or norm <= 0.0:
+        raise ValueError(f"{case.case_id} has a non-finite tilted coil normal")
+    normal = normal / norm
+    tasks: list[TaskMetrics] = []
+    for waveform_id in waveform_ids:
+        reference = reference_models[waveform_id]
+        candidate = candidate_models[waveform_id]
+        baseline = baseline_models[waveform_id]
+        times = np.asarray(reference["times"], dtype=float)
+        labels = [str(label) for label in reference["receiver_labels"]]
+        for column, label in enumerate(labels):
+            if not str(label).startswith("point:"):
+                continue
+            receiver_index = int(label.split(":", 1)[1])
+
+            def _project(result: dict[str, Any], index: int = column) -> dict[str, np.ndarray]:
+                channels = channel_column(result, index)
+                projected = (
+                    normal[0] * channels["dBxdt"]
+                    + normal[1] * channels["dBydt"]
+                    + normal[2] * channels["dBzdt"]
+                )
+                return {"dBzdt": projected}
+
+            tasks.append(
+                evaluate_task(
+                    case=case,
+                    candidate_id=candidate_id,
+                    K=K,
+                    waveform_id=waveform_id,
+                    receiver_id="tilted_coil",
+                    receiver_index=receiver_index,
+                    reference=_project(reference),
+                    candidate=_project(candidate),
+                    baseline=_project(baseline),
+                    times=times,
+                )
+            )
+    return tasks
+
+
+def fit_summary(fits: Iterable[FitRecord]) -> list[dict[str, Any]]:
+    rows = []
+    for item in fits:
+        rows.append(
+            {
+                "candidate_id": item.candidate_id,
+                "K": item.K,
+                "valid": item.valid,
+                "spectral_error_s0": item.spectral_error_s0,
+                "spectral_error_s1": item.spectral_error_s1,
+                "condition_number": item.condition_number,
+                "relative_dc_error": item.relative_dc_error,
+                "optimizer_success": item.optimizer_success,
+            }
+        )
+    return rows
+
+
 def evaluate_pilot_case(
     case: LayeredCase,
     *,
@@ -402,6 +478,8 @@ def evaluate_pilot_case(
     official_variant: str | None = None,
     disk_shortlist: int = 2,
     include_disks: bool = True,
+    forced_disk_ids: Mapping[int, Iterable[str]] | None = None,
+    include_tilted: bool = False,
 ) -> dict[str, Any]:
     """Evaluate spectral-best vs receiver-oracle on one pilot case.
 
@@ -499,6 +577,8 @@ def evaluate_pilot_case(
             point_oracle.candidate_id,
             *ranked[: int(disk_shortlist)],
         }
+        if forced_disk_ids is not None:
+            shortlists[poles].update(str(item) for item in forced_disk_ids.get(poles, ()))
 
     if not include_disks:
         for poles, records in by_k.items():
@@ -540,9 +620,13 @@ def evaluate_pilot_case(
             "case_id": case.case_id,
             "official_variant": variant,
             "fits": fits,
+            "fit_summary": fit_summary(fits),
             "choices": choices,
             "tasks": task_rows,
             "point_only": True,
+            "disk_shortlist": {str(key): sorted(value) for key, value in shortlists.items()},
+            "split": case.split,
+            "case_hash": case.case_hash(),
         }
 
     print(f"[{case.case_id}] computing exact/noip disks", flush=True)
@@ -630,12 +714,50 @@ def evaluate_pilot_case(
                 qualifies_or=tasks_qualify(task_map[oracle.candidate_id]),
             )
         )
+    if include_tilted:
+        print(f"[{case.case_id}] projecting tilted-coil point dB/dt", flush=True)
+        for poles, records in by_k.items():
+            if poles not in point_maps:
+                continue
+            for record in records:
+                if record.candidate_id not in point_maps[poles]:
+                    continue
+                candidate_models = _run_model_waveforms(
+                    case,
+                    debye_material(case, record.fit, candidate_id=record.candidate_id),
+                    receivers=points,
+                    waveform_ids=waveform_ids,
+                    cache_dir=cache_dir,
+                    backend=backend,
+                    model_id=f"{record.candidate_id}:point",
+                    times=times,
+                    geometry=geometry,
+                    transform=transform,
+                )
+                tilted = collect_tilted_coil_tasks(
+                    case,
+                    candidate_id=record.candidate_id,
+                    K=record.K,
+                    reference_models=reference_point,
+                    candidate_models=candidate_models,
+                    baseline_models=baseline_point,
+                    waveform_ids=waveform_ids,
+                )
+                task_rows.extend(tilted)
+
     return {
         "case_id": case.case_id,
         "official_variant": variant,
         "fits": fits,
+        "fit_summary": fit_summary(fits),
         "choices": choices,
         "tasks": task_rows,
+        "point_only": False,
+        "disk_shortlist": {str(key): sorted(value) for key, value in shortlists.items()},
+        "split": case.split,
+        "case_hash": case.case_hash(),
+        "tilted_alias": "dBzdt" if include_tilted else None,
+        "tilted_disk": "not_available_in_wrapper" if include_tilted else None,
     }
 
 
@@ -657,7 +779,11 @@ def _group_ratio(tasks_or: list[TaskMetrics], tasks_b2: list[TaskMetrics], predi
     return float(np.median(left) / np.median(right)) if np.median(right) > 0.0 else float("nan")
 
 
-def evaluate_l0(pilot_results: list[dict[str, Any]]) -> dict[str, Any]:
+def evaluate_l0(
+    pilot_results: list[dict[str, Any]],
+    *,
+    waveform_ids: tuple[str, ...] = PILOT_WAVEFORMS,
+) -> dict[str, Any]:
     """Apply the frozen L0 A/B predicates to pilot oracle-gap results."""
 
     pilot_results = [hydrate_result(result) for result in pilot_results]
@@ -736,7 +862,7 @@ def evaluate_l0(pilot_results: list[dict[str, Any]]) -> dict[str, Any]:
             or_tasks = [item for item in tasks if item.candidate_id == choice.oracle_id and item.K == focus_k]
             b2_tasks = [item for item in tasks if item.candidate_id == choice.spectral_id and item.K == focus_k]
             improved_waveforms = 0
-            for waveform_id in PILOT_WAVEFORMS:
+            for waveform_id in waveform_ids:
                 ratio = _group_ratio(or_tasks, b2_tasks, lambda item, wid=waveform_id: item.waveform_id == wid)
                 if np.isfinite(ratio) and ratio < 1.0:
                     improved_waveforms += 1
@@ -792,6 +918,63 @@ def evaluate_l0(pilot_results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def apply_pr_choices(result: dict[str, Any], pr_by_k: Mapping[str, str]) -> dict[str, Any]:
+    """Remap oracle slots to the frozen P-R template so evaluate_l0 is L2."""
+
+    hydrated = hydrate_result(result)
+    remapped: list[CaseKChoice] = []
+    for choice in hydrated["choices"]:
+        pr_id = str(pr_by_k[str(choice.K)])
+        pr_tasks = [
+            item
+            for item in hydrated["tasks"]
+            if item.candidate_id == pr_id and item.K == choice.K
+        ]
+        b2_tasks = [
+            item
+            for item in hydrated["tasks"]
+            if item.candidate_id == choice.spectral_id and item.K == choice.K
+        ]
+        e_pr = reduce_case_error(pr_tasks)
+        e_b2 = reduce_case_error(b2_tasks)
+        ratio = float(e_pr / e_b2) if e_b2 > 0.0 and np.isfinite(e_b2) and np.isfinite(e_pr) else float("nan")
+        remapped.append(
+            CaseKChoice(
+                case_id=choice.case_id,
+                K=choice.K,
+                spectral_id=choice.spectral_id,
+                oracle_id=pr_id,
+                ids_differ=choice.spectral_id != pr_id,
+                e_b2=e_b2,
+                e_or=e_pr,
+                ratio=ratio,
+                gap=1.0 - ratio if np.isfinite(ratio) else float("nan"),
+                ip_b2=reduce_ip_error(b2_tasks),
+                ip_or=reduce_ip_error(pr_tasks),
+                log_hausdorff=choice.log_hausdorff,
+                qualifies_b2=tasks_qualify(b2_tasks),
+                qualifies_or=tasks_qualify(pr_tasks),
+            )
+        )
+    return {**hydrated, "or_choices": hydrated["choices"], "choices": remapped}
+
+
+def evaluate_l2(
+    test_results: list[dict[str, Any]],
+    *,
+    pr_by_k: Mapping[str, str],
+    waveform_ids: tuple[str, ...] = TEST_WAVEFORMS,
+) -> dict[str, Any]:
+    """L2 A/B: L0 predicates with P-R in place of the oracle."""
+
+    remapped = [apply_pr_choices(result, pr_by_k) for result in test_results]
+    l2 = evaluate_l0(remapped, waveform_ids=waveform_ids)
+    l2["status"] = "L2_PASS" if l2["passed"] else "L2_FAIL"
+    l2["pr_by_k"] = {str(key): str(value) for key, value in pr_by_k.items()}
+    l2["waveform_ids"] = list(waveform_ids)
+    return l2
+
+
 def hydrate_choice(item: Any) -> CaseKChoice:
     if isinstance(item, CaseKChoice):
         return item
@@ -817,22 +1000,38 @@ def hydrate_result(payload: dict[str, Any]) -> dict[str, Any]:
         "choices": choices,
         "tasks": [hydrate_task(item) for item in payload.get("tasks", [])],
         "point_only": bool(payload.get("point_only", False)),
+        "disk_shortlist": payload.get("disk_shortlist", {}),
+        "fit_summary": payload.get("fit_summary", []),
+        "split": payload.get("split"),
+        "case_hash": payload.get("case_hash"),
+        "tilted_alias": payload.get("tilted_alias"),
+        "tilted_disk": payload.get("tilted_disk"),
+        "provenance": payload.get("provenance", {}),
     }
 
 
 def write_case_result(path: str | Path, result: dict[str, Any]) -> None:
     """Write one case so sibling VMs can assemble L0 without rerunning empymod."""
 
-    write_json(
-        path,
-        {
-            "case_id": result["case_id"],
-            "official_variant": result.get("official_variant", "S0"),
-            "point_only": bool(result.get("point_only", False)),
-            "choices": [to_record(item) for item in result["choices"]],
-            "tasks": [to_record(item) for item in result["tasks"]],
-        },
-    )
+    payload = {
+        "schema": "atem3d.adaptive_debye_mvp.pilot_case_result.v1",
+        "case_id": result["case_id"],
+        "official_variant": result.get("official_variant", "S0"),
+        "point_only": bool(result.get("point_only", False)),
+        "choices": [to_record(item) for item in result["choices"]],
+        "tasks": [to_record(item) for item in result["tasks"]],
+        "split": result.get("split"),
+        "case_hash": result.get("case_hash"),
+        "disk_shortlist": result.get("disk_shortlist", {}),
+        "fit_summary": result.get("fit_summary") or fit_summary(result.get("fits", [])),
+        "waveform_ids": result.get("waveform_ids"),
+        "k_values": result.get("k_values"),
+        "receiver_ids": result.get("receiver_ids"),
+        "tilted_alias": result.get("tilted_alias"),
+        "tilted_disk": result.get("tilted_disk"),
+        "provenance": result.get("provenance", {}),
+    }
+    write_json(path, payload)
 
 
 def load_case_results(paths) -> list[dict[str, Any]]:
@@ -868,8 +1067,10 @@ def load_pilot_case_result(path: str | Path) -> dict[str, Any]:
         ],
         "point_only": bool(payload.get("point_only", False)),
         "disk_shortlist": payload.get("disk_shortlist", {}),
+        "fit_summary": payload.get("fit_summary", []),
         "case_hash": payload.get("case_hash"),
         "provenance": payload.get("provenance", {}),
+        "split": payload.get("split"),
     }
 
 

@@ -67,6 +67,16 @@ def sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def sha256_file(path: str | Path) -> str:
+    """Return the hex SHA-256 digest of a file's bytes."""
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def format_offsets(offsets) -> str:
     """Format log10-tau offsets for the registry CSV."""
 

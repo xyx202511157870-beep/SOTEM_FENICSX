@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from .io import read_json
-from .protocol_constants import TEST_ONLY_SPLITS, TRAIN_ALLOWED_SPLITS
+from .io import read_json, sha256_file
+from .protocol_constants import SPLIT_PREFIX, TEST_ONLY_SPLITS, TRAIN_ALLOWED_SPLITS
 
 
 class IndependentTestLeakageError(RuntimeError):
@@ -72,3 +72,54 @@ def refuse_3d_before_l2(root: str | Path | None = None) -> None:
     """Always-on 3-D guard used by later-stage scripts."""
 
     assert_3d_authorized(root)
+
+
+def assert_case_ids_split_safe(case_ids: Iterable[str], *, stage: str) -> None:
+    """Reject independent-test / pressure prefixes during train/selector stages."""
+
+    forbidden = []
+    if stage in {"train", "validation", "selector", "flow3"}:
+        forbidden.extend([SPLIT_PREFIX["independent_test"], SPLIT_PREFIX["layered_pressure"]])
+    if stage in {"selector", "flow3"}:
+        forbidden.append(SPLIT_PREFIX["pilot_gap"])
+    for case_id in case_ids:
+        prefix = "".join(ch for ch in str(case_id) if ch.isalpha())
+        if prefix in forbidden:
+            raise IndependentTestLeakageError(
+                f"stage {stage!r} cannot read case id {case_id!r}"
+            )
+
+
+def assert_file_hash(path: str | Path, expected_sha256: str) -> str:
+    digest = sha256_file(path)
+    if digest != str(expected_sha256):
+        raise ValueError(f"hash mismatch for {path}: {digest} != {expected_sha256}")
+    return digest
+
+
+def snapshot_cache_keys(cache_dir: str | Path) -> frozenset[str]:
+    root = Path(cache_dir)
+    if not root.is_dir():
+        return frozenset()
+    return frozenset(path.name for path in root.glob("*.npz"))
+
+
+def assert_cache_untouched(
+    cache_dir: str | Path,
+    *,
+    before: Iterable[str],
+    forbidden_prefixes: tuple[str, ...] = ("TE", "LP", "PG"),
+    forbidden_tokens: tuple[str, ...] = (":W3:", ":W4:"),
+) -> list[str]:
+    """Return new cache keys and reject leakage prefixes/tokens."""
+
+    after = snapshot_cache_keys(cache_dir)
+    new_keys = sorted(after - frozenset(before))
+    for name in new_keys:
+        if any(name.startswith(prefix) for prefix in forbidden_prefixes):
+            raise IndependentTestLeakageError(f"cache wrote forbidden prefix key {name}")
+        stem = Path(name).stem
+        waveform = stem.rsplit(":", 1)[-1]
+        if any(token.strip(":") == waveform or token in stem for token in forbidden_tokens):
+            raise IndependentTestLeakageError(f"cache wrote forbidden token key {name}")
+    return new_keys

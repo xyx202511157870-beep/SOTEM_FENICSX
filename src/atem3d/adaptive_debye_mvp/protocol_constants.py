@@ -140,6 +140,13 @@ TRAIN_VAL_WAVEFORMS = ("W0", "W1", "W2")
 TEST_WAVEFORMS = ("W0", "W1", "W2", "W3")
 PRESSURE_WAVEFORMS = ("W0", "W4")
 PILOT_RECEIVERS = ("point", "disk_1.0", "disk_4.0")
+TEST_RECEIVERS = ("point", "disk_1.0", "disk_4.0", "tilted_coil")
+L2_GATE_SOURCE = (
+    "L0 predicates with P-R in place of OR "
+    "(protocol.md defers L2 A/B to the task statement)"
+)
+# Fixed log-uniform time-window template used as B1 when that arm is reported.
+B1_LOG_UNIFORM_TEMPLATE = "K{K:02d}_tw_span8.0_shift+0.0_dens1.00"
 
 
 def observation_times() -> np.ndarray:
