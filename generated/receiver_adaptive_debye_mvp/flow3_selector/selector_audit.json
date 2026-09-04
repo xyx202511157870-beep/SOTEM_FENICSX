@@ -1,0 +1,588 @@
+{
+  "R1": {
+    "10": [
+      "K10_cc_span4.0_shift-0.5_dens1.00",
+      "K10_cc_span4.0_shift-0.5_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.00",
+      "K10_tw_span4.0_shift+0.0_dens1.25",
+      "K10_tw_span4.0_shift+0.5_dens1.25",
+      "K10_tw_span4.0_shift+0.5_dens1.00",
+      "K10_tw_span4.0_shift+0.0_dens1.00",
+      "K10_cc_span6.0_shift+0.0_dens1.25",
+      "K10_tw_span6.0_shift+0.5_dens1.00",
+      "K10_cc_span6.0_shift-0.5_dens1.25",
+      "K10_tw_span6.0_shift+0.5_dens1.25",
+      "K10_cc_span6.0_shift-0.5_dens1.00",
+      "K10_tw_span6.0_shift+0.0_dens1.25",
+      "K10_cc_span6.0_shift+0.0_dens1.00",
+      "K10_tw_span6.0_shift+0.0_dens1.00",
+      "K10_tw_span6.0_shift-0.5_dens1.00",
+      "K10_cc_span6.0_shift+0.5_dens1.25",
+      "K10_cc_span8.0_shift+0.0_dens1.25",
+      "K10_cc_span8.0_shift-0.5_dens1.25",
+      "K10_tw_span6.0_shift-0.5_dens1.25",
+      "K10_tw_span8.0_shift+0.5_dens1.25",
+      "K10_cc_span6.0_shift+0.5_dens1.00",
+      "K10_cc_span8.0_shift+0.5_dens1.25",
+      "K10_tw_span8.0_shift-0.5_dens1.25",
+      "K10_cc_span4.0_shift+0.5_dens1.00",
+      "K10_tw_span8.0_shift-0.5_dens1.00",
+      "K10_tw_span8.0_shift+0.0_dens1.25",
+      "K10_cc_span8.0_shift-0.5_dens1.00",
+      "K10_cc_span8.0_shift+0.0_dens1.00",
+      "K10_cc_span4.0_shift+0.5_dens1.25",
+      "K10_tw_span4.0_shift-0.5_dens1.00",
+      "K10_cc_span8.0_shift+0.5_dens1.00",
+      "K10_tw_span8.0_shift+0.0_dens1.00",
+      "K10_tw_span4.0_shift-0.5_dens1.25",
+      "K10_tw_span8.0_shift+0.5_dens1.00"
+    ],
+    "12": [
+      "K12_cc_span6.0_shift+0.0_dens1.25",
+      "K12_cc_span6.0_shift-0.5_dens1.25",
+      "K12_tw_span6.0_shift+0.0_dens1.00",
+      "K12_cc_span6.0_shift-0.5_dens1.00",
+      "K12_tw_span6.0_shift-0.5_dens1.00",
+      "K12_cc_span4.0_shift-0.5_dens1.25",
+      "K12_cc_span4.0_shift-0.5_dens1.00",
+      "K12_cc_span4.0_shift+0.0_dens1.25",
+      "K12_cc_span4.0_shift+0.0_dens1.00",
+      "K12_tw_span6.0_shift+0.5_dens1.25",
+      "K12_cc_span6.0_shift+0.0_dens1.00",
+      "K12_tw_span6.0_shift+0.5_dens1.00",
+      "K12_tw_span6.0_shift+0.0_dens1.25",
+      "K12_tw_span4.0_shift+0.5_dens1.00",
+      "K12_tw_span4.0_shift+0.5_dens1.25",
+      "K12_tw_span4.0_shift+0.0_dens1.25",
+      "K12_tw_span4.0_shift+0.0_dens1.00",
+      "K12_cc_span6.0_shift+0.5_dens1.00",
+      "K12_cc_span6.0_shift+0.5_dens1.25",
+      "K12_cc_span8.0_shift+0.0_dens1.25",
+      "K12_cc_span8.0_shift-0.5_dens1.25",
+      "K12_cc_span8.0_shift+0.5_dens1.25",
+      "K12_tw_span8.0_shift+0.5_dens1.00",
+      "K12_tw_span8.0_shift+0.5_dens1.25",
+      "K12_tw_span8.0_shift+0.0_dens1.25",
+      "K12_tw_span6.0_shift-0.5_dens1.25",
+      "K12_cc_span8.0_shift-0.5_dens1.00",
+      "K12_cc_span8.0_shift+0.0_dens1.00",
+      "K12_tw_span8.0_shift-0.5_dens1.00",
+      "K12_tw_span8.0_shift+0.0_dens1.00",
+      "K12_cc_span8.0_shift+0.5_dens1.00",
+      "K12_tw_span4.0_shift-0.5_dens1.00",
+      "K12_tw_span8.0_shift-0.5_dens1.25",
+      "K12_cc_span4.0_shift+0.5_dens1.25",
+      "K12_cc_span4.0_shift+0.5_dens1.00",
+      "K12_tw_span4.0_shift-0.5_dens1.25"
+    ],
+    "4": [
+      "K04_cc_span4.0_shift+0.5_dens1.00",
+      "K04_cc_span4.0_shift-0.5_dens1.25",
+      "K04_tw_span4.0_shift+0.0_dens1.00",
+      "K04_tw_span4.0_shift+0.5_dens1.25",
+      "K04_cc_span4.0_shift+0.0_dens1.25",
+      "K04_tw_span4.0_shift+0.0_dens1.25",
+      "K04_tw_span4.0_shift-0.5_dens1.25",
+      "K04_cc_span4.0_shift-0.5_dens1.00",
+      "K04_tw_span4.0_shift+0.5_dens1.00",
+      "K04_cc_span4.0_shift+0.0_dens1.00",
+      "K04_tw_span4.0_shift-0.5_dens1.00",
+      "K04_cc_span6.0_shift+0.5_dens1.25",
+      "K04_tw_span6.0_shift+0.0_dens1.00",
+      "K04_tw_span8.0_shift+0.0_dens1.25",
+      "K04_cc_span4.0_shift+0.5_dens1.25",
+      "K04_cc_span6.0_shift+0.5_dens1.00",
+      "K04_tw_span6.0_shift+0.5_dens1.25",
+      "K04_cc_span6.0_shift-0.5_dens1.25",
+      "K04_cc_span6.0_shift+0.0_dens1.25",
+      "K04_tw_span6.0_shift+0.0_dens1.25",
+      "K04_tw_span8.0_shift-0.5_dens1.00",
+      "K04_cc_span8.0_shift+0.5_dens1.25",
+      "K04_tw_span6.0_shift-0.5_dens1.00",
+      "K04_tw_span8.0_shift+0.0_dens1.00",
+      "K04_tw_span8.0_shift-0.5_dens1.25",
+      "K04_cc_span6.0_shift-0.5_dens1.00",
+      "K04_cc_span8.0_shift-0.5_dens1.25",
+      "K04_tw_span6.0_shift+0.5_dens1.00",
+      "K04_tw_span8.0_shift+0.5_dens1.25",
+      "K04_tw_span6.0_shift-0.5_dens1.25",
+      "K04_cc_span8.0_shift+0.5_dens1.00",
+      "K04_tw_span8.0_shift+0.5_dens1.00",
+      "K04_cc_span6.0_shift+0.0_dens1.00",
+      "K04_cc_span8.0_shift+0.0_dens1.25",
+      "K04_cc_span8.0_shift-0.5_dens1.00",
+      "K04_cc_span8.0_shift+0.0_dens1.00"
+    ],
+    "6": [
+      "K06_cc_span4.0_shift+0.0_dens1.25",
+      "K06_cc_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span6.0_shift+0.0_dens1.25",
+      "K06_tw_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span4.0_shift-0.5_dens1.25",
+      "K06_tw_span4.0_shift+0.5_dens1.00",
+      "K06_cc_span4.0_shift-0.5_dens1.00",
+      "K06_tw_span4.0_shift+0.0_dens1.25",
+      "K06_tw_span4.0_shift+0.5_dens1.25",
+      "K06_cc_span6.0_shift-0.5_dens1.25",
+      "K06_tw_span4.0_shift-0.5_dens1.00",
+      "K06_tw_span6.0_shift+0.5_dens1.25",
+      "K06_cc_span4.0_shift+0.5_dens1.00",
+      "K06_tw_span4.0_shift-0.5_dens1.25",
+      "K06_tw_span6.0_shift+0.0_dens1.00",
+      "K06_cc_span4.0_shift+0.5_dens1.25",
+      "K06_cc_span6.0_shift+0.5_dens1.00",
+      "K06_cc_span8.0_shift-0.5_dens1.25",
+      "K06_tw_span6.0_shift+0.5_dens1.00",
+      "K06_cc_span6.0_shift-0.5_dens1.00",
+      "K06_tw_span6.0_shift-0.5_dens1.00",
+      "K06_cc_span6.0_shift+0.0_dens1.00",
+      "K06_tw_span6.0_shift+0.0_dens1.25",
+      "K06_tw_span8.0_shift+0.5_dens1.25",
+      "K06_tw_span6.0_shift-0.5_dens1.25",
+      "K06_cc_span8.0_shift+0.0_dens1.25",
+      "K06_cc_span6.0_shift+0.5_dens1.25",
+      "K06_tw_span8.0_shift+0.0_dens1.00",
+      "K06_tw_span8.0_shift-0.5_dens1.25",
+      "K06_cc_span8.0_shift+0.0_dens1.00",
+      "K06_cc_span8.0_shift+0.5_dens1.00",
+      "K06_cc_span8.0_shift+0.5_dens1.25",
+      "K06_tw_span8.0_shift+0.0_dens1.25",
+      "K06_tw_span8.0_shift+0.5_dens1.00",
+      "K06_cc_span8.0_shift-0.5_dens1.00",
+      "K06_tw_span8.0_shift-0.5_dens1.00"
+    ],
+    "8": [
+      "K08_cc_span4.0_shift-0.5_dens1.00",
+      "K08_tw_span4.0_shift+0.0_dens1.00",
+      "K08_cc_span4.0_shift+0.0_dens1.25",
+      "K08_cc_span4.0_shift-0.5_dens1.25",
+      "K08_cc_span4.0_shift+0.0_dens1.00",
+      "K08_tw_span4.0_shift+0.5_dens1.00",
+      "K08_tw_span4.0_shift+0.5_dens1.25",
+      "K08_cc_span6.0_shift+0.0_dens1.25",
+      "K08_cc_span6.0_shift-0.5_dens1.25",
+      "K08_tw_span4.0_shift+0.0_dens1.25",
+      "K08_cc_span8.0_shift+0.0_dens1.25",
+      "K08_tw_span6.0_shift+0.5_dens1.25",
+      "K08_tw_span6.0_shift-0.5_dens1.00",
+      "K08_tw_span4.0_shift-0.5_dens1.25",
+      "K08_tw_span6.0_shift+0.0_dens1.25",
+      "K08_cc_span6.0_shift+0.0_dens1.00",
+      "K08_cc_span6.0_shift-0.5_dens1.00",
+      "K08_tw_span6.0_shift+0.0_dens1.00",
+      "K08_tw_span6.0_shift-0.5_dens1.25",
+      "K08_cc_span8.0_shift-0.5_dens1.25",
+      "K08_tw_span6.0_shift+0.5_dens1.00",
+      "K08_cc_span6.0_shift+0.5_dens1.25",
+      "K08_tw_span8.0_shift+0.0_dens1.25",
+      "K08_cc_span4.0_shift+0.5_dens1.25",
+      "K08_cc_span4.0_shift+0.5_dens1.00",
+      "K08_tw_span8.0_shift+0.5_dens1.25",
+      "K08_tw_span4.0_shift-0.5_dens1.00",
+      "K08_cc_span6.0_shift+0.5_dens1.00",
+      "K08_tw_span8.0_shift-0.5_dens1.25",
+      "K08_cc_span8.0_shift+0.5_dens1.00",
+      "K08_tw_span8.0_shift+0.0_dens1.00",
+      "K08_cc_span8.0_shift-0.5_dens1.00",
+      "K08_tw_span8.0_shift+0.5_dens1.00",
+      "K08_cc_span8.0_shift+0.5_dens1.25",
+      "K08_tw_span8.0_shift-0.5_dens1.00",
+      "K08_cc_span8.0_shift+0.0_dens1.00"
+    ]
+  },
+  "R2": {
+    "10": [
+      "K10_cc_span4.0_shift-0.5_dens1.00",
+      "K10_cc_span4.0_shift-0.5_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.00",
+      "K10_tw_span4.0_shift+0.0_dens1.25"
+    ],
+    "12": [
+      "K12_cc_span6.0_shift+0.0_dens1.25",
+      "K12_cc_span6.0_shift-0.5_dens1.25",
+      "K12_tw_span6.0_shift+0.0_dens1.00",
+      "K12_cc_span6.0_shift-0.5_dens1.00",
+      "K12_tw_span6.0_shift-0.5_dens1.00"
+    ],
+    "4": [
+      "K04_cc_span4.0_shift+0.5_dens1.00",
+      "K04_cc_span4.0_shift-0.5_dens1.25",
+      "K04_tw_span4.0_shift+0.0_dens1.00",
+      "K04_tw_span4.0_shift+0.5_dens1.25",
+      "K04_cc_span4.0_shift+0.0_dens1.25"
+    ],
+    "6": [
+      "K06_cc_span4.0_shift+0.0_dens1.25",
+      "K06_cc_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span6.0_shift+0.0_dens1.25",
+      "K06_tw_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span4.0_shift-0.5_dens1.25"
+    ],
+    "8": [
+      "K08_cc_span4.0_shift-0.5_dens1.00",
+      "K08_tw_span4.0_shift+0.0_dens1.00",
+      "K08_cc_span4.0_shift+0.0_dens1.25",
+      "K08_cc_span4.0_shift-0.5_dens1.25",
+      "K08_cc_span4.0_shift+0.0_dens1.00"
+    ]
+  },
+  "T_K": {
+    "10": [
+      "K10_cc_span4.0_shift-0.5_dens1.00",
+      "K10_cc_span4.0_shift-0.5_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.00",
+      "K10_tw_span4.0_shift+0.0_dens1.25"
+    ],
+    "12": [
+      "K12_cc_span6.0_shift+0.0_dens1.25",
+      "K12_cc_span6.0_shift-0.5_dens1.25",
+      "K12_tw_span6.0_shift+0.0_dens1.00",
+      "K12_cc_span6.0_shift-0.5_dens1.00",
+      "K12_tw_span6.0_shift-0.5_dens1.00"
+    ],
+    "4": [
+      "K04_cc_span4.0_shift+0.5_dens1.00",
+      "K04_cc_span4.0_shift-0.5_dens1.25",
+      "K04_tw_span4.0_shift+0.0_dens1.00",
+      "K04_tw_span4.0_shift+0.5_dens1.25",
+      "K04_cc_span4.0_shift+0.0_dens1.25"
+    ],
+    "6": [
+      "K06_cc_span4.0_shift+0.0_dens1.25",
+      "K06_cc_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span6.0_shift+0.0_dens1.25",
+      "K06_tw_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span4.0_shift-0.5_dens1.25"
+    ],
+    "8": [
+      "K08_cc_span4.0_shift-0.5_dens1.00",
+      "K08_tw_span4.0_shift+0.0_dens1.00",
+      "K08_cc_span4.0_shift+0.0_dens1.25",
+      "K08_cc_span4.0_shift-0.5_dens1.25",
+      "K08_cc_span4.0_shift+0.0_dens1.00"
+    ]
+  },
+  "independent_test_unread": true,
+  "k_values": [
+    4,
+    6,
+    8,
+    10,
+    12
+  ],
+  "key_definition": "fail_case_rate, Q0.95(total_p95), Q0.95(ip_p95), worst_group_Q0.95, median(total_p95), median(spectral_error), median(condition_number), candidate_id",
+  "l0_required": true,
+  "n_train_cases": 12,
+  "n_validation_cases": 6,
+  "pilot_gap_used": false,
+  "train_top": {
+    "10": [
+      "K10_cc_span4.0_shift-0.5_dens1.00",
+      "K10_cc_span4.0_shift-0.5_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.25",
+      "K10_cc_span4.0_shift+0.0_dens1.00",
+      "K10_tw_span4.0_shift+0.0_dens1.25"
+    ],
+    "12": [
+      "K12_cc_span6.0_shift+0.0_dens1.25",
+      "K12_cc_span6.0_shift-0.5_dens1.25",
+      "K12_tw_span6.0_shift+0.0_dens1.00",
+      "K12_cc_span6.0_shift-0.5_dens1.00",
+      "K12_tw_span6.0_shift-0.5_dens1.00"
+    ],
+    "4": [
+      "K04_cc_span4.0_shift+0.5_dens1.00",
+      "K04_cc_span4.0_shift-0.5_dens1.25",
+      "K04_tw_span4.0_shift+0.0_dens1.00",
+      "K04_tw_span4.0_shift+0.5_dens1.25",
+      "K04_cc_span4.0_shift+0.0_dens1.25"
+    ],
+    "6": [
+      "K06_cc_span4.0_shift+0.0_dens1.25",
+      "K06_cc_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span6.0_shift+0.0_dens1.25",
+      "K06_tw_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span4.0_shift-0.5_dens1.25"
+    ],
+    "8": [
+      "K08_cc_span4.0_shift-0.5_dens1.00",
+      "K08_tw_span4.0_shift+0.0_dens1.00",
+      "K08_cc_span4.0_shift+0.0_dens1.25",
+      "K08_cc_span4.0_shift-0.5_dens1.25",
+      "K08_cc_span4.0_shift+0.0_dens1.00"
+    ]
+  },
+  "used_receiver_data_for_b2": false,
+  "validation_keys": {
+    "10": {
+      "K10_cc_span4.0_shift+0.0_dens1.00": [
+        0.16666666666666666,
+        0.0013092708324352277,
+        0.033371178865839395,
+        0.0029659749133787707,
+        0.0010034654699987832,
+        0.0006850754195527533,
+        134.89925240331354,
+        "K10_cc_span4.0_shift+0.0_dens1.00"
+      ],
+      "K10_cc_span4.0_shift+0.0_dens1.25": [
+        0.16666666666666666,
+        0.0012917224023788402,
+        0.03296459945139802,
+        0.003802042878483098,
+        0.000967831821132947,
+        0.0007325850032540656,
+        282.42514921395144,
+        "K10_cc_span4.0_shift+0.0_dens1.25"
+      ],
+      "K10_cc_span4.0_shift-0.5_dens1.00": [
+        0.0,
+        0.003051260985909085,
+        0.01959120214651798,
+        0.004528433269827173,
+        0.0011285336099117376,
+        0.0006483427535591535,
+        173.37989332618497,
+        "K10_cc_span4.0_shift-0.5_dens1.00"
+      ],
+      "K10_cc_span4.0_shift-0.5_dens1.25": [
+        0.0,
+        0.003185769517824011,
+        0.019324014401909916,
+        0.004859654262723147,
+        0.0005736237429493885,
+        0.0006295008157189811,
+        311.4614782439436,
+        "K10_cc_span4.0_shift-0.5_dens1.25"
+      ],
+      "K10_tw_span4.0_shift+0.0_dens1.25": [
+        0.0,
+        0.004531312759010165,
+        0.012126452167804171,
+        0.023661185293001083,
+        0.0014955646902855403,
+        0.0010788985062527253,
+        352.8547827008431,
+        "K10_tw_span4.0_shift+0.0_dens1.25"
+      ]
+    },
+    "12": {
+      "K12_cc_span6.0_shift+0.0_dens1.25": [
+        0.0,
+        0.0015879283252934972,
+        0.0109834884322449,
+        0.003168001029775729,
+        0.0006019650236058504,
+        0.00019515587069302888,
+        176.63289607757244,
+        "K12_cc_span6.0_shift+0.0_dens1.25"
+      ],
+      "K12_cc_span6.0_shift-0.5_dens1.00": [
+        0.0,
+        0.0030690209337487923,
+        0.008872959124003484,
+        0.006742162396501987,
+        0.0007934102822506977,
+        0.00029254821068959777,
+        3625.543265872417,
+        "K12_cc_span6.0_shift-0.5_dens1.00"
+      ],
+      "K12_cc_span6.0_shift-0.5_dens1.25": [
+        0.0,
+        0.0030327674607909527,
+        0.009137681334621938,
+        0.004985293270199703,
+        0.0005805142582068111,
+        0.0001706936718290708,
+        1069.0705886502728,
+        "K12_cc_span6.0_shift-0.5_dens1.25"
+      ],
+      "K12_tw_span6.0_shift+0.0_dens1.00": [
+        0.0,
+        0.004286740298312501,
+        0.005406059577870329,
+        0.010297353291556944,
+        0.0011104128001130109,
+        0.00034835413735835027,
+        12917.379395441701,
+        "K12_tw_span6.0_shift+0.0_dens1.00"
+      ],
+      "K12_tw_span6.0_shift-0.5_dens1.00": [
+        0.0,
+        0.004631881641936509,
+        0.007776656171780432,
+        0.008840000232883968,
+        0.0017548301381640993,
+        0.0007025978755474433,
+        848914.7046853187,
+        "K12_tw_span6.0_shift-0.5_dens1.00"
+      ]
+    },
+    "4": {
+      "K04_cc_span4.0_shift+0.0_dens1.25": [
+        0.8333333333333334,
+        0.0527805823786752,
+        0.18026296661813349,
+        0.09479778510699341,
+        0.03418157357253562,
+        0.00972983412433981,
+        7.198030852321692,
+        "K04_cc_span4.0_shift+0.0_dens1.25"
+      ],
+      "K04_cc_span4.0_shift+0.5_dens1.00": [
+        0.8333333333333334,
+        0.05120624163204593,
+        0.0629447185954512,
+        0.11151001486332178,
+        0.014863815751479572,
+        0.007922728927322924,
+        6.719054589681461,
+        "K04_cc_span4.0_shift+0.5_dens1.00"
+      ],
+      "K04_cc_span4.0_shift-0.5_dens1.25": [
+        0.5,
+        0.046549396355301934,
+        0.0871396952735311,
+        0.07904600968749956,
+        0.01914766894883878,
+        0.005416816841784904,
+        7.933265257241464,
+        "K04_cc_span4.0_shift-0.5_dens1.25"
+      ],
+      "K04_tw_span4.0_shift+0.0_dens1.00": [
+        0.6666666666666666,
+        0.1226438812620145,
+        0.3160714941962177,
+        0.23063155694344173,
+        0.04348910843143321,
+        0.012861826754438921,
+        8.559612101985275,
+        "K04_tw_span4.0_shift+0.0_dens1.00"
+      ],
+      "K04_tw_span4.0_shift+0.5_dens1.25": [
+        0.6666666666666666,
+        0.05486399728593637,
+        0.2046424040361134,
+        0.13001247509416122,
+        0.02361495080611096,
+        0.012955562204845067,
+        7.8634429155000465,
+        "K04_tw_span4.0_shift+0.5_dens1.25"
+      ]
+    },
+    "6": {
+      "K06_cc_span4.0_shift+0.0_dens1.00": [
+        0.6666666666666666,
+        0.027311977661366418,
+        0.0741476943400065,
+        0.048939658022636445,
+        0.011194297311418924,
+        0.003309889466773821,
+        17.570213920552316,
+        "K06_cc_span4.0_shift+0.0_dens1.00"
+      ],
+      "K06_cc_span4.0_shift+0.0_dens1.25": [
+        0.3333333333333333,
+        0.010929065981586997,
+        0.034467627018945825,
+        0.01908575717194072,
+        0.0037653315519314418,
+        0.0018309425128752708,
+        22.814900147011635,
+        "K06_cc_span4.0_shift+0.0_dens1.25"
+      ],
+      "K06_cc_span4.0_shift-0.5_dens1.25": [
+        0.3333333333333333,
+        0.01796007577794924,
+        0.025257699881557003,
+        0.035343702741032546,
+        0.0067532273333344205,
+        0.002273238912054089,
+        25.150601371395183,
+        "K06_cc_span4.0_shift-0.5_dens1.25"
+      ],
+      "K06_cc_span6.0_shift+0.0_dens1.25": [
+        0.5,
+        0.02749655758458767,
+        0.07521676052732369,
+        0.04925180744945988,
+        0.012215263913838537,
+        0.0052102392883819374,
+        17.68118289998406,
+        "K06_cc_span6.0_shift+0.0_dens1.25"
+      ],
+      "K06_tw_span4.0_shift+0.0_dens1.00": [
+        0.5,
+        0.0204015931441791,
+        0.03641261807906958,
+        0.040627656216987065,
+        0.008545490297996245,
+        0.003977874637259168,
+        25.711743507974,
+        "K06_tw_span4.0_shift+0.0_dens1.00"
+      ]
+    },
+    "8": {
+      "K08_cc_span4.0_shift+0.0_dens1.00": [
+        0.16666666666666666,
+        0.0064907358599795364,
+        0.033542022279188934,
+        0.012749050123265595,
+        0.00207756181080353,
+        0.001492341952748744,
+        48.305273661001436,
+        "K08_cc_span4.0_shift+0.0_dens1.00"
+      ],
+      "K08_cc_span4.0_shift+0.0_dens1.25": [
+        0.16666666666666666,
+        0.0027897559392509852,
+        0.03397249959404133,
+        0.005284854079604212,
+        0.0016398677024860057,
+        0.0011149640982358563,
+        78.30682604226217,
+        "K08_cc_span4.0_shift+0.0_dens1.25"
+      ],
+      "K08_cc_span4.0_shift-0.5_dens1.00": [
+        0.0,
+        0.004136426190737835,
+        0.0196886831525956,
+        0.00767801600509469,
+        0.0016160606694823713,
+        0.000820072614454193,
+        59.02430442123499,
+        "K08_cc_span4.0_shift-0.5_dens1.00"
+      ],
+      "K08_cc_span4.0_shift-0.5_dens1.25": [
+        0.0,
+        0.005715275276741982,
+        0.02131031236832054,
+        0.0105555858683196,
+        0.002327037218408838,
+        0.000939565910211384,
+        86.30138484088185,
+        "K08_cc_span4.0_shift-0.5_dens1.25"
+      ],
+      "K08_tw_span4.0_shift+0.0_dens1.00": [
+        0.0,
+        0.006365895561250213,
+        0.013185345236441699,
+        0.025811420916685094,
+        0.0028527009758553207,
+        0.0015251434752578674,
+        80.42619242333257,
+        "K08_tw_span4.0_shift+0.0_dens1.00"
+      ]
+    }
+  },
+  "validation_pick": {
+    "10": "K10_cc_span4.0_shift-0.5_dens1.00",
+    "12": "K12_cc_span6.0_shift+0.0_dens1.25",
+    "4": "K04_cc_span4.0_shift-0.5_dens1.25",
+    "6": "K06_cc_span4.0_shift+0.0_dens1.25",
+    "8": "K08_cc_span4.0_shift-0.5_dens1.00"
+  }
+}

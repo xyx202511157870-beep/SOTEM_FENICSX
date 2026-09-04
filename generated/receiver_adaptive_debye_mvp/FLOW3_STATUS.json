@@ -1,0 +1,58 @@
+{
+  "forced_disk_ids": {
+    "10": [
+      "K10_cc_span4.0_shift+0.0_dens1.00",
+      "K10_cc_span4.0_shift+0.0_dens1.25",
+      "K10_cc_span4.0_shift-0.5_dens1.00",
+      "K10_cc_span4.0_shift-0.5_dens1.25",
+      "K10_tw_span4.0_shift+0.0_dens1.25",
+      "K10_tw_span6.0_shift+0.5_dens1.25"
+    ],
+    "12": [
+      "K12_cc_span6.0_shift+0.0_dens1.25",
+      "K12_cc_span6.0_shift-0.5_dens1.00",
+      "K12_cc_span6.0_shift-0.5_dens1.25",
+      "K12_tw_span6.0_shift+0.0_dens1.00",
+      "K12_tw_span6.0_shift+0.5_dens1.25",
+      "K12_tw_span6.0_shift-0.5_dens1.00"
+    ],
+    "4": [
+      "K04_cc_span4.0_shift+0.0_dens1.25",
+      "K04_cc_span4.0_shift+0.5_dens1.00",
+      "K04_cc_span4.0_shift-0.5_dens1.25",
+      "K04_tw_span4.0_shift+0.0_dens1.00",
+      "K04_tw_span4.0_shift+0.5_dens1.25"
+    ],
+    "6": [
+      "K06_cc_span4.0_shift+0.0_dens1.00",
+      "K06_cc_span4.0_shift+0.0_dens1.25",
+      "K06_cc_span4.0_shift-0.5_dens1.25",
+      "K06_cc_span6.0_shift+0.0_dens1.25",
+      "K06_tw_span4.0_shift+0.0_dens1.00",
+      "K06_tw_span4.0_shift+0.5_dens1.25"
+    ],
+    "8": [
+      "K08_cc_span4.0_shift+0.0_dens1.00",
+      "K08_cc_span4.0_shift+0.0_dens1.25",
+      "K08_cc_span4.0_shift-0.5_dens1.00",
+      "K08_cc_span4.0_shift-0.5_dens1.25",
+      "K08_tw_span4.0_shift+0.0_dens1.00"
+    ]
+  },
+  "selected_preview": {
+    "10": "K10_cc_span4.0_shift-0.5_dens1.00",
+    "12": "K12_cc_span6.0_shift+0.0_dens1.25",
+    "4": "K04_cc_span4.0_shift-0.5_dens1.25",
+    "6": "K06_cc_span4.0_shift+0.0_dens1.25",
+    "8": "K08_cc_span4.0_shift-0.5_dens1.00"
+  },
+  "spectral_selected": {
+    "10": "K10_tw_span6.0_shift+0.5_dens1.25",
+    "12": "K12_tw_span6.0_shift+0.5_dens1.25",
+    "4": "K04_cc_span4.0_shift-0.5_dens1.25",
+    "6": "K06_tw_span4.0_shift+0.5_dens1.25",
+    "8": "K08_cc_span4.0_shift-0.5_dens1.00"
+  },
+  "status": "L1_POINTS_RANKED",
+  "three_d_run": false
+}
