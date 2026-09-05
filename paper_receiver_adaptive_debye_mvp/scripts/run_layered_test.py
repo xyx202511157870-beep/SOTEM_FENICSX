@@ -125,7 +125,44 @@ def _decision_markdown(l2: dict, n_cases: int, l0: dict | None = None) -> str:
     )
 
 
-def _report(l2: dict, n_cases: int) -> str:
+def _or_upper_bound_section(or_bound: dict | None) -> list[str]:
+    if not or_bound:
+        return [
+            "## OR upper bound (not a gate input)",
+            "",
+            "OR/B2 is reported as an upper bound only. The L2 gate compares frozen P-R to frozen B2.",
+            "",
+        ]
+    lines = [
+        "## OR upper bound (not a gate input)",
+        "",
+        str(or_bound.get("note") or "OR/B2 from unread PR13 point tables. Not used for the L2 gate."),
+        "",
+    ]
+    cases = or_bound.get("cases") or {}
+    ratios: list[float] = []
+    for case_id in sorted(cases):
+        rows = []
+        for row in cases[case_id]:
+            or_b2 = row.get("or_b2")
+            pr_b2 = row.get("pr_b2")
+            if isinstance(or_b2, (int, float)):
+                ratios.append(float(or_b2))
+            rows.append(f"K={row.get('K')} OR/B2={or_b2} P-R/B2={pr_b2}")
+        lines.append(f"- {case_id}: " + "; ".join(rows))
+    if ratios:
+        import statistics
+
+        lines.append("")
+        lines.append(
+            f"- median OR/B2 across {len(cases)} cases × K: `{statistics.median(ratios)}` "
+            f"(n={len(ratios)}; upper bound only)"
+        )
+    lines.append("")
+    return lines
+
+
+def _report(l2: dict, n_cases: int, or_bound: dict | None = None) -> str:
     lines = [
         "# LAYERED_INDEPENDENT_TEST_REPORT",
         "",
@@ -147,6 +184,7 @@ def _report(l2: dict, n_cases: int) -> str:
         f"- b2_by_k: `{l2.get('b2_by_k')}`",
         f"- reselection: `{l2.get('reselection')}`",
         f"- bootstrap: 2000 case-level paired resamples, seed 202609116",
+        f"- OR: upper bound only (not a gate input; see or_upper_bound_pr13.json)",
         "",
         "## L2 A/B checklist (P-R vs frozen B2; OR is upper bound only)",
         "",
@@ -184,7 +222,7 @@ def _report(l2: dict, n_cases: int) -> str:
             f"CI=[{row['bootstrap_ci_low']}, {row['bootstrap_ci_high']}], "
             f"win_rate={row['win_rate']}, n={row['n_cases']}"
         )
-    lines.extend(["", "3-D was not run.", ""])
+    lines.extend(["", *_or_upper_bound_section(or_bound), "3-D was not run.", ""])
     return "\n".join(lines)
 
 
@@ -242,7 +280,9 @@ def _assemble(generated: Path, flow4: Path, l1: dict) -> int:
     write_json(generated / "FLOW4_STATUS.json", {"status": l2["status"], "passed": l2["passed"], "l2": l2, "reselection": False, "three_d_run": False})
     l0_path = generated / "flow2_oracle_gap" / "L0_summary.json"
     l0 = read_json(l0_path) if l0_path.is_file() else {}
-    report = _report(l2, len(results))
+    or_path = flow4 / "or_upper_bound_pr13.json"
+    or_bound = read_json(or_path) if or_path.is_file() else None
+    report = _report(l2, len(results), or_bound=or_bound)
     decision = _decision_markdown(l2, len(results), l0)
     (flow4 / "LAYERED_INDEPENDENT_TEST_REPORT.md").write_text(report, encoding="utf-8")
     (REPO_ROOT / "LAYERED_INDEPENDENT_TEST_REPORT.md").write_text(report, encoding="utf-8")

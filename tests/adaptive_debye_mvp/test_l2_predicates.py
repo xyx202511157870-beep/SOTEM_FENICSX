@@ -1,4 +1,4 @@
-from atem3d.adaptive_debye_mvp.oracle_gap import CaseKChoice, evaluate_l2
+from atem3d.adaptive_debye_mvp.oracle_gap import CaseKChoice, FitRecord, evaluate_l2, pick_spectral_best
 
 
 def _choice(case_id, K, ratio, e_b2=0.02):
@@ -112,3 +112,30 @@ def test_l2_uses_frozen_b2_not_per_case_spectral():
     assert remapped["same_k"]["10"]["median_ratio"] == 0.6
     leaked = evaluate_l2(results, pr_by_k=pr)
     assert leaked["same_k"]["10"]["median_ratio"] == 0.3
+
+
+def test_spectral_best_among_forwarded_templates_only():
+    outside = FitRecord(
+        candidate_id="K08_cc_span4.0_shift+0.0_dens1.25",
+        K=8,
+        valid=True,
+        spectral_error_s0=0.01,
+        spectral_error_s1=0.01,
+        condition_number=1.0,
+        relative_dc_error=0.0,
+        optimizer_success=True,
+        fit=None,
+    )
+    allowed = FitRecord(
+        candidate_id="K08_cc_span4.0_shift-0.5_dens1.00",
+        K=8,
+        valid=True,
+        spectral_error_s0=0.05,
+        spectral_error_s1=0.05,
+        condition_number=1.0,
+        relative_dc_error=0.0,
+        optimizer_success=True,
+        fit=None,
+    )
+    assert pick_spectral_best([outside, allowed], "S1").candidate_id == outside.candidate_id
+    assert pick_spectral_best([allowed], "S1").candidate_id == allowed.candidate_id

@@ -573,7 +573,10 @@ def evaluate_pilot_case(
         if not point_map:
             continue
         point_maps[poles] = point_map
-        spectrals[poles] = pick_spectral_best(records, variant)
+        # Official L2 forwards only frozen P-R/B2. Spectral-best among
+        # forwarded templates so the choice table never names a skipped id.
+        forwarded = [item for item in records if item.candidate_id in point_map]
+        spectrals[poles] = pick_spectral_best(forwarded, variant)
         point_oracle = pick_oracle_best(point_map, records)
         ranked = sorted(point_map, key=lambda cid: (reduce_case_error(point_map[cid]), cid))
         if allowed is not None:
@@ -594,6 +597,11 @@ def evaluate_pilot_case(
             point_map = point_maps[poles]
             spectral = spectrals[poles]
             oracle = pick_oracle_best(point_map, records)
+            if spectral.candidate_id not in point_map:
+                spectral = pick_spectral_best(
+                    [item for item in records if item.candidate_id in point_map],
+                    variant,
+                )
             e_b2 = reduce_case_error(point_map[spectral.candidate_id])
             e_or = reduce_case_error(point_map[oracle.candidate_id])
             ratio = (
@@ -697,6 +705,11 @@ def evaluate_pilot_case(
             task_rows.extend(disk_tasks)
         oracle = pick_oracle_best(disk_map, records)
         task_map = disk_map
+        if spectral.candidate_id not in task_map:
+            spectral = pick_spectral_best(
+                [item for item in records if item.candidate_id in task_map],
+                variant,
+            )
         e_b2 = reduce_case_error(task_map[spectral.candidate_id])
         e_or = reduce_case_error(task_map[oracle.candidate_id])
         ratio = float(e_or / e_b2) if e_b2 > 0.0 and np.isfinite(e_b2) and np.isfinite(e_or) else float("nan")
