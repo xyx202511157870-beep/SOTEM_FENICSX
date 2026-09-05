@@ -5705,10 +5705,10 @@
     "empymod_version": "2.6.0",
     "ft_pts_per_dec": -1,
     "git_branch": "paper/mvp-l1-train-val",
-    "git_commit": "65661f90f2654f9aea7878a75edb284b195bdd9c",
+    "git_commit": "9561aaf45d6144ac2cce6f241006af6b8b24c991",
     "independent_test_read": false,
-    "recorded_at": "2026-09-05T10:28:31.556656+00:00",
-    "roads_workers": 3,
+    "recorded_at": "2026-09-05T11:46:39.689475+00:00",
+    "roads_workers": 4,
     "shared_survey_hash": {
       "point": "b2aa1d1d321c156344ca7339bc9c69b11b10662340ccf83d2ddaf0094f2a1a68"
     },
@@ -5721,7 +5721,7 @@
     },
     "three_d_run": false,
     "transform_label": "smoke_fast_lagged_dlf",
-    "wall_seconds": 2.1306209564208984
+    "wall_seconds": 3.350722312927246
   },
   "receiver_ids": [
     "point",
