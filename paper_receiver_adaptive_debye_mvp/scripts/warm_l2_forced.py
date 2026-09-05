@@ -54,13 +54,15 @@ def _workers() -> int:
     return requested
 
 
-def _forced() -> dict[int, list[str]]:
+def _forced(*, include_b1: bool = True) -> dict[int, list[str]]:
     l1 = read_json(GEN / "FLOW3_STATUS.json")
     selected = {int(key): str(value) for key, value in dict(l1["selected"]).items()}
     spectral = {int(key): str(value) for key, value in dict(l1.get("spectral_selected") or {}).items()}
     forced: dict[int, list[str]] = {}
     for poles in K_PILOT:
-        ids = [selected[int(poles)], spectral[int(poles)], B1_LOG_UNIFORM_TEMPLATE.format(K=int(poles))]
+        ids = [selected[int(poles)], spectral[int(poles)]]
+        if include_b1:
+            ids.append(B1_LOG_UNIFORM_TEMPLATE.format(K=int(poles)))
         forced[int(poles)] = list(dict.fromkeys(ids))
     return forced
 
@@ -182,10 +184,11 @@ def main() -> int:
     if str(l1.get("status")) != "L1_FROZEN":
         raise SystemExit("L1 is not frozen")
     official_variant = str(l1.get("official_spectral_variant") or "S1")
-    forced = _forced()
-    allowed = sorted({item for ids in forced.values() for item in ids})
-    print(f"[l2warm] forced={forced}", flush=True)
+    forced_all = _forced(include_b1=True)
+    forced_gate = _forced(include_b1=False)
+    print(f"[l2warm] forced_gate={forced_gate}", flush=True)
     for kind in ("point", "disk"):
+        allowed = sorted({item for ids in (forced_all if kind == "point" else forced_gate).values() for item in ids})
         pending: list[tuple[str, str, str, str]] = []
         for case_id in TEST_IDS:
             if _official(case_id):
@@ -209,7 +212,7 @@ def main() -> int:
                 key = future.result()
                 done += 1
                 print(f"[l2warm] {kind} {done}/{len(pending)} {key}", flush=True)
-    _assemble(forced, official_variant)
+    _assemble(forced_gate, official_variant)
     missing = [case_id for case_id in TEST_IDS if not _official(case_id)]
     if missing:
         print(f"[l2warm] still missing official TE JSON: {missing}", flush=True)
