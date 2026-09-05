@@ -258,7 +258,20 @@ def _evaluate(case, *, cache_dir, include_disks, forced_disk_ids, official_varia
 
 def _assemble(generated: Path, flow4: Path, l1: dict) -> int:
     paths = sorted(flow4.glob("case_TE*.json"))
-    results = [load_pilot_case_result(path) for path in paths]
+    official_paths = []
+    for path in paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        provenance = payload.get("provenance") or {}
+        if (
+            "pilot_case_result" not in str(payload.get("schema") or "")
+            or provenance.get("selector_read") is not True
+            or provenance.get("l2_evaluated") is not True
+            or payload.get("point_only") is not False
+        ):
+            print(f"[flow4] assemble ignored unofficial {path.name}", flush=True)
+            continue
+        official_paths.append(path)
+    results = [load_pilot_case_result(path) for path in official_paths]
     if len(results) != 10:
         print(f"[flow4] assemble found {len(results)} cases, need 10", flush=True)
         return 3

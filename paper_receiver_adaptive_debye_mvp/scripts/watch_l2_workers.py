@@ -28,7 +28,7 @@ def _official(case_id: str) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     provenance = payload.get("provenance") or {}
-    if provenance.get("selector_read") is False or provenance.get("l2_evaluated") is False:
+    if provenance.get("selector_read") is not True or provenance.get("l2_evaluated") is not True:
         return False
     if payload.get("point_only") is not False:
         return False

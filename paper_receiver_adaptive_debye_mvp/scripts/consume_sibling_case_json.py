@@ -30,14 +30,29 @@ def _fetch() -> None:
         delay *= 2
 
 
+def _is_official_l2(payload: dict) -> bool:
+    provenance = payload.get("provenance") or {}
+    return (
+        "pilot_case_result" in str(payload.get("schema") or "")
+        and provenance.get("selector_read") is True
+        and provenance.get("l2_evaluated") is True
+        and payload.get("point_only") is False
+    )
+
+
 def _payload_rank(payload: dict) -> int:
     if not payload.get("tasks"):
+        return 0
+    # PR13 independent_test JSON is not official L2 even when it has disks.
+    if "independent_test_case_result" in str(payload.get("schema") or ""):
         return 0
     n_disk = sum(
         1 for task in payload.get("tasks") or []
         if str(task.get("receiver_id") or "").startswith("disk_")
     )
     official = 10000 if "pilot_case_result" in str(payload.get("schema") or "") else 0
+    if _is_official_l2(payload):
+        official += 100000
     disks_present = 100 if payload.get("point_only") is False else 0
     return official + n_disk + disks_present
 
@@ -80,9 +95,14 @@ def main() -> int:
                 continue
             dest = REPO / path
             dest.parent.mkdir(parents=True, exist_ok=True)
+            if "/case_TE" in f"/{path}" and not _is_official_l2(incoming):
+                skipped.append(path)
+                continue
             if dest.is_file():
                 existing = _load(dest.read_bytes())
-                if existing is not None and _payload_rank(existing) >= _payload_rank(incoming):
+                if existing is not None and (
+                    _is_official_l2(existing) or _payload_rank(existing) >= _payload_rank(incoming)
+                ):
                     skipped.append(path)
                     continue
             dest.write_text(json.dumps(incoming, indent=2, sort_keys=True) + "\n", encoding="utf-8")
