@@ -144,13 +144,15 @@ def records_from_case_results(
             waveform_groups = {}
             for waveform_id in ("W0", "W1", "W2", "W3"):
                 subset = [item for item in tasks if item.waveform_id == waveform_id]
-                if subset:
-                    waveform_groups[f"group_p95_{waveform_id}"] = reduce_case_error(subset)
+                waveform_groups[f"group_p95_{waveform_id}"] = (
+                    reduce_case_error(subset) if subset else float("nan")
+                )
             receiver_groups = {}
             for receiver_id in ("point", "disk_1.0", "disk_4.0"):
                 subset = [item for item in tasks if item.receiver_id == receiver_id]
-                if subset:
-                    receiver_groups[f"group_p95_{receiver_id}"] = reduce_case_error(subset)
+                receiver_groups[f"group_p95_{receiver_id}"] = (
+                    reduce_case_error(subset) if subset else float("nan")
+                )
             h_values = [item.h_p95 for item in tasks if np.isfinite(item.h_p95)]
             db_values = [item.dbdt_p95 for item in tasks if np.isfinite(item.dbdt_p95)]
             rows.append(

@@ -2,11 +2,11 @@
 
 ## 1. FINAL STATUS
 
-L0 passed. L1 point ranking is done (`L1_POINTS_RANKED`, official variant S1). Official disk JSON are in for TR05–TR12 and VA01–VA06 (14/18). TR01–TR04 disk shortlists are still computing on this VM. L1 is not frozen. L2 has not been assembled. 3-D was not run. Sibling agent errors were wall-clock/idle waits, not an L0 science failure.
+L0 passed. L1 is frozen (`FLOW3_STATUS=L1_FROZEN`, official variant S1, train/val only). Official point+disk JSON exist for TR01–TR12 and VA01–VA06. L2 on independent_test is next. 3-D was not run.
 
 ## 2. 3-D continue?
 
-NO. L1 is not frozen and L2 has not passed. 3-D was not run.
+NO. L1 is frozen but L2 has not passed. 3-D was not run.
 
 ## 3. Numbers
 
@@ -16,11 +16,11 @@ NO. L1 is not frozen and L2 has not passed. 3-D was not run.
 - win rate: `1.0`
 - qualifying-K oracle difference: median `0.0`, nonnegative rate `1.0`
 - n official pilot cases with disks: `8`
-- L1 frozen: `no` (`FLOW3_STATUS=L1_POINTS_RANKED`; 14/18 official disk JSON; TR01–TR04 still point-only)
+- L1 frozen: `yes` (`FLOW3_STATUS=L1_FROZEN`; 18/18 official disk JSON; independent_test unread)
 - L1 official variant: `S1`
-- L1 P-R preview: K4=`K04_cc_span4.0_shift-0.5_dens1.25`, K6=`K06_cc_span4.0_shift+0.0_dens1.25`, K8=`K08_cc_span4.0_shift-0.5_dens1.00`, K10=`K10_cc_span4.0_shift-0.5_dens1.00`, K12=`K12_cc_span6.0_shift+0.0_dens1.25`
+- L1 P-R: K4=`K04_cc_span4.0_shift-0.5_dens1.25`, K6=`K06_cc_span4.0_shift+0.0_dens1.25`, K8=`K08_cc_span4.0_shift-0.5_dens1.00`, K10=`K10_cc_span4.0_shift-0.5_dens1.00`, K12=`K12_cc_span6.0_shift+0.0_dens1.25`
 - L1 B2 spectral: differs from P-R at K=6, 10, 12
-- L2 pass/fail: not assembled
+- L2 pass/fail: not assembled yet
 - same-K P-R/B2 median ratio: n/a
 - bootstrap CI: n/a
 - win rate: n/a
@@ -34,6 +34,6 @@ Official L0 calls `compute_layered_response`. Flow 3/4 reuse `evaluate_pilot_cas
 
 ## 5. If stopped
 
-Not stopped at L0. L1/L2 not finished. 3-D still unauthorized.
+Not stopped at L0. L1 frozen. L2 not finished. 3-D still unauthorized.
 
 Explicitly not run: any 3-D FEniCSx forward, including `paper_algorithm/run_ip_debye_sweep.py`.

@@ -1,45 +1,37 @@
 {
-  "forced_disk_ids": {
-    "10": [
-      "K10_cc_span4.0_shift+0.0_dens1.00",
-      "K10_cc_span4.0_shift+0.0_dens1.25",
-      "K10_cc_span4.0_shift-0.5_dens1.00",
-      "K10_cc_span4.0_shift-0.5_dens1.25",
-      "K10_tw_span4.0_shift+0.0_dens1.25",
-      "K10_tw_span6.0_shift+0.5_dens1.25"
-    ],
-    "12": [
-      "K12_cc_span6.0_shift+0.0_dens1.25",
-      "K12_cc_span6.0_shift-0.5_dens1.00",
-      "K12_cc_span6.0_shift-0.5_dens1.25",
-      "K12_tw_span6.0_shift+0.0_dens1.00",
-      "K12_tw_span6.0_shift+0.5_dens1.25",
-      "K12_tw_span6.0_shift-0.5_dens1.00"
-    ],
-    "4": [
-      "K04_cc_span4.0_shift+0.0_dens1.25",
-      "K04_cc_span4.0_shift+0.5_dens1.00",
-      "K04_cc_span4.0_shift-0.5_dens1.25",
-      "K04_tw_span4.0_shift+0.0_dens1.00",
-      "K04_tw_span4.0_shift+0.5_dens1.25"
-    ],
-    "6": [
-      "K06_cc_span4.0_shift+0.0_dens1.00",
-      "K06_cc_span4.0_shift+0.0_dens1.25",
-      "K06_cc_span4.0_shift-0.5_dens1.25",
-      "K06_cc_span6.0_shift+0.0_dens1.25",
-      "K06_tw_span4.0_shift+0.0_dens1.00",
-      "K06_tw_span4.0_shift+0.5_dens1.25"
-    ],
-    "8": [
-      "K08_cc_span4.0_shift+0.0_dens1.00",
-      "K08_cc_span4.0_shift+0.0_dens1.25",
-      "K08_cc_span4.0_shift-0.5_dens1.00",
-      "K08_cc_span4.0_shift-0.5_dens1.25",
-      "K08_tw_span4.0_shift+0.0_dens1.00"
-    ]
+  "hashes": {
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR01.json": "fa9cd59aeddbd535ee756e2d1939cb58e473c0533af8f97ed1065ad716c0f2e5",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR02.json": "a727c76f3717e5dcd0ba3193679ac694a37fd2598e716c337ded975f6004abca",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR03.json": "3a96bb70c2b15af5ed4f7e39e4e9b232d5700bb664d1f89649d3c978bfcf9b0d",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR04.json": "f9d1d26eef50c2614c76886c66a4732d9fa92ba1659f7457fd121e53edc3eb9b",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR05.json": "67e31c87dce7c48b78c825737f6f06b172465f5f4bd57fa0ecd8606d68174aa6",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR06.json": "f2ede574aede43ca4920bd65061722f4916aec66d2a49e37a7848f3fee030dfb",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR07.json": "fb04bbe91bbc0ef6d5d4c776a35628c4058fee34e4c15dfe536436a226be2ce3",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR08.json": "40024f853c361a7a9797cd785942cfbf4d65216aa2f0aba8ece5b27526f0624a",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR09.json": "4dfa9b2985458be9d3ddcb93199dba2646922e0d02eb537ec92ef6da9b9b9202",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR10.json": "7ce57077bae7df9fe1f318fad11bff888de8d86b121bed8a9aef2d720c0269d8",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR11.json": "c93edeab83d63c4bfa0733e3ca69f741c4e0c81b846f9e8dc48f3054653b44eb",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_TR12.json": "5ac48bd3711c9ecf1ca2d97135f2d9ac73d97bf6a9751633ee18bc85eb6f29b6",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_VA01.json": "1f07d8b86921dc6c3caf8c2b2456cf342e4c4ca8a69c2211c6c0b49fdebb7575",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_VA02.json": "01ec990894484782e4396480ae4c8272fbff159e545b0d47466665ff7cfdf541",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_VA03.json": "fd592c4635dfcec813b9f9c3907b9dab6ecbed45fb5859fd205d7897b8d52637",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_VA04.json": "69e73e9bad7404ec9ce7ab5450d06d2e9017a0ac73a5e3603dd40ffa83ad5c45",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_VA05.json": "1bc3211b28de09d8fa4a323a0d6441145a0d85647250251f56eb73f1304d6bd5",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/case_VA06.json": "57b4889d2a9444b150189849386e26560dc4063530ae5f488f76f2635541f33a",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/official_spectral_variant.json": "7532fcffaaff85ba9f39f6dbbbb01f5c5bdefd280178bd843558450f33a35493",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/selected_template_by_K.json": "5ca6f1d516ca43fc8e96c4edf5bfcb9d3ec46662702ea55ebf24ec85dbb898c0",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/selector_audit.json": "f4630af2f93eaf2e7ab1f47e7f5b23e8e56be7f003f694bb8d00ff2dad35481e",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/spectral_selected_template_by_K.json": "91d45e24d55d37cbb55c9fbbb1e6573ea26503e05f60efb04cbbd58ba9ed0bf1",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/train_candidate_metrics.csv": "eeb4adcc6e67a9b28d1386004fa742c22ee766dc3f837a4ca43d58e1db71ae99",
+    "generated/receiver_adaptive_debye_mvp/flow3_selector/validation_candidate_metrics.csv": "29e5e495e2cf92901ba1c6e097ffda13e46cff3db9cbb16da4e50b8e062229c9"
   },
-  "selected_preview": {
+  "independent_test_unread": true,
+  "n_task_families": 1,
+  "n_train": 12,
+  "n_validation": 6,
+  "official_spectral_variant": "S1",
+  "roads_workers": null,
+  "selected": {
     "10": "K10_cc_span4.0_shift-0.5_dens1.00",
     "12": "K12_cc_span6.0_shift+0.0_dens1.25",
     "4": "K04_cc_span4.0_shift-0.5_dens1.25",
@@ -53,6 +45,6 @@
     "6": "K06_tw_span4.0_shift+0.5_dens1.25",
     "8": "K08_cc_span4.0_shift-0.5_dens1.00"
   },
-  "status": "L1_POINTS_RANKED",
+  "status": "L1_FROZEN",
   "three_d_run": false
 }
