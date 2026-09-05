@@ -67,15 +67,20 @@ def _workers(n_cases: int) -> int:
     return max(1, min(requested, n_cases))
 
 
-def _decision_markdown(l2: dict, n_cases: int) -> str:
+def _decision_markdown(l2: dict, n_cases: int, l0: dict | None = None) -> str:
     passed = bool(l2.get("passed"))
     status = "3D_AUTHORIZED_PENDING_PREFLIGHT" if passed else "STOP_LAYERED_SELECTOR_FAILED"
     if passed:
         status_line = (
-            "3D_AUTHORIZED_PENDING_PREFLIGHT. L2 passed. Preflight only — 3-D was not started."
+            "L0 passed. L1 is frozen. L2 passed (`L2_PASS`). "
+            "FINAL STATUS=`3D_AUTHORIZED_PENDING_PREFLIGHT`. 3-D was not started."
         )
     else:
-        status_line = "STOP_LAYERED_SELECTOR_FAILED. Official 10-case L2 A and B both failed."
+        status_line = (
+            "L0 passed. L1 is frozen. L2 failed (`L2_FAIL`). "
+            "FINAL STATUS=`STOP_LAYERED_SELECTOR_FAILED`. 3-D was not started."
+        )
+    l0 = l0 or {}
     return "\n".join(
         [
             "# LAYERED_DECISION",
@@ -86,22 +91,29 @@ def _decision_markdown(l2: dict, n_cases: int) -> str:
             "",
             "## 2. 3-D continue?",
             "",
-            "YES (preflight only). 3-D was not run." if passed else "NO. L2 failed. 3-D was not run.",
+            "YES (authorized pending preflight). 3-D was not run."
+            if passed
+            else "NO. L2 failed. 3-D was not run.",
             "",
             "## 3. Numbers",
             "",
+            f"- L0 pass/fail: `{l0.get('status', 'L0_PASS')}` (A=`{l0.get('passed_A')}`, B=`{l0.get('passed_B')}`)",
+            f"- L0 best same-K OR/B2 median ratio: `{l0.get('best_same_k_median_ratio')}` at K=`{l0.get('best_same_k')}`",
+            f"- L0 bootstrap 95% CI: `[{l0.get('bootstrap_ci_low')}, {l0.get('bootstrap_ci_high')}]`",
+            f"- L0 win rate: `{l0.get('win_rate')}`",
             f"- L1 frozen: `yes`",
             f"- L2 pass/fail: `{l2['status']}` (A=`{l2['passed_A']}`, B=`{l2['passed_B']}`)",
-            f"- best same-K P-R/B2 median ratio: `{l2['best_same_k_median_ratio']}` at K=`{l2['best_same_k']}`",
+            f"- same-K P-R/B2 median ratio: `{l2['best_same_k_median_ratio']}` at K=`{l2['best_same_k']}`",
             f"- bootstrap 95% CI: `[{l2['bootstrap_ci_low']}, {l2['bootstrap_ci_high']}]`",
             f"- win rate: `{l2['win_rate']}`",
-            f"- qualifying-K P-R difference: median `{l2['median_k_qual_diff']}`, nonnegative rate `{l2['nonnegative_k_qual_rate']}`",
-            f"- group_ok: `{l2.get('group_ok')}`",
+            f"- qualifying-K difference: median `{l2['median_k_qual_diff']}`, nonnegative rate `{l2['nonnegative_k_qual_rate']}`",
+            f"- group outcomes: `{l2.get('group_ok')}`",
+            f"- 3-D authorized: `{'yes_pending_preflight' if passed else 'no'}`",
             f"- n independent-test cases: `{n_cases}`",
             "",
             "## 4. Git / tests",
             "",
-            "Official L2 calls `compute_layered_response`. PR 10 remains draft. No 3-D forwards.",
+            "Official L0/L2 call `compute_layered_response`. PR 10 remains draft. No 3-D forwards.",
             "",
             "## 5. If stopped",
             "",
@@ -194,8 +206,10 @@ def _assemble(generated: Path, flow4: Path, l1: dict) -> int:
     write_json(flow4 / "L2_summary.json", l2)
     write_records_csv(flow4 / "independent_test_choices.csv", [to_record(c) for r in results for c in r["choices"]])
     write_json(generated / "FLOW4_STATUS.json", {"status": l2["status"], "passed": l2["passed"], "l2": l2, "reselection": False, "three_d_run": False})
+    l0_path = generated / "flow2_oracle_gap" / "L0_summary.json"
+    l0 = read_json(l0_path) if l0_path.is_file() else {}
     report = _report(l2, len(results))
-    decision = _decision_markdown(l2, len(results))
+    decision = _decision_markdown(l2, len(results), l0)
     (flow4 / "LAYERED_INDEPENDENT_TEST_REPORT.md").write_text(report, encoding="utf-8")
     (REPO_ROOT / "LAYERED_INDEPENDENT_TEST_REPORT.md").write_text(report, encoding="utf-8")
     (flow4 / "LAYERED_DECISION.md").write_text(decision, encoding="utf-8")
@@ -213,16 +227,16 @@ def _assemble(generated: Path, flow4: Path, l1: dict) -> int:
         write_json(generated / "selected_method.json", {"method": "P-R", "selected": pr_by_k})
         write_json(generated / "selected_K_policy.json", {"k_values": list(K_PILOT), "practical": [6, 8, 10, 12]})
     else:
-        write_json(
-            generated / "STOP_REASON.json",
-            {
-                "status": "STOP_LAYERED_SELECTOR_FAILED",
-                "gate": "L2",
-                "reason": "P-R vs B2 A and B both failed on independent_test",
-                "l2": l2,
-                "three_d_run": False,
-            },
-        )
+        stop = {
+            "status": "STOP_LAYERED_SELECTOR_FAILED",
+            "gate": "L2",
+            "reason": "P-R vs B2 A and B both failed on independent_test",
+            "l2": l2,
+            "three_d_run": False,
+        }
+        write_json(generated / "STOP_REASON.json", stop)
+        write_json(generated / "STOP_LAYERED_SELECTOR_FAILED.json", stop)
+        write_json(REPO_ROOT / "STOP_LAYERED_SELECTOR_FAILED.json", stop)
         (flow4 / "SELECTOR_FAILURE_ANALYSIS.md").write_text(
             "# SELECTOR_FAILURE_ANALYSIS\n\n"
             "L2 A and B both failed. P-R was frozen on train/val and not reselected.\n"
