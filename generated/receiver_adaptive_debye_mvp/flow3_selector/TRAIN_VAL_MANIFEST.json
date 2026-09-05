@@ -79,10 +79,18 @@
       "path": "case_TR10.json",
       "point_only": true,
       "status": "POINT_ONLY"
+    },
+    "TR11": {
+      "case_hash": "632ec9011521d68b7bf59a013222a6de0eed647d18697474742a501ba431288e",
+      "n_choices": 5,
+      "n_tasks": 1080,
+      "path": "case_TR11.json",
+      "point_only": true,
+      "status": "POINT_ONLY"
     }
   },
   "csv_rows": {
-    "train": 1800,
+    "train": 1980,
     "validation": 0
   },
   "independent_test_read": false,
@@ -94,8 +102,8 @@
     12
   ],
   "l1_frozen": false,
-  "n_point_only": 6,
-  "n_train": 10,
+  "n_point_only": 7,
+  "n_train": 11,
   "n_validation": 0,
   "official_variant": "S1",
   "schema": "atem3d.adaptive_debye_mvp.train_val_manifest.v1",
