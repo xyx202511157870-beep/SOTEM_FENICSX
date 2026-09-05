@@ -1,0 +1,83 @@
+{
+  "case_ids": [
+    "TE01",
+    "TE02",
+    "TE03",
+    "TE04",
+    "TE05",
+    "TE06",
+    "TE07",
+    "TE08",
+    "TE09",
+    "TE10"
+  ],
+  "cases": [
+    {
+      "case_hash": "8b641e585f0d42ebdebd6b2663190cd6eb34e800edb7f1b2fa8b86d34aa59240",
+      "case_id": "TE01",
+      "complete": true,
+      "file_sha256": "6418b9771bf4e5b7e7776bba918ad8e2e57e4183edb2306a789b5f6e2b99e63b"
+    },
+    {
+      "case_hash": "44d8c3bd641aac75044cb3c780738b86669b87eb25dbf1b5b117633cd01bf605",
+      "case_id": "TE02",
+      "complete": true,
+      "file_sha256": "dfeacf0c83b2aceff9c4b316e4568c3e437158954dbcf22aaa0ceac263953220"
+    },
+    {
+      "case_hash": "68bad253aadbd075c84c8354ddfd465f40a48841084ac5e81ce9b22fcf9db6d6",
+      "case_id": "TE03",
+      "complete": true,
+      "file_sha256": "2957f95eaa50636572ad9e80626fc0cdf4504504ee74e960e042e5af9b403da2"
+    },
+    {
+      "case_hash": "7442c24dcbe9181010240e2a7be700e49f6e5897c8717bca8a83d5d9936a24b6",
+      "case_id": "TE04",
+      "complete": true,
+      "file_sha256": "073a83c2bd53c9d8100ef538f65b18e09e4b477320ecb73505b12872ef1d3242"
+    },
+    {
+      "case_hash": "aa922aeb8e47d57a5f5ed625ea2b57d23d122f52e716fa1253cbbe49ae2e1e96",
+      "case_id": "TE05",
+      "complete": true,
+      "file_sha256": "17439863e55390ac6d93f8986cbe4664b39be25515299c4494be96af63826701"
+    },
+    {
+      "case_hash": "ac98482e1c094a9a2a191f93ea792b00e76a7fe2ebf3ca018c7c8b7e8abe5503",
+      "case_id": "TE06",
+      "complete": true,
+      "file_sha256": "3cf8f7713fbcc5f537381dccaf788f56223ff5e472260096335b8a7bbeac5305"
+    },
+    {
+      "case_hash": "3b4dbe1dfaf5ba4bf4d79eb2d3d38bf1244b881a1ff3df41ee6c3f3b82131b56",
+      "case_id": "TE07",
+      "complete": true,
+      "file_sha256": "3f586a7665ce0f646d1f5fb92d1c9ddc7ab9f451fa8789a0c3ad9f34e03219b4"
+    },
+    {
+      "case_hash": "22c80a6e795595509fe6ab6e732d6a85dac5544f75d4851dc66e9496f0452c3b",
+      "case_id": "TE08",
+      "complete": true,
+      "file_sha256": "166deda4a746005a2d83f64d83b8c162d1abcbbe73739e9fde0840f782877eac"
+    },
+    {
+      "case_hash": "831a7b20ccb7557ed5fadfe48342f3ff663349d6a8b554667aff4adbfff22bd8",
+      "case_id": "TE09",
+      "complete": true,
+      "file_sha256": "48dc1e29dbea66e8e98b7d11c1cb902f796162e52a7ad56489958a376ed9ae42"
+    },
+    {
+      "case_hash": "b7290fa44fb42cf6c82212617d5892158a091b490624193f1ad7d390f5d32129",
+      "case_id": "TE10",
+      "complete": true,
+      "file_sha256": "e021c67468c978469ee2b39213d62723b422b0168c42b5b92e9bd6fdbc07d6c9"
+    }
+  ],
+  "l2_evaluated": false,
+  "n_cases_complete": 10,
+  "schema": "atem3d.adaptive_debye_mvp.independent_test_case_result.v1",
+  "selected_template_written": false,
+  "selector_read": false,
+  "stage": "flow4_precompute",
+  "three_d_run": false
+}
