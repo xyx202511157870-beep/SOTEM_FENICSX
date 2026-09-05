@@ -144,10 +144,39 @@ def _report(l2: dict, n_cases: int) -> str:
         f"- nonnegative K_qual rate: `{l2['nonnegative_k_qual_rate']}`",
         f"- group_ok: `{l2.get('group_ok')}`",
         f"- pr_by_k: `{l2.get('pr_by_k')}`",
+        f"- b2_by_k: `{l2.get('b2_by_k')}`",
+        f"- reselection: `{l2.get('reselection')}`",
+        f"- bootstrap: 2000 case-level paired resamples, seed 202609116",
         "",
-        "## Same-K A rows",
+        "## L2 A/B checklist (P-R vs frozen B2; OR is upper bound only)",
         "",
     ]
+    best = (l2.get("same_k") or {}).get(str(l2.get("best_same_k") or ""), {})
+    group = l2.get("group_ok") or {}
+    lines.extend(
+        [
+            f"- A1 median P-R/B2 ratio <= 0.80: `{best.get('median_ratio')}` -> "
+            f"`{bool(best.get('median_ratio', 9) <= 0.80)}`",
+            f"- A2 bootstrap 95% CI upper < 1.00: `{best.get('bootstrap_ci_high')}` -> "
+            f"`{bool((best.get('bootstrap_ci_high') or 9) < 1.00)}`",
+            f"- A3 P-R better than B2 in >= 70% of cases: `{best.get('win_rate')}` -> "
+            f"`{bool((best.get('win_rate') or 0) >= 0.70)}`",
+            f"- A4 improvement on at least two waveforms: `{group.get('waveforms')}`",
+            f"- A5 improvement on point AND at least one disk: `{group.get('receivers')}`",
+            f"- A6 H or dB/dt clearly improved, other not worse >10%: `{group.get('components')}`",
+            f"- A7 IP-increment p95 not worse by >5%: `{group.get('ip')}`",
+            f"- A overall: `{l2['passed_A']}`",
+            f"- B1 median(K_qual_B2 - K_qual_P-R) >= 2: `{l2['median_k_qual_diff']}` -> "
+            f"`{bool((l2.get('median_k_qual_diff') or -9) >= 2.0)}`",
+            f"- B2 nonnegative qualifying-K difference in >= 70% of cases: "
+            f"`{l2['nonnegative_k_qual_rate']}` -> "
+            f"`{bool((l2.get('nonnegative_k_qual_rate') or 0) >= 0.70)}`",
+            f"- B overall: `{l2['passed_B']}`",
+            "",
+            "## Same-K A rows",
+            "",
+        ]
+    )
     for key in sorted(l2.get("same_k", {}), key=int):
         row = l2["same_k"][key]
         lines.append(
@@ -161,6 +190,7 @@ def _report(l2: dict, n_cases: int) -> str:
 
 def _evaluate(case, *, cache_dir, include_disks, forced_disk_ids, official_variant):
     started = time.time()
+    allowed = sorted({item for ids in (forced_disk_ids or {}).values() for item in ids})
     result = evaluate_pilot_case(
         case,
         waveform_ids=TEST_WAVEFORMS,
@@ -170,6 +200,7 @@ def _evaluate(case, *, cache_dir, include_disks, forced_disk_ids, official_varia
         include_disks=include_disks,
         forced_disk_ids=forced_disk_ids,
         include_tilted=True,
+        allowed_candidate_ids=allowed,
     )
     result["waveform_ids"] = list(TEST_WAVEFORMS)
     result["k_values"] = list(K_PILOT)
@@ -180,6 +211,9 @@ def _evaluate(case, *, cache_dir, include_disks, forced_disk_ids, official_varia
         "wall_seconds": time.time() - started,
         "stage": "disks" if include_disks else "points",
         "reselection": False,
+        "selector_read": True,
+        "l2_evaluated": True,
+        "allowed_candidate_ids": allowed,
     }
     return result
 

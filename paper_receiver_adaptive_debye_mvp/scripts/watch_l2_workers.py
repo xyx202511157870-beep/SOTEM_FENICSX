@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 GEN = REPO / "generated" / "receiver_adaptive_debye_mvp"
 FLOW4 = GEN / "flow4_independent_test"
 TEST_IDS = [f"TE{index:02d}" for index in range(1, 11)]
-NEEDLE = "run_layered_test.py"
+NEEDLES = ("warm_l2_forced.py", "run_layered_test.py")
 CHECK_SEC = 45
 
 
@@ -46,8 +46,11 @@ def _l2_done() -> bool:
 
 
 def _alive() -> bool:
-    result = subprocess.run(["pgrep", "-f", NEEDLE], capture_output=True, text=True)
-    return result.returncode == 0
+    for needle in NEEDLES:
+        result = subprocess.run(["pgrep", "-f", needle], capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+    return False
 
 
 def _restart() -> None:
@@ -64,9 +67,9 @@ def _restart() -> None:
     )
     args = [
         sys.executable,
-        str(REPO / "paper_receiver_adaptive_debye_mvp" / "scripts" / "run_layered_test.py"),
+        str(REPO / "paper_receiver_adaptive_debye_mvp" / "scripts" / "warm_l2_forced.py"),
     ]
-    print("[watch] restarting official L2 workers from cache", flush=True)
+    print("[watch] restarting official L2 forced-template warmer from cache", flush=True)
     subprocess.Popen(args, cwd=str(REPO), env=env, start_new_session=True)
 
 

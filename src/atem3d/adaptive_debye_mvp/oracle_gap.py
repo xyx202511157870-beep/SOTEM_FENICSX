@@ -480,6 +480,7 @@ def evaluate_pilot_case(
     include_disks: bool = True,
     forced_disk_ids: Mapping[int, Iterable[str]] | None = None,
     include_tilted: bool = False,
+    allowed_candidate_ids: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Evaluate spectral-best vs receiver-oracle on one pilot case.
 
@@ -490,6 +491,7 @@ def evaluate_pilot_case(
     AverageReceiver 36-point x 3-axis disks cost ~140 s each on lagged DLF.
     """
 
+    allowed = {str(item) for item in allowed_candidate_ids} if allowed_candidate_ids is not None else None
     candidates = tuple(spec for spec in instantiate_candidates(case) if spec.K in k_values)
     fits = fit_case_candidates(case, candidates)
     variant = official_variant or choose_official_spectral_variant(fits)
@@ -549,6 +551,8 @@ def evaluate_pilot_case(
         for record in records:
             if not record.valid:
                 continue
+            if allowed is not None and record.candidate_id not in allowed:
+                continue
             print(f"[{case.case_id}] point {record.candidate_id}", flush=True)
             tasks = _forward_and_tasks(
                 case,
@@ -572,11 +576,14 @@ def evaluate_pilot_case(
         spectrals[poles] = pick_spectral_best(records, variant)
         point_oracle = pick_oracle_best(point_map, records)
         ranked = sorted(point_map, key=lambda cid: (reduce_case_error(point_map[cid]), cid))
-        shortlists[poles] = {
-            spectrals[poles].candidate_id,
-            point_oracle.candidate_id,
-            *ranked[: int(disk_shortlist)],
-        }
+        if allowed is not None:
+            shortlists[poles] = set(point_map)
+        else:
+            shortlists[poles] = {
+                spectrals[poles].candidate_id,
+                point_oracle.candidate_id,
+                *ranked[: int(disk_shortlist)],
+            }
         if forced_disk_ids is not None:
             shortlists[poles].update(str(item) for item in forced_disk_ids.get(poles, ()))
 
