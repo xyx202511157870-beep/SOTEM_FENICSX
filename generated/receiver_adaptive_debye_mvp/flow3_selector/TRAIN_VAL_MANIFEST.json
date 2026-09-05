@@ -11,10 +11,10 @@
     "TR02": {
       "case_hash": "997f8e3f59b42100a7eb274535485081ccfdad4306dbddf605d35c0fc5e8f886",
       "n_choices": 5,
-      "n_tasks": 1080,
+      "n_tasks": 1152,
       "path": "case_TR02.json",
-      "point_only": true,
-      "status": "POINT_ONLY"
+      "point_only": false,
+      "status": "COMPLETE"
     },
     "TR03": {
       "case_hash": "eda51a88433df945d47dc48a48e39e8c86c3f9358a79717522815e74993e50a7",
@@ -78,7 +78,7 @@
     12
   ],
   "l1_frozen": false,
-  "n_point_only": 8,
+  "n_point_only": 7,
   "n_train": 8,
   "n_validation": 0,
   "official_variant": "S1",
