@@ -1,12 +1,13 @@
 {
-  "disk_cache_done": 204,
+  "disk_cache_done": 244,
   "disk_cache_target": 400,
   "official_te": [
     "TE01",
     "TE02",
     "TE03",
     "TE04",
-    "TE05"
+    "TE05",
+    "TE06"
   ],
   "reselection": false,
   "status": "L2_DISKS_IN_PROGRESS",
