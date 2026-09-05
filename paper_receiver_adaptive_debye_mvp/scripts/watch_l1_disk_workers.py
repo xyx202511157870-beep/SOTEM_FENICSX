@@ -14,7 +14,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 FLOW3 = REPO / "generated" / "receiver_adaptive_debye_mvp" / "flow3_selector"
 LOCAL_IDS = ["TR01", "TR02", "TR03", "TR04"]
-WORKER_NEEDLE = "run_selector_cases.py --split train --stage disks --case-ids TR01,TR02,TR03,TR04"
+WORKER_NEEDLES = (
+    "warm_remaining_disks.py",
+    "run_selector_cases.py --split train --stage disks --case-ids TR01,TR02,TR03,TR04",
+)
 CHECK_SEC = 45
 
 
@@ -30,8 +33,11 @@ def _point_only(case_id: str) -> bool:
 
 
 def _alive() -> bool:
-    result = subprocess.run(["pgrep", "-f", WORKER_NEEDLE], capture_output=True, text=True)
-    return result.returncode == 0
+    for needle in WORKER_NEEDLES:
+        result = subprocess.run(["pgrep", "-f", needle], capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+    return False
 
 
 def _restart() -> None:
@@ -46,21 +52,16 @@ def _restart() -> None:
             "ROADS_WORKERS": str(max(4, os.cpu_count() or 4)),
         }
     )
+    missing = [case_id for case_id in LOCAL_IDS if _point_only(case_id)]
     args = [
         sys.executable,
-        str(REPO / "paper_receiver_adaptive_debye_mvp" / "scripts" / "run_selector_cases.py"),
-        "--split",
-        "train",
-        "--stage",
-        "disks",
+        str(REPO / "paper_receiver_adaptive_debye_mvp" / "scripts" / "warm_remaining_disks.py"),
         "--case-ids",
-        ",".join(LOCAL_IDS),
-        "--forced-ids-json",
-        str(FLOW3 / "forced_disk_ids.json"),
+        ",".join(missing or LOCAL_IDS),
         "--official-variant",
         "S1",
     ]
-    print("[watch] restarting local TR01-04 disk workers from cache", flush=True)
+    print("[watch] restarting shared TR01-04 disk cache warmer from cache", flush=True)
     subprocess.Popen(args, cwd=str(REPO), env=env, start_new_session=True)
 
 
