@@ -43,10 +43,10 @@
     "TR06": {
       "case_hash": "790c9f7ea15fff0757c48134d5cb1cff5f09dda32fbc930d0dbed4bc7eff178c",
       "n_choices": 5,
-      "n_tasks": 1080,
+      "n_tasks": 1176,
       "path": "case_TR06.json",
-      "point_only": true,
-      "status": "POINT_ONLY"
+      "point_only": false,
+      "status": "COMPLETE"
     },
     "TR07": {
       "case_hash": "fe10ae9faca8138c1d37fb4f04040c45dbf1b92101ae7027b9a944e082281dd7",
@@ -110,7 +110,7 @@
     12
   ],
   "l1_frozen": false,
-  "n_point_only": 6,
+  "n_point_only": 5,
   "n_train": 12,
   "n_validation": 0,
   "official_variant": "S1",
