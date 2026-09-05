@@ -33,9 +33,13 @@ def _fetch() -> None:
 def _payload_rank(payload: dict) -> int:
     if not payload.get("tasks"):
         return 0
-    if payload.get("point_only") is False:
-        return 2
-    return 1
+    n_disk = sum(
+        1 for task in payload.get("tasks") or []
+        if str(task.get("receiver_id") or "").startswith("disk_")
+    )
+    official = 10000 if "pilot_case_result" in str(payload.get("schema") or "") else 0
+    disks_present = 100 if payload.get("point_only") is False else 0
+    return official + n_disk + disks_present
 
 
 def _load(raw: bytes) -> dict | None:

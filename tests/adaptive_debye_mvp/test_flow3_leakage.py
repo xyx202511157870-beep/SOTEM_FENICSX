@@ -8,6 +8,7 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "paper_receiver_adaptive_debye_m
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+from consume_sibling_case_json import _payload_rank
 from run_layered_test import _case_json_satisfies as l2_case_json_satisfies
 from run_selector_cases import case_json_satisfies
 
@@ -84,3 +85,22 @@ def test_l2_does_not_skip_selector_unread_precompute(tmp_path):
     )
     assert l2_case_json_satisfies(path, "points") is True
     assert l2_case_json_satisfies(path, "disks") is False
+
+
+def test_consume_prefers_official_forced_disk_json_over_partial_pr14():
+    pr14 = {
+        "case_id": "TR01",
+        "point_only": False,
+        "schema": "atem3d.adaptive_debye_mvp.split_case_result.v1",
+        "tasks": [{"receiver_id": "disk_1.0"}] * 72,
+    }
+    official = {
+        "case_id": "TR01",
+        "point_only": False,
+        "schema": "atem3d.adaptive_debye_mvp.pilot_case_result.v1",
+        "tasks": [{"receiver_id": "disk_1.0"}] * 192,
+    }
+    assert _payload_rank(official) > _payload_rank(pr14)
+    point = {"case_id": "TR01", "point_only": True, "schema": "atem3d.adaptive_debye_mvp.pilot_case_result.v1", "tasks": [{"receiver_id": "point"}]}
+    assert _payload_rank(point) > _payload_rank(pr14)
+    assert _payload_rank(official) > _payload_rank(point)
