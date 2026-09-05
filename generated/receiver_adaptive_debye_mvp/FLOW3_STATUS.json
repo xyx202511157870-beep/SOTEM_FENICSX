@@ -5,7 +5,7 @@
     "flow3_selector/validation_candidate_metrics.csv"
   ],
   "l1_frozen": false,
-  "n_train": 9,
+  "n_train": 10,
   "n_validation": 0,
   "next_step": "PR10 train_selector.py",
   "selected": null,
