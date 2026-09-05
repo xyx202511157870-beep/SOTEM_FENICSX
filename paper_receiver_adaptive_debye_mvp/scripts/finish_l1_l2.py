@@ -117,7 +117,7 @@ def _run_split(split: str, ids: list[str], stage: str, extra: list[str] | None =
     return _run(args)
 
 
-def _wait_for(directory: Path, ids: list[str], stage: str, *, idle_takeover_min: int = 45) -> int:
+def _wait_for(directory: Path, ids: list[str], stage: str, *, idle_takeover_min: int = 5) -> int:
     last = -1
     idle_min = 0
     while True:

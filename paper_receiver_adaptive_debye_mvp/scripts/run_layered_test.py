@@ -50,6 +50,10 @@ def _case_json_satisfies(path: Path, stage: str) -> bool:
         return False
     if not payload.get("case_id") or not payload.get("tasks"):
         return False
+    provenance = payload.get("provenance") or {}
+    # PR13-style precompute has disks but never read the frozen selector.
+    if provenance.get("selector_read") is False or provenance.get("l2_evaluated") is False:
+        return stage == "points"
     if not payload.get("point_only", True):
         return True
     return stage == "points"
