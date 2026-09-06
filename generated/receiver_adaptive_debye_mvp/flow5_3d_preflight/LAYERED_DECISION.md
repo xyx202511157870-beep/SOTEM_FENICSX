@@ -1,5 +1,7 @@
 # LAYERED_DECISION
 
+Copy of the repo-root decision after Flow 5 / G3D-0. L0 / L1 / L2 numbers are verbatim from the official layered artifacts and were not rewritten.
+
 ## 1. FINAL STATUS
 
 L0 passed. L1 is frozen. L2 passed (`L2_PASS`; layered outcome `3D_AUTHORIZED_PENDING_PREFLIGHT`). Flow 5 G3D-0 preflight: BLOCKED. FINAL STATUS=`BLOCKED_BY_SOFTWARE_OR_RESOURCES`. 3-D was not started.

@@ -1,0 +1,63 @@
+{
+  "recorded_at_utc": "2026-09-06T05:18:22Z",
+  "python": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]",
+  "executable": "/usr/bin/python3",
+  "platform": "Linux-6.12.94+-x86_64-with-glibc2.39",
+  "nproc_cmd": "1",
+  "cpu_count": 4,
+  "mem_total_kib": 16398384,
+  "mem_available_kib": 15274808,
+  "mem_total_gib": 15.639,
+  "mem_available_gib": 14.567,
+  "swap_total_kib": 0,
+  "swap_gib": 0.0,
+  "empymod": {
+    "ok": true,
+    "file": "/home/ubuntu/.local/lib/python3.12/site-packages/empymod/__init__.py",
+    "version": "2.6.0",
+    "path": [
+      "/home/ubuntu/.local/lib/python3.12/site-packages/empymod"
+    ]
+  },
+  "dolfinx": {
+    "ok": true,
+    "file": null,
+    "version": null,
+    "path": [
+      "/workspace/dolfinx"
+    ]
+  },
+  "missing": {
+    "gmsh": {
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'gmsh'"
+    },
+    "petsc4py": {
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'petsc4py'"
+    },
+    "mpi4py": {
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'mpi4py'"
+    },
+    "ufl": {
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'ufl'"
+    },
+    "basix": {
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'basix'"
+    },
+    "fenicsx": {
+      "ok": false,
+      "error": "ModuleNotFoundError: No module named 'fenicsx'"
+    }
+  },
+  "flow0_false_present_reason": "namespace_collision: import dolfinx binds /workspace/dolfinx; fem/io not available",
+  "commands": [
+    "nproc -> 1",
+    "python3 -c 'import dolfinx; print(dolfinx.__file__)' -> None (namespace package /workspace/dolfinx)",
+    "python3 -c 'import petsc4py, gmsh, mpi4py, ufl, basix' -> ModuleNotFoundError",
+    "empymod 2.6.0 present"
+  ]
+}
