@@ -82,8 +82,7 @@
     ],
     "win_rate": 0.9
   },
-  "passed": true,
-  "reselection": false,
-  "status": "L2_PASS",
-  "three_d_run": false
+  "l2_passed": true,
+  "official_spectral_variant": "S1",
+  "status": "3D_AUTHORIZED_PENDING_PREFLIGHT"
 }
