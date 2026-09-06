@@ -1,0 +1,21 @@
+{
+  "bundle_sha256": "a1f48c2b3557fe43873df9ec631e2710778e9b2153b90a2e21096bf57473fcfc",
+  "candidate_config_hash": "9964a5a4eac23419b79b19c5e2fcc1b61d8d37d47af1b8a1c298ec8a1ab72fa0",
+  "candidate_registry_sha256": "6d82904477fff94c8f32cd6055291274cbcb096033c862b931a6532b75faf2c4",
+  "candidates_per_k": 36,
+  "canonical_cole_cole_tau": 0.0031622776601683794,
+  "case_registry_sha256": "d1d590cb1bf33b384244c6794630a1384da9e60710e82aef83a496d42d8b3e11",
+  "n_candidates": 180,
+  "n_cases": 40,
+  "protocol_md_sha256": "bfb400f010c6a81ae01359ef444bd94421be82ba2c588858f2ddcc4bb598b19b",
+  "protocol_name": "ROADS-Debye-MVP-layered-v1",
+  "protocol_version": "1.0.0",
+  "split_counts": {
+    "independent_test": 10,
+    "layered_pressure": 4,
+    "pilot_gap": 8,
+    "train": 12,
+    "validation": 6
+  },
+  "status": "FROZEN"
+}

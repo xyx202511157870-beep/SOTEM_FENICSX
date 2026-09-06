@@ -1,0 +1,370 @@
+$ /usr/bin/python3 -m pytest -q
+
+==================================== ERRORS ====================================
+___________ ERROR collecting tests/test_ampere_source_projection.py ____________
+ImportError while importing test module '/workspace/tests/test_ampere_source_projection.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_ampere_source_projection.py:9: in <module>
+    from atem3d.ampere_source_projection_cli import main
+src/atem3d/ampere_source_projection_cli.py:10: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+_________________ ERROR collecting tests/test_benchmark_cli.py _________________
+ImportError while importing test module '/workspace/tests/test_benchmark_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_benchmark_cli.py:3: in <module>
+    from atem3d.benchmark_cli import load_benchmark_spec
+src/atem3d/benchmark_cli.py:14: in <module>
+    from .config import build_simulation
+src/atem3d/config.py:10: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+___________________ ERROR collecting tests/test_boundary.py ____________________
+ImportError while importing test module '/workspace/tests/test_boundary.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_boundary.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+______________________ ERROR collecting tests/test_cli.py ______________________
+ImportError while importing test module '/workspace/tests/test_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_cli.py:1: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+__________________ ERROR collecting tests/test_compare_cli.py __________________
+ImportError while importing test module '/workspace/tests/test_compare_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_compare_cli.py:1: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+_________________ ERROR collecting tests/test_config_and_io.py _________________
+ImportError while importing test module '/workspace/tests/test_config_and_io.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_config_and_io.py:1: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+_____________________ ERROR collecting tests/test_cpml.py ______________________
+ImportError while importing test module '/workspace/tests/test_cpml.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_cpml.py:3: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+________________ ERROR collecting tests/test_empymod_compare.py ________________
+ImportError while importing test module '/workspace/tests/test_empymod_compare.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_empymod_compare.py:2: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+__________ ERROR collecting tests/test_empymod_source_primary_scan.py __________
+ImportError while importing test module '/workspace/tests/test_empymod_source_primary_scan.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_empymod_source_primary_scan.py:5: in <module>
+    from atem3d.empymod_source_primary_scan import run_empymod_source_primary_tau_scan
+src/atem3d/empymod_source_primary_scan.py:9: in <module>
+    from .config import build_simulation
+src/atem3d/config.py:10: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+______________________ ERROR collecting tests/test_hj.py _______________________
+ImportError while importing test module '/workspace/tests/test_hj.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_hj.py:3: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+_________ ERROR collecting tests/test_initial_field_diagnostics_cli.py _________
+ImportError while importing test module '/workspace/tests/test_initial_field_diagnostics_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_initial_field_diagnostics_cli.py:5: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+________________ ERROR collecting tests/test_local_coupling.py _________________
+ImportError while importing test module '/workspace/tests/test_local_coupling.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_local_coupling.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+_______________ ERROR collecting tests/test_magnetic_recovery.py _______________
+ImportError while importing test module '/workspace/tests/test_magnetic_recovery.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_magnetic_recovery.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+________ ERROR collecting tests/test_magnetic_recovery_decomposition.py ________
+ImportError while importing test module '/workspace/tests/test_magnetic_recovery_decomposition.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_magnetic_recovery_decomposition.py:6: in <module>
+    from atem3d.config import build_simulation
+src/atem3d/config.py:10: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+________________ ERROR collecting tests/test_receiver_groups.py ________________
+ImportError while importing test module '/workspace/tests/test_receiver_groups.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_receiver_groups.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+___________________ ERROR collecting tests/test_receivers.py ___________________
+ImportError while importing test module '/workspace/tests/test_receivers.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_receivers.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+_______________ ERROR collecting tests/test_recovery_spectrum.py _______________
+ImportError while importing test module '/workspace/tests/test_recovery_spectrum.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_recovery_spectrum.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+_____________ ERROR collecting tests/test_recovery_spectrum_cli.py _____________
+ImportError while importing test module '/workspace/tests/test_recovery_spectrum_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_recovery_spectrum_cli.py:5: in <module>
+    from atem3d.recovery_spectrum_cli import main
+src/atem3d/recovery_spectrum_cli.py:12: in <module>
+    from .config import build_simulation, load_config
+src/atem3d/config.py:10: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+_________________ ERROR collecting tests/test_simpeg_parity.py _________________
+ImportError while importing test module '/workspace/tests/test_simpeg_parity.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_simpeg_parity.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+__________________ ERROR collecting tests/test_solver_core.py __________________
+ImportError while importing test module '/workspace/tests/test_solver_core.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_solver_core.py:7: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+_____________ ERROR collecting tests/test_sotem_simpeg_adapter.py ______________
+ImportError while importing test module '/workspace/tests/test_sotem_simpeg_adapter.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_sotem_simpeg_adapter.py:8: in <module>
+    from simpeg import maps
+E   ModuleNotFoundError: No module named 'simpeg'
+_____________ ERROR collecting tests/test_sotem_validation_cli.py ______________
+ImportError while importing test module '/workspace/tests/test_sotem_validation_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_sotem_validation_cli.py:15: in <module>
+    import atem3d.sotem_validation_cli as cli
+src/atem3d/sotem_validation_cli.py:35: in <module>
+    from .sotem_simpeg_adapter import build_benchmark_config, run_simpeg_benchmark
+src/atem3d/sotem_simpeg_adapter.py:19: in <module>
+    from .config import build_simulation
+src/atem3d/config.py:10: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+___________ ERROR collecting tests/test_source_history_matrix_cli.py ___________
+ImportError while importing test module '/workspace/tests/test_source_history_matrix_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_history_matrix_cli.py:3: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+____________ ERROR collecting tests/test_source_history_operator.py ____________
+ImportError while importing test module '/workspace/tests/test_source_history_operator.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_history_operator.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+________ ERROR collecting tests/test_source_history_postprocess_cli.py _________
+ImportError while importing test module '/workspace/tests/test_source_history_postprocess_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_history_postprocess_cli.py:1: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+________ ERROR collecting tests/test_source_history_trace_kernel_cli.py ________
+ImportError while importing test module '/workspace/tests/test_source_history_trace_kernel_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_history_trace_kernel_cli.py:3: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+_________ ERROR collecting tests/test_source_neighborhood_audit_cli.py _________
+ImportError while importing test module '/workspace/tests/test_source_neighborhood_audit_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_neighborhood_audit_cli.py:3: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+______________ ERROR collecting tests/test_source_primary_fit.py _______________
+ImportError while importing test module '/workspace/tests/test_source_primary_fit.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_primary_fit.py:3: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+____________________ ERROR collecting tests/test_sources.py ____________________
+ImportError while importing test module '/workspace/tests/test_sources.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_sources.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+____________________ ERROR collecting tests/test_sponge.py _____________________
+ImportError while importing test module '/workspace/tests/test_sponge.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_sponge.py:2: in <module>
+    from discretize import TensorMesh
+E   ModuleNotFoundError: No module named 'discretize'
+_______________ ERROR collecting tests/test_validation_report.py _______________
+ImportError while importing test module '/workspace/tests/test_validation_report.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_validation_report.py:3: in <module>
+    import h5py
+E   ModuleNotFoundError: No module named 'h5py'
+=========================== short test summary info ============================
+ERROR tests/test_ampere_source_projection.py
+ERROR tests/test_benchmark_cli.py
+ERROR tests/test_boundary.py
+ERROR tests/test_cli.py
+ERROR tests/test_compare_cli.py
+ERROR tests/test_config_and_io.py
+ERROR tests/test_cpml.py
+ERROR tests/test_empymod_compare.py
+ERROR tests/test_empymod_source_primary_scan.py
+ERROR tests/test_hj.py
+ERROR tests/test_initial_field_diagnostics_cli.py
+ERROR tests/test_local_coupling.py
+ERROR tests/test_magnetic_recovery.py
+ERROR tests/test_magnetic_recovery_decomposition.py
+ERROR tests/test_receiver_groups.py
+ERROR tests/test_receivers.py
+ERROR tests/test_recovery_spectrum.py
+ERROR tests/test_recovery_spectrum_cli.py
+ERROR tests/test_simpeg_parity.py
+ERROR tests/test_solver_core.py
+ERROR tests/test_sotem_simpeg_adapter.py
+ERROR tests/test_sotem_validation_cli.py
+ERROR tests/test_source_history_matrix_cli.py
+ERROR tests/test_source_history_operator.py
+ERROR tests/test_source_history_postprocess_cli.py
+ERROR tests/test_source_history_trace_kernel_cli.py
+ERROR tests/test_source_neighborhood_audit_cli.py
+ERROR tests/test_source_primary_fit.py
+ERROR tests/test_sources.py
+ERROR tests/test_sponge.py
+ERROR tests/test_validation_report.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 31 errors during collection !!!!!!!!!!!!!!!!!!!
+
+# official PR9 layered_forward: 15 passed in ~425s (empymod 2.6.0)

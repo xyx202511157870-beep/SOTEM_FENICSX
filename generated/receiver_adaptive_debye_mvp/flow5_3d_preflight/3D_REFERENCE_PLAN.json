@@ -1,0 +1,492 @@
+{
+  "plan_version": "1.0.0",
+  "ref_reuse_search": {
+    "searched": [
+      "generated/**",
+      "benchmarks/sotem/**",
+      "paper_algorithm/**",
+      "dolfinx/**"
+    ],
+    "reusable": false,
+    "reasons": [
+      "no 3-D forward artifacts exist in generated/ (no verification_report.txt, forward_checkpoint.npz, mesh SHA, DOF, or wall time)",
+      "Zhou/Lei/Song/v8 cases are layered-earth or noIP or K=16 Cole-Cole refit with non-official window/channels",
+      "paper_algorithm/run_ip_debye_sweep.py was never run (skipped_3d); generated/paper_algorithm/ does not exist",
+      "D3-A/D3-B finite bodies never appeared in any run",
+      "3-D path refits Prony via --cole-n-terms and cannot ingest frozen P-R/B2 template IDs"
+    ]
+  },
+  "numerical_floor": {
+    "relative_0p3pct": 0.003,
+    "one_third_gap": 0.0001805,
+    "l2_median_e_pr": 0.0004038,
+    "l2_median_e_b2": 0.001022,
+    "l2_median_gap": 0.0005416,
+    "official": 0.0001805,
+    "rejected_misreading_0p3pct_of_e_b2": 3.07e-06,
+    "components": [
+      "mesh",
+      "time",
+      "outer_boundary",
+      "solver",
+      "magnetic_recovery",
+      "disk_quadrature"
+    ],
+    "aggregate": "max",
+    "note": "Official floor is min(0.3% relative = 3.0e-3, 1/3 of layered B2-P-R gap = 1.805e-4)."
+  },
+  "k_ref": {
+    "candidates": [
+      20,
+      24,
+      28
+    ],
+    "spectral_residual_max": 0.0001,
+    "convergence_pair_tol": 0.0001805,
+    "rule": "smallest K with REF_K vs REF_{K+4} p95 <= tol; never exceed 28; label as K_ref Debye reference, not exact Cole-Cole",
+    "spectral_probe": "REF_SPECTRAL_PROBE.json",
+    "spectral_probe_note": "Naive log-window tau grids at K=20/24/28 pass hard DC/passivity gates but miss 1e-4 max relative |sigma*| residual (D3-A ~1.77e-3, D3-B ~1.14e-2). Flow 6 must place poles better; do not claim G3D-1.",
+    "label": "K_ref Debye reference, not exact Cole-Cole"
+  },
+  "memory_model": {
+    "source": "dolfinx/sotem_pipeline.py:1473-1494",
+    "formula": "4.0*(cells*2.85e-5+nodes*1.5e-6)*(1+0.03K_if_colecole)",
+    "nodes_per_cell": 0.18181818181818182,
+    "safety_fraction": 0.95,
+    "historical_1p044e6": {
+      "cells": 1044028,
+      "nodes": 164973,
+      "noIP_gb": 120.009,
+      "K20_gb": 192.014
+    },
+    "max_cells": {
+      "16GB": {
+        "noIP": 132100.0,
+        "K10": 101600.0,
+        "K20": 82540.0,
+        "K24": 76780.0,
+        "K28": 71780.0
+      },
+      "32GB": {
+        "noIP": 264100.0,
+        "K10": 203200.0,
+        "K20": 165100.0,
+        "K24": 153600.0,
+        "K28": 143600.0
+      },
+      "64GB": {
+        "noIP": 528300.0,
+        "K10": 406400.0,
+        "K20": 330200.0,
+        "K24": 307100.0,
+        "K28": 287100.0
+      },
+      "128GB": {
+        "noIP": 1057000.0,
+        "K10": 812700.0,
+        "K20": 660300.0,
+        "K24": 614300.0,
+        "K28": 574200.0
+      },
+      "256GB": {
+        "noIP": 2113000.0,
+        "K10": 1625000.0,
+        "K20": 1321000.0,
+        "K24": 1229000.0,
+        "K28": 1148000.0
+      }
+    }
+  },
+  "time_model": {
+    "sourced": false,
+    "assumption": "iterative 30-90 s/step at ~2.2e6 DOF on 4 cores; 130-155 steps; +0.3 h setup; M2 x3. No audited 3-D wall time exists in this checkout.",
+    "must_calibrate": "one smoke probe on a capable host before any GO_3D_TESTS",
+    "official_window_internal_steps": {
+      "W0": 124,
+      "W1": 134,
+      "W2": 134,
+      "W3_estimate": 145
+    }
+  },
+  "dof_model": {
+    "basis": "N1curl degree 2 on tets",
+    "dof_per_cell": 6.4,
+    "sourced": false
+  },
+  "families": {
+    "D3-A": {
+      "mesh_M1_cells": 350000.0,
+      "mesh_M2_cells": 1000000.0,
+      "dof_M1": 2200000.0,
+      "runs": [
+        {
+          "run_id": "A-noIP",
+          "mesh": "M1",
+          "K": null,
+          "variant": "noip",
+          "waveform_master": "W0_master",
+          "purpose": "baseline + IP increment + empymod background check",
+          "est_cells": 350000.0,
+          "est_dof": 2200000.0,
+          "est_gb": 40.3,
+          "est_hours_lo": 1.5,
+          "est_hours_hi": 3.6,
+          "required_host_gb": 64
+        },
+        {
+          "run_id": "A-REF-K20",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W0_master",
+          "purpose": "REF candidate K=20",
+          "est_cells": 350000.0,
+          "est_dof": 2200000.0,
+          "est_gb": 64.4,
+          "est_hours_lo": 1.7,
+          "est_hours_hi": 4.0,
+          "required_host_gb": 80
+        },
+        {
+          "run_id": "A-REF-K24",
+          "mesh": "M1",
+          "K": 24,
+          "variant": "ref",
+          "waveform_master": "W0_master",
+          "purpose": "REF convergence check K=24",
+          "est_cells": 350000.0,
+          "est_dof": 2200000.0,
+          "est_gb": 69.3,
+          "est_hours_lo": 1.7,
+          "est_hours_hi": 4.0,
+          "required_host_gb": 80
+        },
+        {
+          "run_id": "A-B2-K10",
+          "mesh": "M1",
+          "K": 10,
+          "variant": "b2",
+          "waveform_master": "W0_master",
+          "purpose": "frozen B2 K10_tw_span6.0_shift+0.5_dens1.25 (needs ingestion wiring)",
+          "est_cells": 350000.0,
+          "est_dof": 2200000.0,
+          "est_gb": 52.4,
+          "est_hours_lo": 1.6,
+          "est_hours_hi": 3.8,
+          "required_host_gb": 64
+        },
+        {
+          "run_id": "A-PR-K10",
+          "mesh": "M1",
+          "K": 10,
+          "variant": "pr",
+          "waveform_master": "W0_master",
+          "purpose": "frozen P-R K10_cc_span4.0_shift-0.5_dens1.00 (needs ingestion wiring)",
+          "est_cells": 350000.0,
+          "est_dof": 2200000.0,
+          "est_gb": 52.4,
+          "est_hours_lo": 1.6,
+          "est_hours_hi": 3.8,
+          "required_host_gb": 64
+        },
+        {
+          "run_id": "A-REF-K20-M2",
+          "mesh": "M2",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W0_master",
+          "purpose": "mesh floor",
+          "est_cells": 1000000.0,
+          "est_dof": 6400000.0,
+          "est_gb": 184.0,
+          "est_hours_lo": 4.5,
+          "est_hours_hi": 11.0,
+          "required_host_gb": 256
+        },
+        {
+          "run_id": "A-noIP-M2",
+          "mesh": "M2",
+          "K": null,
+          "variant": "noip",
+          "waveform_master": "W0_master",
+          "purpose": "mesh floor for IP increment",
+          "est_cells": 1000000.0,
+          "est_dof": 6400000.0,
+          "est_gb": 115.0,
+          "est_hours_lo": 4.5,
+          "est_hours_hi": 11.0,
+          "required_host_gb": 192
+        },
+        {
+          "run_id": "A-REF-K20-dt2",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W0_master",
+          "purpose": "time floor output-interval-substeps x2",
+          "est_cells": 350000.0,
+          "est_dof": 2200000.0,
+          "est_gb": 64.4,
+          "est_hours_lo": 3.0,
+          "est_hours_hi": 8.0,
+          "required_host_gb": 80
+        },
+        {
+          "run_id": "A-noIP-B2ext",
+          "mesh": "M1+",
+          "K": null,
+          "variant": "noip",
+          "waveform_master": "W0_master",
+          "purpose": "boundary floor 50->100 km",
+          "est_cells": 420000.0,
+          "est_dof": 2700000.0,
+          "est_gb": 48.0,
+          "est_hours_lo": 2.0,
+          "est_hours_hi": 4.0,
+          "required_host_gb": 64
+        },
+        {
+          "run_id": "A-REF-K20-tight",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W0_master",
+          "purpose": "solver floor rtol/10",
+          "est_cells": 350000.0,
+          "est_dof": 2200000.0,
+          "est_gb": 64.4,
+          "est_hours_lo": 2.0,
+          "est_hours_hi": 5.0,
+          "required_host_gb": 80
+        }
+      ],
+      "core_run_count": 5,
+      "full_run_count": 10,
+      "core_hours": [
+        8.1,
+        19.2
+      ],
+      "full_hours": [
+        24.0,
+        56.0
+      ],
+      "peak_gb": 184.0,
+      "fits_5h": false,
+      "fits_32gb": false
+    },
+    "D3-B": {
+      "mesh_M1_cells": 400000.0,
+      "mesh_M2_cells": 1150000.0,
+      "dof_M1": 2600000.0,
+      "runs": [
+        {
+          "run_id": "B-noIP",
+          "mesh": "M1",
+          "K": null,
+          "variant": "noip",
+          "waveform_master": "W3",
+          "purpose": "baseline + IP increment",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 46.0,
+          "est_hours_lo": 1.8,
+          "est_hours_hi": 4.2,
+          "required_host_gb": 64
+        },
+        {
+          "run_id": "B-REF-K20",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W3",
+          "purpose": "REF candidate K=20",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 74.0,
+          "est_hours_lo": 2.0,
+          "est_hours_hi": 4.5,
+          "required_host_gb": 96
+        },
+        {
+          "run_id": "B-REF-K24",
+          "mesh": "M1",
+          "K": 24,
+          "variant": "ref",
+          "waveform_master": "W3",
+          "purpose": "REF convergence check K=24",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 79.0,
+          "est_hours_lo": 2.0,
+          "est_hours_hi": 4.5,
+          "required_host_gb": 96
+        },
+        {
+          "run_id": "B-B2-K10",
+          "mesh": "M1",
+          "K": 10,
+          "variant": "b2",
+          "waveform_master": "W3",
+          "purpose": "frozen B2 (needs ingestion wiring)",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 60.0,
+          "est_hours_lo": 1.9,
+          "est_hours_hi": 4.3,
+          "required_host_gb": 80
+        },
+        {
+          "run_id": "B-PR-K10",
+          "mesh": "M1",
+          "K": 10,
+          "variant": "pr",
+          "waveform_master": "W3",
+          "purpose": "frozen P-R (needs ingestion wiring)",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 60.0,
+          "est_hours_lo": 1.9,
+          "est_hours_hi": 4.3,
+          "required_host_gb": 80
+        },
+        {
+          "run_id": "B-REF-K20-M2",
+          "mesh": "M2",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W3",
+          "purpose": "mesh floor",
+          "est_cells": 1150000.0,
+          "est_dof": 7400000.0,
+          "est_gb": 212.0,
+          "est_hours_lo": 5.0,
+          "est_hours_hi": 13.0,
+          "required_host_gb": 256
+        },
+        {
+          "run_id": "B-noIP-M2",
+          "mesh": "M2",
+          "K": null,
+          "variant": "noip",
+          "waveform_master": "W3",
+          "purpose": "mesh floor for IP increment",
+          "est_cells": 1150000.0,
+          "est_dof": 7400000.0,
+          "est_gb": 132.0,
+          "est_hours_lo": 5.0,
+          "est_hours_hi": 13.0,
+          "required_host_gb": 192
+        },
+        {
+          "run_id": "B-REF-K20-dt2",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W3",
+          "purpose": "time floor",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 74.0,
+          "est_hours_lo": 3.5,
+          "est_hours_hi": 9.0,
+          "required_host_gb": 96
+        },
+        {
+          "run_id": "B-noIP-B2ext",
+          "mesh": "M1+",
+          "K": null,
+          "variant": "noip",
+          "waveform_master": "W3",
+          "purpose": "boundary floor",
+          "est_cells": 480000.0,
+          "est_dof": 3100000.0,
+          "est_gb": 55.0,
+          "est_hours_lo": 2.0,
+          "est_hours_hi": 5.0,
+          "required_host_gb": 80
+        },
+        {
+          "run_id": "B-REF-K20-tight",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W3",
+          "purpose": "solver floor",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 74.0,
+          "est_hours_lo": 2.5,
+          "est_hours_hi": 6.0,
+          "required_host_gb": 96
+        },
+        {
+          "run_id": "B-REF-K20-disk9",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W3",
+          "purpose": "disk quadrature 5->9 pt",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 74.0,
+          "est_hours_lo": 2.0,
+          "est_hours_hi": 4.5,
+          "required_host_gb": 96
+        },
+        {
+          "run_id": "B-REF-K20-disk36",
+          "mesh": "M1",
+          "K": 20,
+          "variant": "ref",
+          "waveform_master": "W3",
+          "purpose": "disk quadrature 36-pt AverageReceiver parity",
+          "est_cells": 400000.0,
+          "est_dof": 2600000.0,
+          "est_gb": 74.0,
+          "est_hours_lo": 2.0,
+          "est_hours_hi": 4.5,
+          "required_host_gb": 96
+        }
+      ],
+      "core_run_count": 5,
+      "full_run_count": 12,
+      "core_hours": [
+        9.6,
+        21.8
+      ],
+      "full_hours": [
+        32.0,
+        77.0
+      ],
+      "peak_gb": 212.0,
+      "fits_5h": false,
+      "fits_32gb": false
+    }
+  },
+  "total_core_hours": [
+    17.7,
+    41.0
+  ],
+  "total_full_hours": [
+    56.0,
+    133.0
+  ],
+  "total_core_run_count": 10,
+  "total_full_run_count": 22,
+  "budget_hours_per_family": 5,
+  "budget_hours_total": 10,
+  "fits_budget": false,
+  "rejected_alternatives": [
+    "1.65e5-cell mesh fitting 32GB at K=20: floor not certifiable; far-field padding sacrificed",
+    "Zhou-class REF reuse: none exists",
+    "corrected_model PrimarySecondary operator: unaudited, single-material box",
+    "This VM Lei --source-only preflight: no FEniCSx/gmsh, would not be G3D-1 even if it ran"
+  ],
+  "flow6_wiring_required": [
+    "debye_terms_ingestion_from_frozen_template_ids",
+    "finite_polarizable_body_region",
+    "tabulated_waveform_postprocess_convolution",
+    "tilted_normal_and_36pt_disk_receiver"
+  ],
+  "solver_core_changes": "none"
+}

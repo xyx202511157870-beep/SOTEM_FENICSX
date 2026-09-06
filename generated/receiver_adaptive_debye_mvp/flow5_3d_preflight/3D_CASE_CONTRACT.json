@@ -1,0 +1,287 @@
+{
+  "contract_version": "1.0.0",
+  "protocol_name": "ROADS-Debye-MVP-layered-v1",
+  "protocol_hash_ref": "generated/receiver_adaptive_debye_mvp/protocol_hash.json",
+  "protocol_md_sha256": "bfb400f010c6a81ae01359ef444bd94421be82ba2c588858f2ddcc4bb598b19b",
+  "candidate_registry_sha256": "6d82904477fff94c8f32cd6055291274cbcb096033c862b931a6532b75faf2c4",
+  "frame": {
+    "handedness": "right",
+    "x": "east",
+    "y": "north",
+    "z": "up",
+    "ground_z_m": 0.0,
+    "numerical_surface_offset_m": 0.1
+  },
+  "time_window": {
+    "t_min_s": 1e-05,
+    "t_max_s": 0.01,
+    "n_times": 31,
+    "spacing": "log",
+    "origin": "complete_current_shutoff"
+  },
+  "channels": [
+    "Hx",
+    "Hy",
+    "Hz",
+    "dBxdt",
+    "dBydt",
+    "dBzdt"
+  ],
+  "ip_increment": {
+    "definition": "d_IP - d_noIP",
+    "metric": "channel_nrmse_with_floor"
+  },
+  "error_metric": {
+    "kind": "normalized_robust",
+    "alpha": 0.01,
+    "d_floor": "DEFAULT_D_FLOOR",
+    "mask": "|d_ref| >= 1e-3 * p95(|d_ref|)"
+  },
+  "frozen_templates": {
+    "K": 10,
+    "P-R": {
+      "id": "K10_cc_span4.0_shift-0.5_dens1.00"
+    },
+    "B2": {
+      "id": "K10_tw_span6.0_shift+0.5_dens1.25"
+    },
+    "official_spectral_variant": "S1",
+    "ingestion_status": "NOT_SUPPORTED_BY_3D_PIPELINE (cole-n-terms refits Prony); Flow 6 wiring required"
+  },
+  "families": {
+    "D3-A": {
+      "role": "canonical_polarizable_body",
+      "host": {
+        "rho_ohm_m": 100.0,
+        "rho_air_ohm_m": 100000000.0
+      },
+      "body": {
+        "shape": "prism",
+        "size_m": [
+          200.0,
+          300.0,
+          60.0
+        ],
+        "center_xy_m": [
+          150.0,
+          250.0
+        ],
+        "top_depth_m": 120.0,
+        "bottom_depth_m": 180.0,
+        "cole_cole": {
+          "rho0_ohm_m": 40.0,
+          "m": 0.22,
+          "tau_s": 0.002,
+          "c": 0.55
+        },
+        "noip_rho_ohm_m": 40.0
+      },
+      "source": {
+        "type": "grounded_wire",
+        "A_m": [
+          -420.0,
+          -150.0,
+          -0.1
+        ],
+        "B_m": [
+          380.0,
+          90.0,
+          -0.1
+        ],
+        "length_m": 835.224520712844,
+        "azimuth_deg": 16.69924423399362,
+        "current_a": 10.0
+      },
+      "waveforms": [
+        "W1",
+        "W2"
+      ],
+      "waveform_master_run": "W0_step_off_then_identical_GL8_convolution",
+      "receivers": [
+        {
+          "kind": "point",
+          "xyz_m": [
+            120.0,
+            520.0,
+            -0.1
+          ],
+          "channels": "six"
+        }
+      ],
+      "scored_series": 12,
+      "not_used_in_layered_selection": {
+        "check": "no case_registry row within |dlog10tau|<0.05 and |dm|<0.02 and |dc|<0.02",
+        "result": "PASS",
+        "n_registry_cases": 40,
+        "close_matches": [],
+        "nearest": {
+          "case_id": "TR02",
+          "m": 0.24609369,
+          "tau": 0.001975981024232,
+          "c": 0.47487088,
+          "dlog10tau": 0.00524722601505534,
+          "dm": 0.02609369,
+          "dc": 0.07512912
+        }
+      }
+    },
+    "D3-B": {
+      "role": "complex_polarizable_body",
+      "host": {
+        "overburden": {
+          "z_m": [
+            0.0,
+            -35.0
+          ],
+          "rho_ohm_m": 30.0
+        },
+        "basement_rho_ohm_m": 150.0,
+        "rho_air_ohm_m": 100000000.0
+      },
+      "body": {
+        "shape": "occ_union",
+        "parts": [
+          {
+            "type": "dipping_slab",
+            "strike": "x",
+            "length_m": 260.0,
+            "downdip_width_m": 140.0,
+            "thickness_m": 40.0,
+            "dip_deg": 35.0,
+            "dip_toward": "-y",
+            "top_edge_center_m": [
+              200.0,
+              300.0,
+              -90.0
+            ]
+          },
+          {
+            "type": "vertical_conduit",
+            "footprint_m": [
+              40.0,
+              40.0
+            ],
+            "center_xy_m": [
+              120.0,
+              330.0
+            ],
+            "z_range_m": [
+              -90.0,
+              -35.0
+            ]
+          }
+        ],
+        "cole_cole": {
+          "rho0_ohm_m": 15.0,
+          "m": 0.3,
+          "tau_s": 0.008,
+          "c": 0.45
+        },
+        "noip_rho_ohm_m": 15.0
+      },
+      "source": {
+        "type": "grounded_wire",
+        "A_m": [
+          -520.0,
+          -80.0,
+          -0.1
+        ],
+        "B_m": [
+          260.0,
+          260.0,
+          -0.1
+        ],
+        "length_m": 850.8818954473059,
+        "azimuth_deg": 23.55226367289465,
+        "current_a": 10.0
+      },
+      "waveforms": [
+        "W3"
+      ],
+      "W3": {
+        "t_us": [
+          -40,
+          -25,
+          -10,
+          0
+        ],
+        "scales": [
+          1.0,
+          0.8,
+          0.25,
+          0.0
+        ],
+        "convolution": "gauss_legendre_order_8"
+      },
+      "receivers": [
+        {
+          "kind": "point",
+          "xyz_m": [
+            40.0,
+            610.0,
+            -0.1
+          ],
+          "channels": "six"
+        },
+        {
+          "kind": "disk_average",
+          "xyz_m": [
+            40.0,
+            610.0,
+            -0.1
+          ],
+          "radius_m": 1.0,
+          "normal": [
+            0.3500481349280564,
+            -0.20002750567317512,
+            0.9151258384547762
+          ],
+          "quantity": "n_dot_dBdt",
+          "layered_reference_quadrature": "AverageReceiver_36pt",
+          "3d_status": "NOT_SUPPORTED (5pt cross, component normals only)"
+        }
+      ],
+      "scored_series": 14,
+      "not_used_in_layered_selection": {
+        "check": "no case_registry row within |dlog10tau|<0.05 and |dm|<0.02 and |dc|<0.02",
+        "result": "PASS",
+        "n_registry_cases": 40,
+        "close_matches": [],
+        "nearest": {
+          "case_id": "TR08",
+          "m": 0.10126909,
+          "tau": 0.007163557150805,
+          "c": 0.58961626,
+          "dlog10tau": 0.04796125695431064,
+          "dm": 0.19873091,
+          "dc": 0.13961626
+        }
+      }
+    }
+  },
+  "pipeline_flags_common": [
+    "--nedelec-order=2",
+    "--time-method=theta",
+    "--time-theta=1.0",
+    "--source-mode=manual_line",
+    "--source-projection-mode=charge_conserving",
+    "--initial-dc-mode=fem",
+    "--magnetic-receiver-mode=faraday_integrated",
+    "--magnetic-dbdt-mode=curl",
+    "--magnetic-recovery-quadrature-degree=8",
+    "--magnetic-recovery-quadrature-audit-degrees=2,4,6,8,10",
+    "--outer-boundary-mode=pec",
+    "--empymod-srcpts=9",
+    "--reference-audit-srcpts=17"
+  ],
+  "reuse": {
+    "entry_points": [
+      "dolfinx/sotem_pipeline.py",
+      "dolfinx/run_sotem_benchmark.py",
+      "paper_algorithm/run_ip_debye_sweep.py",
+      "paper_algorithm/run_algorithm_paper.sh",
+      "benchmarks/sotem/zhou2020_grounded_wire.yaml"
+    ],
+    "solver_core_changes": "none"
+  }
+}

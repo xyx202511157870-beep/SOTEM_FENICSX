@@ -1,0 +1,116 @@
+{
+  "note": "Cheap numpy Prony spectral probe only. Not G3D-1. No FEniCSx.",
+  "frequencies_hz": {
+    "n": 141,
+    "min": 0.001,
+    "max": 10000.0,
+    "spacing": "log"
+  },
+  "spectral_residual_max_pass": 0.0001,
+  "tau_grid": {
+    "min_s": 1.0000000000000001e-07,
+    "max_s": 1.0,
+    "spacing": "log",
+    "n": "K"
+  },
+  "families": {
+    "D3-A": {
+      "cole_cole": {
+        "rho0": 40.0,
+        "m": 0.22,
+        "tau": 0.002,
+        "c": 0.55
+      },
+      "k_ref_candidates": [
+        {
+          "K": 20,
+          "success": true,
+          "passive": true,
+          "rel_dc": 0.0,
+          "min_delta": 0.0,
+          "spectral_error": 0.0006817048611830648,
+          "spectral_error_linf": 0.0014040194654175034,
+          "max_rel_abs_sigma": 0.0017717960482337464,
+          "p95_rel_abs_sigma": 0.0016973533384112007,
+          "passes_hard_gates": true,
+          "passes_1e-4": false
+        },
+        {
+          "K": 24,
+          "success": true,
+          "passive": true,
+          "rel_dc": 0.0,
+          "min_delta": 0.0,
+          "spectral_error": 0.0006770522999043654,
+          "spectral_error_linf": 0.0014020722454598069,
+          "max_rel_abs_sigma": 0.0017693387627679337,
+          "p95_rel_abs_sigma": 0.0016963005862432826,
+          "passes_hard_gates": true,
+          "passes_1e-4": false
+        },
+        {
+          "K": 28,
+          "success": true,
+          "passive": true,
+          "rel_dc": 0.0,
+          "min_delta": 0.0,
+          "spectral_error": 0.0006790987051057095,
+          "spectral_error_linf": 0.0014013866316323952,
+          "max_rel_abs_sigma": 0.0017684735554827477,
+          "p95_rel_abs_sigma": 0.001695209687874033,
+          "passes_hard_gates": true,
+          "passes_1e-4": false
+        }
+      ]
+    },
+    "D3-B": {
+      "cole_cole": {
+        "rho0": 15.0,
+        "m": 0.3,
+        "tau": 0.008,
+        "c": 0.45
+      },
+      "k_ref_candidates": [
+        {
+          "K": 20,
+          "success": true,
+          "passive": true,
+          "rel_dc": 0.0,
+          "min_delta": 0.0,
+          "spectral_error": 0.0043020451214319496,
+          "spectral_error_linf": 0.00825420452088737,
+          "max_rel_abs_sigma": 0.011373739227890934,
+          "p95_rel_abs_sigma": 0.01092371408607051,
+          "passes_hard_gates": true,
+          "passes_1e-4": false
+        },
+        {
+          "K": 24,
+          "success": true,
+          "passive": true,
+          "rel_dc": 0.0,
+          "min_delta": 0.0,
+          "spectral_error": 0.004305117570040165,
+          "spectral_error_linf": 0.008285783105120629,
+          "max_rel_abs_sigma": 0.011414701222515146,
+          "p95_rel_abs_sigma": 0.01097504592886549,
+          "passes_hard_gates": true,
+          "passes_1e-4": false
+        },
+        {
+          "K": 28,
+          "success": true,
+          "passive": true,
+          "rel_dc": 2.0816681711721685e-16,
+          "min_delta": 0.0,
+          "spectral_error": 0.004296772025910922,
+          "spectral_error_linf": 0.008283688966393626,
+          "max_rel_abs_sigma": 0.011412594041703857,
+          "p95_rel_abs_sigma": 0.010968532714993273,
+          "passes_hard_gates": true,
+          "passes_1e-4": false
+        }
+      ]
+    }
+  }
+}

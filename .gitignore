@@ -9,7 +9,15 @@ tmp/
 .worktrees/
 outputs/
 output/
-generated/
+generated/*
+!generated/receiver_adaptive_debye_mvp/
+generated/receiver_adaptive_debye_mvp/cache/
+generated/receiver_adaptive_debye_mvp/**/*.npz
+!generated/receiver_adaptive_debye_mvp/**/*.md
+!generated/receiver_adaptive_debye_mvp/**/*.json
+!generated/receiver_adaptive_debye_mvp/**/*.csv
+!generated/receiver_adaptive_debye_mvp/**/*.sha256
+!generated/receiver_adaptive_debye_mvp/**/*.log
 __pycache__/
 *.py[cod]
 *.nbc

@@ -1,0 +1,99 @@
+{
+  "flow": 5,
+  "gate": "G3D-0",
+  "gate_result": "BLOCKED",
+  "decision": "BLOCKED_BY_SOFTWARE_OR_RESOURCES",
+  "final_status": "BLOCKED_BY_SOFTWARE_OR_RESOURCES",
+  "layered_status_retained": "3D_AUTHORIZED_PENDING_PREFLIGHT",
+  "three_d_run": false,
+  "g3d1_claimed": false,
+  "flow6_started": false,
+  "pr10": "draft",
+  "blockers": {
+    "software": {
+      "fenicsx_present": false,
+      "dolfinx_import_binds_repo_folder": true,
+      "petsc4py": false,
+      "gmsh": false,
+      "mpi4py": false,
+      "ufl": false,
+      "basix": false,
+      "conda_fenicsx_env": false,
+      "flow0_false_present_reason": "namespace_collision"
+    },
+    "resources": {
+      "vm_ram_gib": 15.636,
+      "vm_cpus_effective": 1,
+      "swap": false,
+      "m1_k20_gb_required": 64.4,
+      "historical_1p044e6_p2_gb": 120.0,
+      "max_cells_32gb_k20": 165100.0
+    },
+    "fairness": {
+      "official_floor": 0.0001805,
+      "evidence_pipeline_meets_floor": false,
+      "cheap_mesh_rejected": true
+    },
+    "feature_gaps": [
+      "layer_only_polarization",
+      "cole_n_terms_refit_no_template_ingestion",
+      "no_W3_cli",
+      "no_tilted_or_36pt_disk"
+    ]
+  },
+  "budget": {
+    "per_family_limit_h": 5,
+    "total_limit_h": 10,
+    "d3a_core_h": [
+      8.1,
+      19.2
+    ],
+    "d3b_core_h": [
+      9.6,
+      21.8
+    ],
+    "total_core_h": [
+      17.7,
+      41.0
+    ],
+    "total_full_h": [
+      56,
+      133
+    ],
+    "d3a_core_runs": 5,
+    "d3b_core_runs": 5,
+    "total_core_runs": 10,
+    "fits": false
+  },
+  "ref_reuse": false,
+  "probes_run": [
+    "import_probe",
+    "REF_SPECTRAL_PROBE.json"
+  ],
+  "artifacts": [
+    "3D_PREFLIGHT_BUDGET.md",
+    "3D_CASE_CONTRACT.json",
+    "3D_REFERENCE_PLAN.json",
+    "G3D0_STATUS.json",
+    "ENV_PROBE.json",
+    "REF_SPECTRAL_PROBE.json",
+    "LAYERED_DECISION.md"
+  ],
+  "layered_numbers_unchanged": {
+    "L0": "L0_PASS A=true B=false",
+    "L2": {
+      "status": "L2_PASS",
+      "A": true,
+      "B": false,
+      "median_ratio": 0.382566169465141,
+      "ci": [
+        0.163401575828889,
+        0.7770330921368851
+      ],
+      "win_rate": 0.9,
+      "K": 10
+    }
+  },
+  "timestamp_utc": "2026-09-06T05:19:09Z",
+  "layered_git_commit": "3c7a959321a820a99ea84ef94233ae9f04f58f7b"
+}

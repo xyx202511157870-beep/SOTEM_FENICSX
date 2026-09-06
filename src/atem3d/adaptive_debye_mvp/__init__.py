@@ -35,7 +35,6 @@ from .io import (
     write_json,
     write_records_csv,
 )
-from .layered_forward import compute_layered_response
 from .passive_fit import (
     HARD_GATE_DC_TOLERANCE,
     HARD_GATE_DELTA_FLOOR,
@@ -48,6 +47,18 @@ from .passive_fit import (
     validate_pelton_parameters,
     validate_tau_grid,
 )
+from .guards import (
+    IndependentTestLeakageError,
+    ThreeDNotAuthorizedError,
+    assert_3d_authorized,
+    assert_split_readable,
+    refuse_3d_before_l2,
+)
+from .layered_forward import (
+    BlockedBySoftwareOrResourcesError,
+    compute_layered_response,
+)
+from .protocol_constants import PROTOCOL_NAME, PROTOCOL_VERSION
 from .receiver_metrics import (
     CHANNEL_UNITS,
     CHANNELS,
@@ -85,15 +96,22 @@ __all__ = [
     "DEFAULT_N_BOOTSTRAP",
     "FAMILY_COLE_COLE",
     "FAMILY_TIME_WINDOW",
+    "IndependentTestLeakageError",
     "HARD_GATE_DC_TOLERANCE",
     "HARD_GATE_DELTA_FLOOR",
     "MetricThresholds",
     "OptimizerStatus",
     "PairedBootstrapResult",
+    "PROTOCOL_NAME",
+    "PROTOCOL_VERSION",
     "PassiveDebyeFit",
     "REGISTRY_COLUMNS",
     "ReceiverCase",
+    "ThreeDNotAuthorizedError",
+    "BlockedBySoftwareOrResourcesError",
     "BootstrapResult",
+    "assert_3d_authorized",
+    "assert_split_readable",
     "bootstrap_candidate_comparison",
     "bootstrap_case_statistic",
     "build_candidate",
@@ -116,6 +134,7 @@ __all__ = [
     "qualifying_failures",
     "rank_candidates",
     "ranking_key",
+    "refuse_3d_before_l2",
     "read_candidate_registry_csv",
     "read_json",
     "registry_hash",

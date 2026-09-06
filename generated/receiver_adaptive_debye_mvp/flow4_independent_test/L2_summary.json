@@ -1,0 +1,83 @@
+{
+  "b2_by_k": {
+    "10": "K10_tw_span6.0_shift+0.5_dens1.25",
+    "12": "K12_tw_span6.0_shift+0.5_dens1.25",
+    "4": "K04_cc_span4.0_shift-0.5_dens1.25",
+    "6": "K06_tw_span4.0_shift+0.5_dens1.25",
+    "8": "K08_cc_span4.0_shift-0.5_dens1.00"
+  },
+  "best_same_k": 10,
+  "best_same_k_median_ratio": 0.382566169465141,
+  "bootstrap_ci_high": 0.7770330921368851,
+  "bootstrap_ci_low": 0.163401575828889,
+  "focus_k": 10,
+  "group_ok": {
+    "components": true,
+    "ip": true,
+    "receivers": true,
+    "waveforms": true
+  },
+  "median_k_qual_diff": 0.0,
+  "nonnegative_k_qual_rate": 1.0,
+  "passed": true,
+  "passed_A": true,
+  "passed_B": false,
+  "pr_by_k": {
+    "10": "K10_cc_span4.0_shift-0.5_dens1.00",
+    "12": "K12_cc_span6.0_shift+0.0_dens1.25",
+    "4": "K04_cc_span4.0_shift-0.5_dens1.25",
+    "6": "K06_cc_span4.0_shift+0.0_dens1.25",
+    "8": "K08_cc_span4.0_shift-0.5_dens1.00"
+  },
+  "reselection": false,
+  "same_k": {
+    "10": {
+      "K": 10,
+      "bootstrap_ci_high": 0.7770330921368851,
+      "bootstrap_ci_low": 0.163401575828889,
+      "error_difference_ci_high": -0.00019529030512377863,
+      "ids_differ_rate": 1.0,
+      "median_ratio": 0.382566169465141,
+      "n_cases": 10,
+      "win_rate": 0.9
+    },
+    "12": {
+      "K": 12,
+      "bootstrap_ci_high": 1.058884411555189,
+      "bootstrap_ci_low": 0.2855577228750221,
+      "error_difference_ci_high": 4.862075383791324e-05,
+      "ids_differ_rate": 1.0,
+      "median_ratio": 0.7866275346261127,
+      "n_cases": 10,
+      "win_rate": 0.7
+    },
+    "6": {
+      "K": 6,
+      "bootstrap_ci_high": 1.3283459552678822,
+      "bootstrap_ci_low": 0.22354483741659018,
+      "error_difference_ci_high": 0.0015690600829104365,
+      "ids_differ_rate": 1.0,
+      "median_ratio": 0.4868492097268449,
+      "n_cases": 10,
+      "win_rate": 0.7
+    },
+    "8": {
+      "K": 8,
+      "bootstrap_ci_high": 1.0,
+      "bootstrap_ci_low": 1.0,
+      "error_difference_ci_high": 0.0,
+      "ids_differ_rate": 0.0,
+      "median_ratio": 1.0,
+      "n_cases": 10,
+      "win_rate": 0.0
+    }
+  },
+  "status": "L2_PASS",
+  "waveform_ids": [
+    "W0",
+    "W1",
+    "W2",
+    "W3"
+  ],
+  "win_rate": 0.9
+}
